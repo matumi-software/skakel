@@ -25,10 +25,14 @@
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <!-- GitHub Packages takes no symbol packages, so the PDB goes inside the DLL. -->
+    <DebugType>embedded</DebugType>
     <PackageTags>lan;discovery;pairing;oauth;signalr;websocket</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)../README.md" Pack="true" PackagePath="/" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)../resources/design-system/assets/Logos/skakel-app-icon-128.png" Pack="true" PackagePath="/icon.png" Visible="false" />
   </ItemGroup>
 </Project>
