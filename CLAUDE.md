@@ -11,7 +11,7 @@ folder per solution, each with its own `src/` and `tests/`.
 | Folder | What |
 |---|---|
 | `docs/` | The protocol and decisions |
-| `src/Skakel/` | The libraries: `Skakel.Protocol` (what clients and servers share) and `Skakel.Server`; `Skakel.Client` is not created yet |
+| `src/Skakel/` | The libraries: `Skakel.Protocol` (what clients and servers share), `Skakel.Client` and `Skakel.Server`, each with its tests. The client's tests run against a real `Skakel.Server` on Kestrel |
 
 ## Rules
 

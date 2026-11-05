@@ -193,6 +193,10 @@ a message name with `Skakel`.
 | Server to client | `SkakelClosing { reason }` | Just before the server ends the client's connections and streams: `revoked`, `rotated` or `stopping` |
 | Client to server | `SkakelNextCertificateReceived(fingerprint)` | The client stored the next certificate |
 
+After `SkakelClosing` with `revoked` or `rotated`, a client stops connecting with those credentials,
+which no longer work, and says it has to pair again. After `stopping` it connects again later, with
+a pause that grows, as after any connection it lost.
+
 An app's REST endpoints sit beside the hub under paths the app picks, and take the same bearer
 token.
 
