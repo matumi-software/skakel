@@ -15,6 +15,14 @@ public sealed record SkakelDiscoveredServer(string Name, IPAddress Address, int 
     /// <summary>Its HTTPS address, such as <c>https://192.168.1.20:5240/</c>.</summary>
     public Uri Url => new UriBuilder(Uri.UriSchemeHttps, Address.ToString(), Port).Uri;
 
+    /// <summary>
+    /// The other addresses and ports that answered with this fingerprint, best first. A server on several
+    /// networks answers on each; a machine that copied the fingerprint shows up here too, and only a
+    /// pinned connection tells them apart. More than one is reason to say that several addresses claim
+    /// this server's certificate. <see cref="SkakelBrowser.Servers"/> fills it; empty otherwise.
+    /// </summary>
+    public IReadOnlyList<IPEndPoint> OtherEndpoints { get; init; } = [];
+
     /// <summary>The highest protocol version it and this client both speak, or null when there is none.</summary>
     public int? Version => SkakelVersions.Pick(Versions);
 
@@ -27,7 +35,8 @@ public sealed record SkakelDiscoveredServer(string Name, IPAddress Address, int 
         && Port == other.Port
         && Fingerprint == other.Fingerprint
         && App == other.App
-        && Versions.SequenceEqual(other.Versions);
+        && Versions.SequenceEqual(other.Versions)
+        && OtherEndpoints.SequenceEqual(other.OtherEndpoints);
 
     /// <inheritdoc />
     public override int GetHashCode() => HashCode.Combine(Name, Address, Port, Fingerprint, App);

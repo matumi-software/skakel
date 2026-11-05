@@ -80,6 +80,88 @@ public sealed class BrowserTests
     }
 
     [Fact]
+    public void Servers_keeps_the_first_address_when_another_copies_its_fingerprint()
+    {
+        var time = new ManualTimeProvider();
+        using var browser = Browser(time);
+        var real = Server(1, "10.0.0.5");
+        browser.Add(real, 0);
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        browser.Add(real with { Name = "copy", Address = IPAddress.Parse("10.0.0.66") }, 0);
+
+        var listed = browser.Servers.Should().ContainSingle().Subject;
+        listed.Name.Should().Be("server-01");
+        listed.Address.Should().Be(IPAddress.Parse("10.0.0.5"));
+        listed.OtherEndpoints.Should().Equal(new IPEndPoint(IPAddress.Parse("10.0.0.66"), 5240));
+        browser.Entries.Select(e => e.Address.ToString()).Should().Equal("10.0.0.5", "10.0.0.66");
+    }
+
+    [Fact]
+    public void Add_keeps_an_answer_on_another_port_beside_the_entry_instead_of_changing_it()
+    {
+        var time = new ManualTimeProvider();
+        using var browser = Browser(time);
+        var real = Server(1, "10.0.0.5");
+        browser.Add(real, 0);
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        browser.Add(real with { Port = 6000 }, 0);
+
+        browser.Servers.Should().ContainSingle().Which.Port.Should().Be(5240);
+        browser.Entries.Select(e => e.Port).Should().Equal(5240, 6000);
+    }
+
+    [Fact]
+    public void Answered_takes_answers_only_shortly_after_a_probe()
+    {
+        var time = new ManualTimeProvider();
+        using var browser = Browser(time);
+
+        browser.Answered(Server(1, "10.0.0.1"), 0);
+        browser.Start();
+        browser.Answered(Server(2, "10.0.0.1"), 0);
+        time.Advance(TimeSpan.FromSeconds(4));
+        browser.Answered(Server(3, "10.0.0.1"), 0);
+
+        browser.Servers.Select(s => s.Name).Should().Equal("server-02");
+    }
+
+    [Fact]
+    public void Add_never_pushes_out_an_entry_a_link_has_pinned()
+    {
+        var time = new ManualTimeProvider();
+        using var browser = Browser(time);
+        using var _ = browser.Protect(() => new SkakelPins(Server(0, "10.0.0.1").Fingerprint));
+        for (var i = 0; i < 9; i++)
+        {
+            browser.Add(Server(i, "10.0.0.1"), 0);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        browser.Servers.Select(s => s.Name).Should().HaveCount(8).And.Contain("server-00").And.NotContain("server-01");
+    }
+
+    [Fact]
+    public void Add_pushes_out_the_entry_that_answered_the_fewest_probes()
+    {
+        var time = new ManualTimeProvider();
+        using var browser = Browser(time);
+        browser.Start();
+        browser.Add(Server(0, "10.0.0.1"), 0);
+        // The next probe, which server-00 answers too.
+        time.Advance(TimeSpan.FromSeconds(10));
+        browser.Add(Server(0, "10.0.0.1"), 0);
+        time.Advance(TimeSpan.FromSeconds(1));
+        for (var i = 1; i < 9; i++)
+        {
+            browser.Add(Server(i, "10.0.0.1"), 0);
+        }
+
+        browser.Servers.Select(s => s.Name).Should().HaveCount(8).And.Contain("server-00", "it answered two probes and the others one").And.NotContain("server-01");
+    }
+
+    [Fact]
     public void Add_drops_servers_of_other_apps()
     {
         using var browser = Browser(new ManualTimeProvider());

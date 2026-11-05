@@ -1,4 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace Skakel.Protocol;
@@ -112,7 +114,7 @@ public static class SkakelDiscovery
     /// Reads an answer, applying the limits a client applies. False for anything else: a wrong first
     /// line, broken JSON, a fingerprint that is not 64 hex digits, a name over 63 characters, an app id
     /// that is not one, an app version over 32 characters, or no versions or more than 8. Control
-    /// characters in the name and version are dropped. The fingerprint comes back in colon form.
+    /// and format characters in the name and version are dropped (see <see cref="Clean"/>). The fingerprint comes back in colon form.
     /// </summary>
     public static bool TryParseAnswer(ReadOnlySpan<byte> datagram, [NotNullWhen(true)] out DiscoveryAnswer? answer)
     {
@@ -146,16 +148,33 @@ public static class SkakelDiscovery
         return true;
     }
 
-    /// <summary>Text without control characters, trimmed and cut to length.</summary>
-    private static string Clean(string? text, int maxLength)
+    /// <summary>
+    /// Text a person can be shown: without control characters, format characters (such as bidi
+    /// overrides and zero-width ones) or line and paragraph separators, trimmed and cut to
+    /// <paramref name="maxLength"/> characters, never through a surrogate pair. What a client applies to
+    /// a server's name and app version, from discovery and from info alike.
+    /// </summary>
+    /// <param name="text">The text, or null for none.</param>
+    /// <param name="maxLength">The most characters kept.</param>
+    public static string Clean(string? text, int maxLength)
     {
-        var clean = new string([.. (text ?? "").Where(c => !char.IsControl(c))]).Trim();
+        ArgumentOutOfRangeException.ThrowIfNegative(maxLength);
+        var kept = new StringBuilder();
+        foreach (var rune in (text ?? "").EnumerateRunes())
+        {
+            if (Rune.GetUnicodeCategory(rune) is not (UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator))
+            {
+                kept.Append(rune.ToString());
+            }
+        }
+
+        var clean = kept.ToString().Trim();
         if (clean.Length <= maxLength)
         {
             return clean;
         }
 
         // Never half a surrogate pair.
-        return clean[..(char.IsHighSurrogate(clean[maxLength - 1]) ? maxLength - 1 : maxLength)];
+        return clean[..(maxLength > 0 && char.IsHighSurrogate(clean[maxLength - 1]) ? maxLength - 1 : maxLength)];
     }
 }

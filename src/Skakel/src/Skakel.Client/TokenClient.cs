@@ -14,6 +14,12 @@ internal sealed class TokenClient(HttpClient http, Func<Uri> server, SkakelCrede
     /// <summary>A token is renewed this long before it expires, so one handed out still has time to be used.</summary>
     internal static readonly TimeSpan RenewBefore = TimeSpan.FromMinutes(1);
 
+    /// <summary>The shortest lifetime a token is taken to have, whatever the server says, so a server cannot set off a stream of renewals.</summary>
+    internal static readonly TimeSpan MinLifetime = TimeSpan.FromMinutes(2);
+
+    /// <summary>The longest lifetime a token is taken to have: the protocol's 30 minutes.</summary>
+    internal static readonly TimeSpan MaxLifetime = SkakelProtocol.AccessTokenLifetime;
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     private (string Token, DateTimeOffset ExpiresAt)? _cached;
 
@@ -47,7 +53,7 @@ internal sealed class TokenClient(HttpClient http, Func<Uri> server, SkakelCrede
                 throw new InvalidDataException("The token answer has no access token.");
             }
 
-            var fresh = (token, time.GetUtcNow().AddSeconds(body.ExpiresIn ?? 300));
+            var fresh = (token, time.GetUtcNow() + Lifetime(body.ExpiresIn));
             _cached = fresh;
             return fresh;
         }
@@ -67,6 +73,10 @@ internal sealed class TokenClient(HttpClient http, Func<Uri> server, SkakelCrede
     }
 
     public void Dispose() => _gate.Dispose();
+
+    /// <summary>The server's <c>expires_in</c>, held to 2 to 30 minutes; five minutes when it gave none.</summary>
+    internal static TimeSpan Lifetime(int? expiresIn) =>
+        TimeSpan.FromSeconds(Math.Clamp(expiresIn ?? 300, (int)MinLifetime.TotalSeconds, (int)MaxLifetime.TotalSeconds));
 
     /// <summary>The JSON body, or null when there is none or it is not JSON, such as a proxy's error page.</summary>
     private static async Task<TokenResponse?> ReadBodyAsync(HttpResponseMessage response, CancellationToken cancellationToken)

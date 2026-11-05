@@ -29,6 +29,9 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
     /// <summary>How long the server has to say the port is open after the upgrade.</summary>
     internal static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>How long the server has to answer a change to the line settings, unless set otherwise.</summary>
+    internal static readonly TimeSpan DefaultChangeTimeout = TimeSpan.FromSeconds(10);
+
     /// <summary>The longest control message read; a longer one is dropped.</summary>
     private const int MaxControlBytes = 64 * 1024;
 
@@ -40,7 +43,11 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
     private readonly SemaphoreSlim _changing = new(1, 1);
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource<SkakelStreamClose> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private TaskCompletionSource<SerialServerMessage>? _change;
+    // Guards _change and _owed, which the receive loop reads as answers arrive.
+    private readonly Lock _answers = new();
+    private PendingChange? _change;
+    // Changes that stopped waiting after they were sent: the next answers that come in are theirs.
+    private int _owed;
     private ReadOnlyMemory<byte> _left;
     private Task _receiving = Task.CompletedTask;
     private SerialLineSettings _lineSettings;
@@ -106,34 +113,65 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
         return count;
     }
 
-    /// <summary>Changes the port's settings and waits until the server echoes them, or the port refuses.</summary>
+    /// <summary>How long the server has to answer a change to the line settings: 10 seconds.</summary>
+    internal TimeSpan ChangeTimeout { get; set; } = DefaultChangeTimeout;
+
+    /// <summary>
+    /// Changes the port's settings and waits until the server echoes them, or the port refuses. One
+    /// change at a time; the server has 10 seconds to answer, so a change it never answers does not hold
+    /// up the next. An answer that comes after its change stopped waiting is not taken for the next one.
+    /// </summary>
     /// <param name="settings">Every setting; the protocol has no partial change.</param>
     /// <param name="cancellationToken">Stops waiting. The change may still be applied.</param>
-    /// <exception cref="SkakelException">The stream ended before the server answered (<see cref="SkakelFailureKind.ConnectionLost"/>).</exception>
+    /// <exception cref="SkakelException">The stream ended before the server answered (<see cref="SkakelFailureKind.ConnectionLost"/>), or the server did not answer within 10 seconds (<see cref="SkakelFailureKind.UnexpectedAnswer"/>). Either way the change may still be applied; <see cref="LineSettings"/> follows what the server says.</exception>
     public async Task<SkakelSerialChange> SetLineSettingsAsync(SerialLineSettings settings, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
         await _changing.WaitAsync(cancellationToken);
+        var pending = new PendingChange(settings, new TaskCompletionSource<SerialServerMessage>(TaskCreationOptions.RunContinuationsAsynchronously));
+        var sent = false;
         try
         {
-            var answer = new TaskCompletionSource<SerialServerMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Volatile.Write(ref _change, answer);
+            lock (_answers)
+            {
+                _change = pending;
+            }
+
             if (_closed.Task.IsCompleted)
             {
                 throw new SkakelException(SkakelFailureKind.ConnectionLost);
             }
 
-            await SendControlAsync(new SerialSetLineSettings(settings.Baud, settings.DataBits, settings.Parity, settings.StopBits, settings.FlowControl), cancellationToken);
-            return await answer.Task.WaitAsync(cancellationToken) switch
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(ChangeTimeout);
+            try
             {
-                SerialLineSettingsApplied applied => new SkakelSerialChange(true, ToSettings(applied), null),
-                SerialError refused => new SkakelSerialChange(false, LineSettings, refused.Detail),
-                var other => throw new InvalidOperationException($"Unexpected answer {other.GetType().Name}."),
-            };
+                await SendControlAsync(new SerialSetLineSettings(settings.Baud, settings.DataBits, settings.Parity, settings.StopBits, settings.FlowControl), limit.Token);
+                sent = true;
+                return await pending.Answer.Task.WaitAsync(limit.Token) switch
+                {
+                    SerialLineSettingsApplied applied => new SkakelSerialChange(true, ToSettings(applied), null),
+                    SerialError refused => new SkakelSerialChange(false, LineSettings, refused.Detail),
+                    var other => throw new InvalidOperationException($"Unexpected answer {other.GetType().Name}."),
+                };
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                LogChangeUnanswered(_stream.Type, ChangeTimeout.TotalSeconds);
+                throw new SkakelException(SkakelFailureKind.UnexpectedAnswer, new TimeoutException("The server did not answer the change to the line settings in time.", ex));
+            }
         }
         finally
         {
-            Volatile.Write(ref _change, null);
+            lock (_answers)
+            {
+                _change = null;
+                if (sent && !pending.Answer.Task.IsCompleted)
+                {
+                    _owed++;
+                }
+            }
+
             _changing.Release();
         }
     }
@@ -301,7 +339,11 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
         finally
         {
             _data.Writer.TryComplete();
-            Volatile.Read(ref _change)?.TrySetException(new SkakelException(SkakelFailureKind.ConnectionLost));
+            lock (_answers)
+            {
+                _change?.Answer.TrySetException(new SkakelException(SkakelFailureKind.ConnectionLost));
+            }
+
             _closed.TrySetResult(_stream.Close ?? SkakelStreamClose.From(null, null));
         }
     }
@@ -322,19 +364,44 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
                 break;
             case SerialLineSettingsApplied applied:
                 Volatile.Write(ref _lineSettings, ToSettings(applied));
-                Volatile.Read(ref _change)?.TrySetResult(applied);
+                AnswerFor(applied)?.TrySetResult(applied);
                 break;
             case SerialModemStatusChanged changed:
                 var status = new SerialModemStatus(changed.Cts, changed.Dsr, changed.Dcd, changed.Ri);
                 Volatile.Write(ref _modemStatus, status);
                 await ModemStatusChanged.RaiseAsync(status, _logger);
                 break;
-            case SerialError { Code: SerialErrorCode.Unsupported } refused when Volatile.Read(ref _change) is { } pending:
+            case SerialError { Code: SerialErrorCode.Unsupported } refused when AnswerFor(refused) is { } pending:
                 pending.TrySetResult(refused);
                 break;
             case SerialError error:
                 await ErrorReported.RaiseAsync(error, _logger);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// The change an answer belongs to, or null. Answers come in the order the changes went out, so one
+    /// that arrives while an earlier change is still owed its answer is that change's, and is not taken
+    /// for the pending one; only an echo of exactly the pending change's settings is always its own.
+    /// </summary>
+    private TaskCompletionSource<SerialServerMessage>? AnswerFor(SerialServerMessage answer)
+    {
+        lock (_answers)
+        {
+            if (answer is SerialLineSettingsApplied applied && _change is { } exact && ToSettings(applied) == exact.Settings)
+            {
+                _owed = 0;
+                return exact.Answer;
+            }
+
+            if (_owed > 0)
+            {
+                _owed--;
+                return null;
+            }
+
+            return _change?.Answer;
         }
     }
 
@@ -365,4 +432,10 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "A serial stream closed with {Code} before the port opened")]
     private static partial void LogClosedBeforeOpen(ILogger logger, int? code);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server did not answer a change to the line settings on a {Type} stream within {Seconds} seconds")]
+    private partial void LogChangeUnanswered(string type, double seconds);
+
+    /// <summary>A change waiting for its answer, and the settings it asked for.</summary>
+    private sealed record PendingChange(SerialLineSettings Settings, TaskCompletionSource<SerialServerMessage> Answer);
 }

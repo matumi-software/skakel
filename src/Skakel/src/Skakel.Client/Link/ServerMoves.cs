@@ -10,7 +10,10 @@ namespace Skakel.Client;
 /// hears a server with the pinned certificate (or the next one) somewhere else, that is where it moved.
 /// The fingerprint in a discovery answer is public, so anyone on the network can copy it: before the
 /// move, the new address must prove it holds the certificate over a pinned handshake, so a copied answer
-/// cannot draw the client away from its server.
+/// cannot draw the client away from its server. Every address heard with a trusted fingerprint is a
+/// candidate, not only the one the browser lists first, so a copy cannot hide the real server either;
+/// up to <see cref="MaxProofs"/> are tried per search, and one that failed its proof goes to the back
+/// of the queue, so the next search gets to the others.
 /// </summary>
 internal sealed partial class ServerMoves(TimeProvider time, ILogger logger) : IDisposable
 {
@@ -20,15 +23,21 @@ internal sealed partial class ServerMoves(TimeProvider time, ILogger logger) : I
     /// <summary>How long an address has to prove it holds the pinned certificate.</summary>
     internal static readonly TimeSpan ProofTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>The most addresses one search tries to prove.</summary>
+    internal const int MaxProofs = 8;
+
     /// <summary>How long the saved host name may take to resolve, when working out whether a server is on the same host.</summary>
     private static readonly TimeSpan ResolveTimeout = TimeSpan.FromSeconds(5);
 
     private readonly SemaphoreSlim _moving = new(1, 1);
     private readonly Dictionary<string, DateTimeOffset> _movedTo = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _failed = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The address to move to, or null. One search at a time. Each candidate, best first, gets one
-    /// proof (<paramref name="proves"/>); the first that passes is the answer, and is held off from now.
+    /// The address to move to, or null. One search at a time. Each candidate, best first and at most
+    /// <see cref="MaxProofs"/>, gets one proof (<paramref name="proves"/>); the first that passes is the
+    /// answer, and is held off from now. <paramref name="servers"/> is every address discovery heard, not
+    /// one per fingerprint.
     /// </summary>
     public async Task<Uri?> FindAsync(Uri saved, SkakelPins pins, IReadOnlyList<SkakelDiscoveredServer> servers, Func<Uri, Task<bool>> proves, CancellationToken cancellationToken)
     {
@@ -41,21 +50,18 @@ internal sealed partial class ServerMoves(TimeProvider time, ILogger logger) : I
         try
         {
             var now = time.GetUtcNow();
-            foreach (var (url, at) in _movedTo.ToList())
-            {
-                if (now - at >= HoldOff)
-                {
-                    _movedTo.Remove(url);
-                }
-            }
-
-            foreach (var url in Candidates(saved, pins, servers, await AddressesOfAsync(saved), _movedTo.ContainsKey))
+            Forget(_movedTo, now);
+            Forget(_failed, now);
+            foreach (var url in Candidates(saved, pins, servers, await AddressesOfAsync(saved), _movedTo.ContainsKey, a => _failed.TryGetValue(a, out var at) ? at : null))
             {
                 if (await proves(url))
                 {
                     _movedTo[url.Authority] = now;
+                    _failed.Remove(url.Authority);
                     return url;
                 }
+
+                _failed[url.Authority] = time.GetUtcNow();
             }
 
             return null;
@@ -69,12 +75,14 @@ internal sealed partial class ServerMoves(TimeProvider time, ILogger logger) : I
     public void Dispose() => _moving.Dispose();
 
     /// <summary>
-    /// The addresses a link at <paramref name="saved"/> could move to, best first: where discovery hears a
-    /// server with a certificate it trusts, other than the saved address. One on the saved host
-    /// (<paramref name="savedHost"/>) on another port comes first, and keeps the saved host name; then any
-    /// other. An address moved to a little while ago is <paramref name="heldOff"/>.
+    /// The addresses a link at <paramref name="saved"/> could move to, best first and at most
+    /// <see cref="MaxProofs"/>: where discovery hears a server with a certificate it trusts, other than
+    /// the saved address. One on the saved host (<paramref name="savedHost"/>) on another port comes
+    /// first, and keeps the saved host name; then any other, in the order discovery has them. One that
+    /// failed a proof (<paramref name="failedAt"/>) comes after those that did not, the longest ago first.
+    /// An address moved to a little while ago is <paramref name="heldOff"/>.
     /// </summary>
-    internal static IReadOnlyList<Uri> Candidates(Uri saved, SkakelPins pins, IEnumerable<SkakelDiscoveredServer> servers, IReadOnlyCollection<IPAddress> savedHost, Func<string, bool>? heldOff = null) =>
+    internal static IReadOnlyList<Uri> Candidates(Uri saved, SkakelPins pins, IEnumerable<SkakelDiscoveredServer> servers, IReadOnlyCollection<IPAddress> savedHost, Func<string, bool>? heldOff = null, Func<string, DateTimeOffset?>? failedAt = null) =>
         [.. servers
             .Where(s => pins.Trusts(s.Fingerprint))
             .Select(s =>
@@ -84,9 +92,25 @@ internal sealed partial class ServerMoves(TimeProvider time, ILogger logger) : I
                 return (SameHost: sameHost, Url: new Uri(url.GetLeftPart(UriPartial.Authority) + "/"));
             })
             .Where(c => !string.Equals(c.Url.Authority, saved.Authority, StringComparison.OrdinalIgnoreCase) && heldOff?.Invoke(c.Url.Authority) != true)
-            .OrderByDescending(c => c.SameHost)
-            .Select(c => c.Url)
-            .DistinctBy(u => u.Authority, StringComparer.OrdinalIgnoreCase)];
+            .DistinctBy(c => c.Url.Authority, StringComparer.OrdinalIgnoreCase)
+            .Select(c => (c.SameHost, c.Url, Failed: failedAt?.Invoke(c.Url.Authority)))
+            .OrderBy(c => c.Failed is not null)
+            .ThenByDescending(c => c.SameHost)
+            .ThenBy(c => c.Failed)
+            .Take(MaxProofs)
+            .Select(c => c.Url)];
+
+    /// <summary>Drops what is older than <see cref="HoldOff"/>.</summary>
+    private static void Forget(Dictionary<string, DateTimeOffset> times, DateTimeOffset now)
+    {
+        foreach (var (authority, at) in times.ToList())
+        {
+            if (now - at >= HoldOff)
+            {
+                times.Remove(authority);
+            }
+        }
+    }
 
     /// <summary>The addresses the saved host stands for: itself when it is one, otherwise what its name resolves to now, or none.</summary>
     private async Task<IReadOnlyCollection<IPAddress>> AddressesOfAsync(Uri saved)

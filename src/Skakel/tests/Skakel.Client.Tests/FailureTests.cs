@@ -47,6 +47,9 @@ public sealed class FailureTests
         Kind(new HttpRequestException("401", null, HttpStatusCode.Unauthorized)).Should().Be(SkakelFailureKind.ClientUnknown);
         Kind(new HttpRequestException("404", null, HttpStatusCode.NotFound)).Should().Be(SkakelFailureKind.UnexpectedAnswer);
         Kind(new JsonException("bad")).Should().Be(SkakelFailureKind.UnexpectedAnswer);
+        Kind(new HttpRequestException(HttpRequestError.ConfigurationLimitExceeded, "too long")).Should().Be(SkakelFailureKind.UnexpectedAnswer);
+        Kind(new ArgumentOutOfRangeException("t", "past the calendar's end")).Should().Be(SkakelFailureKind.UnexpectedAnswer);
+        Kind(new FormatException("not a header value")).Should().Be(SkakelFailureKind.UnexpectedAnswer);
         Kind(new HttpRequestException(HttpRequestError.ConnectionError, "refused", new SocketException((int)SocketError.ConnectionRefused))).Should().Be(SkakelFailureKind.Unreachable);
         Failures.Exception(new IOException("10.0.0.7:5240 reset")).Message.Should().NotContain("10.0.0.7");
     }

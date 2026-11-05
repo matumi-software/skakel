@@ -7,7 +7,9 @@ namespace Skakel.Client;
 /// <summary>
 /// Reads a server's <c>GET /skakel/info</c>: its name, its app and the protocol versions it speaks. Over
 /// a connection pinned to the server's fingerprints, so any answer also proves the server holds one of
-/// those certificates.
+/// those certificates. The answer is held to the limits discovery applies: the name and app version
+/// cleaned and cut as <see cref="SkakelDiscovery.Clean"/> does, the app id a real one, and at most
+/// 64 KB read.
 /// </summary>
 public static partial class SkakelInfoClient
 {
@@ -26,7 +28,7 @@ public static partial class SkakelInfoClient
         var server = Pinning.BaseAddress(address, nameof(address));
         options ??= new SkakelClientOptions();
         using var handler = Pinning.CreateHandler(() => pins);
-        using var http = new HttpClient(handler) { Timeout = options.RequestTimeout };
+        using var http = Pinning.CreateClient(handler, options.RequestTimeout, disposeHandler: false);
         return await ReadAsync(http, server, options.Loggers.CreateLogger(typeof(SkakelInfoClient)), cancellationToken);
     }
 
@@ -38,12 +40,20 @@ public static partial class SkakelInfoClient
             using var response = await http.GetAsync(new Uri(server, SkakelProtocol.InfoPath), cancellationToken);
             response.EnsureSuccessStatusCode();
             var info = await response.Content.ReadFromJsonAsync<SkakelInfo>(SkakelJson.Options, cancellationToken);
-            if (info is not { Name: not null, App: { Id: not null, Version: not null }, Versions: { Count: > 0 } versions } || versions.Any(v => v < 1))
+            if (info is not { Name: { } name, App: { Id: var id, Version: { Length: <= SkakelDiscovery.MaxAppVersionLength } version }, Versions: { Count: > 0 } versions }
+                || !SkakelProtocol.IsAppId(id)
+                || versions.Any(v => v < 1))
             {
-                throw new InvalidDataException("The info answer is missing the name, the app or the versions.");
+                throw new InvalidDataException("The info answer is missing the name, the app or the versions, or breaks their limits.");
             }
 
-            return info;
+            // The same limits as discovery: a name a person can be shown, the address when that leaves nothing.
+            var shown = SkakelDiscovery.Clean(name, SkakelDiscovery.MaxNameLength);
+            return info with
+            {
+                Name = shown.Length > 0 ? shown : server.Host,
+                App = new SkakelApp(id, SkakelDiscovery.Clean(version, SkakelDiscovery.MaxAppVersionLength)),
+            };
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {

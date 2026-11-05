@@ -25,6 +25,12 @@ public sealed partial class SkakelPairingClient : IAsyncDisposable
     /// <summary>How long past its expiry a request is still polled, for a clock that differs from the server's.</summary>
     private static readonly TimeSpan ExpiryGrace = TimeSpan.FromSeconds(30);
 
+    /// <summary>The longest a request is waited for, whatever the server says: the five minutes after which the protocol has it expire.</summary>
+    internal static readonly TimeSpan MaxWait = TimeSpan.FromMinutes(5);
+
+    /// <summary>The longest request ID or poll token taken from a server. The server's own are far shorter.</summary>
+    private const int MaxIdLength = 128;
+
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
@@ -43,7 +49,9 @@ public sealed partial class SkakelPairingClient : IAsyncDisposable
         Pins = pins;
         ServerName = serverName;
         Code = code;
-        ExpiresAt = opened.ExpiresAt;
+        // By this client's clock: never later than five minutes from now, however far off the server's answer is.
+        var latest = time.GetUtcNow() + MaxWait;
+        ExpiresAt = opened.ExpiresAt < latest ? opened.ExpiresAt : latest;
     }
 
     /// <summary>The server's address.</summary>
@@ -58,7 +66,7 @@ public sealed partial class SkakelPairingClient : IAsyncDisposable
     /// <summary>The six-digit code to show. The person types it on the server.</summary>
     public string Code { get; }
 
-    /// <summary>When the request runs out on the server.</summary>
+    /// <summary>When the request runs out: the server's word for it, but never more than five minutes after it opened.</summary>
     public DateTimeOffset ExpiresAt { get; }
 
     /// <summary>
@@ -84,7 +92,8 @@ public sealed partial class SkakelPairingClient : IAsyncDisposable
         options ??= new SkakelClientOptions();
         var logger = options.Loggers.CreateLogger<SkakelPairingClient>();
         var handler = Pinning.CreateHandler(() => pins);
-        var http = new HttpClient(handler) { BaseAddress = server, Timeout = options.RequestTimeout };
+        var http = Pinning.CreateClient(handler, options.RequestTimeout);
+        http.BaseAddress = server;
         try
         {
             var info = await SkakelInfoClient.ReadAsync(http, server, logger, cancellationToken);
@@ -94,9 +103,9 @@ public sealed partial class SkakelPairingClient : IAsyncDisposable
             using var open = await http.PostAsJsonAsync(SkakelProtocol.PairPath, new PairOpenRequest(name, PairingCode.Commit(nonce)), SkakelJson.Options, cancellationToken);
             open.EnsureSuccessStatusCode();
             var opened = await open.Content.ReadFromJsonAsync<PairOpened>(SkakelJson.Options, cancellationToken);
-            if (opened is not { RequestId.Length: > 0, ServerNonce.Length: > 0, PollToken.Length: > 0 })
+            if (opened is not { ServerNonce.Length: > 0 } || !IsId(opened.RequestId) || !IsId(opened.PollToken))
             {
-                throw new InvalidDataException("The pairing answer is missing the request, the nonce or the poll token.");
+                throw new InvalidDataException("The pairing answer is missing the request, the nonce or the poll token, or they are not short printable text.");
             }
 
             var pairing = new SkakelPairingClient(http, server, pins, info.Name, opened, PairingCode.Compute(pins.Fingerprint, nonce, opened.ServerNonce), logger, options.Time);
@@ -223,14 +232,14 @@ public sealed partial class SkakelPairingClient : IAsyncDisposable
             using var withdrawn = await _http.SendAsync(request, CancellationToken.None);
             LogWithdrawn(_logger, ServerName, (int)withdrawn.StatusCode);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex)
         {
             // The server expires it on its own.
             LogFailed(_logger, Address.Authority, ex);
         }
     }
 
-    /// <summary>Withdraws the request if it is still waiting, and lets go of the connection.</summary>
+    /// <summary>Withdraws the request if it is still waiting, and lets go of the connection. Never throws.</summary>
     public async ValueTask DisposeAsync()
     {
         await WithdrawAsync();
@@ -240,6 +249,9 @@ public sealed partial class SkakelPairingClient : IAsyncDisposable
 
     /// <summary>The request is over on the server; there is nothing to withdraw.</summary>
     private void Finish() => Interlocked.CompareExchange(ref _done, 1, 0);
+
+    /// <summary>A request ID or poll token that can go in a path and a header as it is: 1 to 128 printable ASCII characters.</summary>
+    private static bool IsId(string? text) => text is { Length: >= 1 and <= MaxIdLength } && text.All(c => c is > ' ' and < '\x7f');
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Waiting for the code to be typed on {Server}")]
     private static partial void LogWaiting(ILogger logger, string server);

@@ -48,8 +48,9 @@ public sealed record SkakelLinkStatus(SkakelLinkState State, SkakelFailure? Fail
 /// <para>
 /// Once started, the link keeps the hub connected: it reads <c>/skakel/info</c> to check the version,
 /// connects with a token, connects again with a fresh token 30 seconds before the token runs out without
-/// saying so, and after a failure tries again with a pause that grows to a minute. A revoke or rotation
-/// on the server ends it for good, as <see cref="SkakelLinkState.Closed"/>.
+/// saying so, and after a failure tries again with a pause that grows to a minute. Two connections never
+/// start less than a second apart, and a token is taken to last 2 to 30 minutes whatever the server
+/// says. A revoke or rotation on the server ends it for good, as <see cref="SkakelLinkState.Closed"/>.
 /// </para>
 /// </remarks>
 public sealed partial class SkakelLink : IAsyncDisposable
@@ -64,6 +65,9 @@ public sealed partial class SkakelLink : IAsyncDisposable
 
     internal static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
 
+    /// <summary>The longest the link waits to renew, well inside what a timer can count.</summary>
+    internal static readonly TimeSpan MaxRenewWait = SkakelProtocol.AccessTokenLifetime;
+
     private readonly SkakelClientOptions _options;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
@@ -76,6 +80,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
     private readonly ServerMoves _moves;
     private readonly HubHandlers _handlers = new();
     private readonly SkakelBrowser? _browser;
+    private readonly IDisposable? _protection;
     private readonly Lock _gate = new();
 
     private Uri _address;
@@ -87,6 +92,9 @@ public sealed partial class SkakelLink : IAsyncDisposable
     private CancellationTokenSource? _run;
     private Task _running = Task.CompletedTask;
     private bool _stranded;
+    private Task _following = Task.CompletedTask;
+    private bool _followRunning;
+    private bool _followAgain;
     private bool _disposed;
 
     /// <summary>A link to a server. Call <see cref="Start"/> to connect the hub; the streams and requests work without it.</summary>
@@ -107,11 +115,12 @@ public sealed partial class SkakelLink : IAsyncDisposable
         _time = _options.Time;
         _handler = Pinning.CreateHandler(() => Pins);
         _bearer = new BearerHandler(this, _handler);
-        _http = new HttpClient(_handler, disposeHandler: false) { Timeout = _options.RequestTimeout };
+        _http = Pinning.CreateClient(_handler, _options.RequestTimeout, disposeHandler: false);
         _streams = new HttpMessageInvoker(_handler, disposeHandler: false);
         _tokens = new TokenClient(_http, () => Address, credentials, _time);
         _moves = new ServerMoves(_time, _logger);
         _browser = _options.Browser;
+        _protection = _browser?.Protect(() => Pins);
         _browser?.Changed += OnServersChangedAsync;
     }
 
@@ -203,6 +212,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
 
         await run.CancelAsync();
         await running.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        await Following.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         run.Dispose();
         await SetStatusAsync(new SkakelLinkStatus(SkakelLinkState.Stopped));
     }
@@ -222,6 +232,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
         }
 
         _browser?.Changed -= OnServersChangedAsync;
+        _protection?.Dispose();
 
         _http.Dispose();
         _streams.Dispose();
@@ -282,7 +293,9 @@ public sealed partial class SkakelLink : IAsyncDisposable
 
     /// <summary>
     /// An HTTP client for the app's own endpoints on this server: pinned, with the link's token on every
-    /// request, and the server's address as its base. Make a new one after <see cref="AddressChanged"/>.
+    /// request, and the server's address as its base. It sends only to the server's current address over
+    /// HTTPS; a request anywhere else throws <see cref="InvalidOperationException"/> before anything is
+    /// sent, so the token cannot leave for another host. Make a new one after <see cref="AddressChanged"/>.
     /// Disposing it leaves the link as it is.
     /// </summary>
     public HttpClient CreateHttpClient()
@@ -419,7 +432,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
             for (var attempt = 1; ; attempt++)
             {
                 var (token, _) = await _tokens.GetAsync(cancellationToken);
-                var result = await StreamOpener.OpenAsync(_streams, uri, type, token, cancellationToken);
+                var result = await StreamOpener.OpenAsync(_streams, uri, type, token, _options.RequestTimeout, cancellationToken);
                 if (result.Refusal is { Reason: SkakelStreamRefusalReason.Unauthorized } && attempt == 1)
                 {
                     // The token may have just run out on the server's clock; one more try with a fresh one.
@@ -491,6 +504,18 @@ public sealed partial class SkakelLink : IAsyncDisposable
         }
     }
 
+    /// <summary>The search for a server that moved, while one runs; for a test to wait on.</summary>
+    internal Task Following
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _following;
+            }
+        }
+    }
+
     /// <summary>The live hub connection. While the link is connected and renewing, waits for the new one.</summary>
     private async Task<HubConnection> ConnectedHubAsync(CancellationToken cancellationToken)
     {
@@ -517,11 +542,21 @@ public sealed partial class SkakelLink : IAsyncDisposable
     {
         var backoff = MinBackoff;
         var refreshing = false;
+        var started = DateTimeOffset.MinValue;
         while (!stop.IsCancellationRequested)
         {
             var address = Address;
             try
             {
+                // Whatever a server's tokens or closes say, connections start at most once a second.
+                var since = _time.GetUtcNow() - started;
+                if (since < MinBackoff)
+                {
+                    await PauseAsync(MinBackoff - since, stop);
+                    address = Address;
+                }
+
+                started = _time.GetUtcNow();
                 var end = await ConnectOnceAsync(address, refreshing, stop);
                 refreshing = end is null;
                 if (end is null)
@@ -559,7 +594,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
                         _stranded = true;
                     }
 
-                    await FollowAsync(address, _browser.Servers, stop);
+                    RequestFollow();
                 }
             }
 
@@ -623,7 +658,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
 
             using var armed = CancellationTokenSource.CreateLinkedTokenSource(stop);
             var wait = new DateTimeOffset(attempt.RefreshAt, TimeSpan.Zero) - _time.GetUtcNow();
-            var refresh = Task.Delay(wait > TimeSpan.Zero ? wait : TimeSpan.Zero, _time, armed.Token);
+            var refresh = Task.Delay(TimeSpan.FromTicks(Math.Clamp(wait.Ticks, 0, MaxRenewWait.Ticks)), _time, armed.Token);
             var finished = await Task.WhenAny(attempt.Closed.Task, refresh);
             await armed.CancelAsync();
             stop.ThrowIfCancellationRequested();
@@ -691,9 +726,14 @@ public sealed partial class SkakelLink : IAsyncDisposable
                     attempt.ExpiresAt = expiresAt.UtcTicks;
                     return token;
                 };
-                options.HttpMessageHandlerFactory = _ => Pinning.CreateHubHandler(() => Pins);
-                options.WebSocketConfiguration = socket => socket.RemoteCertificateValidationCallback =
-                    (_, certificate, _, _) => Pins.Trusts(certificate as X509Certificate2);
+                // Kept to the server's address, with no proxy, as every other request the link makes.
+                options.HttpMessageHandlerFactory = _ => Pinning.CreateHubHandler(address, () => Pins, presented => attempt.Presented = presented);
+                options.WebSocketConfiguration = socket =>
+                {
+                    socket.Proxy = null;
+                    socket.RemoteCertificateValidationCallback = (_, certificate, _, _) =>
+                        Pinning.Trusts(Pins, certificate as X509Certificate2, presented => attempt.Presented = presented);
+                };
             });
         builder.Services.AddSingleton(_options.Loggers);
         if (_options.ConfigureHubJson is { } configure)
@@ -702,7 +742,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
         }
 
         var hub = builder.Build();
-        hub.On<SkakelCertificates>(SkakelHubMethods.Certificates, certificates => LearnCertificatesAsync(hub, certificates));
+        hub.On<SkakelCertificates>(SkakelHubMethods.Certificates, certificates => LearnCertificatesAsync(hub, address, attempt, certificates));
         hub.On<SkakelClosing>(SkakelHubMethods.Closing, closing =>
         {
             attempt.Closing = closing?.Reason;
@@ -722,14 +762,22 @@ public sealed partial class SkakelLink : IAsyncDisposable
     /// The server told the link which certificate it presents and which one it will switch to. The link is
     /// pinned to a certificate it trusts, so it may vouch for the next one: it is trusted as well, or becomes
     /// the pinned one once the server presents it. Once the app saved the pins, the server is told the
-    /// client has the next one. A fingerprint that is not one is ignored.
+    /// client has the next one. A fingerprint that is not one is ignored. So is a statement about a
+    /// certificate this connection did not present, unless a new connection to the server presents it,
+    /// as after a switch, when the hub connection still runs on the old certificate.
     /// </summary>
-    private async Task LearnCertificatesAsync(HubConnection hub, SkakelCertificates? certificates)
+    private async Task LearnCertificatesAsync(HubConnection hub, Uri address, Attempt attempt, SkakelCertificates? certificates)
     {
         if (certificates is null || Fingerprints.Normalize(certificates.Fingerprint) is null
             || (certificates.NextFingerprint is not null && Fingerprints.Normalize(certificates.NextFingerprint) is null))
         {
             LogInvalidCertificates();
+            return;
+        }
+
+        if (!Fingerprints.AreEqual(certificates.Fingerprint, attempt.Presented) && !await PresentsAsync(address, certificates.Fingerprint))
+        {
+            LogCertificatesNotPresented(certificates.Fingerprint);
             return;
         }
 
@@ -766,27 +814,63 @@ public sealed partial class SkakelLink : IAsyncDisposable
         }
     }
 
-    /// <summary>The list of servers changed; a link that cannot reach its server looks for it there.</summary>
-    private async Task OnServersChangedAsync(IReadOnlyList<SkakelDiscoveredServer> servers)
+    /// <summary>The list of servers changed; a link that cannot reach its server looks for it there, in the background.</summary>
+    private Task OnServersChangedAsync(IReadOnlyList<SkakelDiscoveredServer> servers)
     {
-        CancellationToken stop;
+        RequestFollow();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Starts a search for the server in the background, while the link cannot reach it. A request while
+    /// one runs has it look once more when it is done, at the addresses heard by then, so searches never
+    /// pile up and a slow proof never holds up the browser's other listeners.
+    /// </summary>
+    private void RequestFollow()
+    {
         lock (_gate)
         {
-            if (!_stranded || _run is not { } run)
+            if (!_stranded || _run is not { } run || _browser is not { } browser)
             {
                 return;
             }
 
-            stop = run.Token;
-        }
+            if (_followRunning)
+            {
+                _followAgain = true;
+                return;
+            }
 
-        try
-        {
-            await FollowAsync(Address, servers, stop);
+            _followRunning = true;
+            var stop = run.Token;
+            _following = Task.Run(() => FollowWhileAskedAsync(browser, stop), CancellationToken.None);
         }
-        catch (OperationCanceledException)
+    }
+
+    private async Task FollowWhileAskedAsync(SkakelBrowser browser, CancellationToken stop)
+    {
+        while (true)
         {
-            // Stopped meanwhile.
+            try
+            {
+                await FollowAsync(Address, browser.Entries, stop);
+            }
+            catch (OperationCanceledException)
+            {
+                // Stopped meanwhile.
+            }
+
+            lock (_gate)
+            {
+                if (!_followAgain || !_stranded || stop.IsCancellationRequested)
+                {
+                    _followAgain = false;
+                    _followRunning = false;
+                    return;
+                }
+
+                _followAgain = false;
+            }
         }
     }
 
@@ -840,6 +924,27 @@ public sealed partial class SkakelLink : IAsyncDisposable
         catch (Exception ex) when (ex is HttpRequestException || (ex is OperationCanceledException && !stop.IsCancellationRequested))
         {
             LogNotProven(url.Authority, ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Whether a new connection to <paramref name="address"/>, pinned as the link is, presents the
+    /// certificate <paramref name="fingerprint"/>. Within five seconds, as a move's proof.
+    /// </summary>
+    private async Task<bool> PresentsAsync(Uri address, string fingerprint)
+    {
+        string? presented = null;
+        using var handler = Pinning.CreateHandler(() => Pins, p => presented = p);
+        using var http = Pinning.CreateClient(handler, ServerMoves.ProofTimeout, disposeHandler: false);
+        try
+        {
+            using var response = await http.GetAsync(new Uri(address, SkakelProtocol.InfoPath), HttpCompletionOption.ResponseHeadersRead);
+            return Fingerprints.AreEqual(presented, fingerprint);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+        {
+            LogCallFailed(address.Authority, "certificate check", ex);
             return false;
         }
     }
@@ -921,6 +1026,9 @@ public sealed partial class SkakelLink : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Warning, Message = "The server sent certificates that are not fingerprints; ignored")]
     private partial void LogInvalidCertificates();
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server spoke of its certificate {Fingerprint}, which it does not present; ignored")]
+    private partial void LogCertificatesNotPresented(string fingerprint);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "The server stopped answering at {OldAddress} and was found at {NewAddress}; the link follows it")]
     private partial void LogMoved(string oldAddress, string newAddress);
 
@@ -935,6 +1043,7 @@ public sealed partial class SkakelLink : IAsyncDisposable
     {
         private string? _token;
         private string? _closing;
+        private string? _presented;
         private long _refreshAt;
         private long _expiresAt;
 
@@ -952,6 +1061,13 @@ public sealed partial class SkakelLink : IAsyncDisposable
             set => Volatile.Write(ref _closing, value);
         }
 
+        /// <summary>The fingerprint of the certificate this connection's handshakes saw last.</summary>
+        public string? Presented
+        {
+            get => Volatile.Read(ref _presented);
+            set => Volatile.Write(ref _presented, value);
+        }
+
         public long RefreshAt
         {
             get => Volatile.Read(ref _refreshAt);
@@ -965,11 +1081,19 @@ public sealed partial class SkakelLink : IAsyncDisposable
         }
     }
 
-    /// <summary>Puts the link's token on each request of the app's own HTTP clients, and drops a token the server refused.</summary>
+    /// <summary>
+    /// Puts the link's token on each request of the app's own HTTP clients, and drops a token the server
+    /// refused. Sends only to the link's current address over HTTPS, so the token never goes elsewhere.
+    /// </summary>
     private sealed class BearerHandler(SkakelLink link, HttpMessageHandler inner) : DelegatingHandler(inner)
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (!Pinning.IsAt(request.RequestUri, link.Address))
+            {
+                throw new InvalidOperationException("A link's HTTP client sends only to its server's address, over HTTPS.");
+            }
+
             string? token = null;
             if (request.Headers.Authorization is null)
             {
