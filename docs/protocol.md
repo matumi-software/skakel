@@ -47,7 +47,8 @@ its hex digits alone.
    to 63 characters and its app version to 32, and shortens the name further if that is what it
    takes for the answer to fit in 512 bytes.
 4. The answer goes to the address and port the probe came from: the line `SKAKEL-SERVER/1\n`, then
-   JSON (UTF-8, camelCase):
+   JSON (UTF-8, camelCase). A probe from port 0, or from an address that is not a single host
+   (unspecified, broadcast, multicast), gets no answer:
 
    ```json
    {
@@ -101,11 +102,14 @@ discovery, with no token.
 
    `POST /skakel/v1/pair` with `{ "clientName": "...", "commitment": "<64 hex digits>" }`
 
-   `clientName` is 1 to 80 characters after trimming. The server answers
+   `clientName` is 1 to 80 characters once the server has taken out Unicode control and format
+   characters (categories Cc and Cf: line breaks, NUL, direction overrides, zero-width characters)
+   and trimmed it; that is the name it keeps. The server answers
    `{ "requestId", "serverNonce", "expiresAt", "pollToken" }`. Only the opener gets the poll token.
    A body that breaks these rules gets 400.
 2. The client reveals its nonce: `POST /skakel/v1/pair/{requestId}/reveal` with
-   `{ "clientNonce": "..." }`. The server checks it against the commitment and answers 204, or 404.
+   `{ "clientNonce": "..." }`. The server checks it against the commitment and answers 204, or 404,
+   or 429 when it takes no more revealed requests for now (see the limits below).
 3. Both ends derive the code:
 
    ```
@@ -126,12 +130,22 @@ discovery, with no token.
 A man in the middle has its own certificate and has to fix each nonce before seeing the other
 side's, so it cannot make the two codes match.
 
-**Limits a server applies:** 60 opens per 5 minutes in total and 5 per address (an IPv4 address or
-an IPv6 /64), never refunded; at most 3 open requests per address; at most 10 requests that have
-revealed their nonce; a request that has not revealed within 30 seconds is dropped; requests expire
-after five minutes; three wrong codes refuse a request. An open that goes over a limit gets 429. All
-pairing calls together, polls included, are limited to 120 a minute per address, also answered with
-429, so a client polls no more than once a second. A pairing call over plain HTTP gets 400.
+**Limits a server applies:** 5 opens per 5 minutes per address; 60 revealed requests per 5 minutes
+for the whole server; neither is refunded, by withdrawing or by expiry. An open that never reveals
+counts against its address but not against the server's 60. At most 3 open requests per address;
+at most 10 revealed requests waiting for a person at once; a request that has not revealed within 30
+seconds is dropped; requests expire after five minutes; three wrong codes refuse a request. An open
+or a reveal that goes over a limit gets 429. All pairing calls together, polls included, are limited
+to 120 a minute per address, also answered with 429, so a client polls no more than once a second.
+A pairing call over plain HTTP gets 400. A body over 4 KiB gets 413, or 400 when the server only
+finds out while reading it. Both of these limits apply before the server reads the request.
+
+An address is the whole IPv4 or IPv6 address the call came from; an IPv4-mapped IPv6 address counts
+as its IPv4 address. Every per-address limit in this document counts addresses this way.
+
+Many addresses that each open and reveal can still spend the server's 60 for everyone. A pairing
+window that a person opens on the server, outside which it takes no requests, is the planned answer;
+it is not in this version.
 
 A client paired with several servers holds one client ID and secret for each.
 
@@ -140,6 +154,9 @@ A client paired with several servers holds one client ID and secret for each.
 - OAuth 2.0 client credentials at `POST /skakel/v1/token`, HTTPS only.
 - Access tokens last 30 minutes and are signed with an RSA key whose key id is in the token header.
   Clients do not read what is inside a token.
+- Every token carries the issuer `https://skakel.invalid/`, whatever address or name the client
+  used, so a token issued at one of a server's addresses works at all of them. The server publishes
+  no OpenID Connect discovery document and no key set; the token endpoint is all there is.
 - Each registered client has a **generation**, which the server writes into its tokens as the claim
   `skakel_generation`. Rotating a client's secret raises its generation, and revoking a client
   removes it. Every token, hub connection and stream from an older generation, or from a removed
@@ -147,9 +164,12 @@ A client paired with several servers holds one client ID and secret for each.
 - `GET /skakel/v1/hello` with a token answers `{ "server", "clientId" }`. An app's Test button uses
   it to check credentials.
 
-**Limits a server applies:** 60 token requests per minute per address, counted as pairing counts
-addresses; one over the limit gets 429. A failed request gets the OAuth error (`invalid_client`,
-401), never the reason the secret was wrong.
+**Limits a server applies:** 60 token requests per minute per address (see "Pairing" for what an
+address is); one over the limit gets 429. After 10 wrong secrets for one registered client within a
+minute, from any addresses, requests for that client get 429 until the minute is up, the right
+secret included. A body over 4 KiB gets 413, or 400 when the server only finds out while reading it.
+The per-address limit and the cap on the body apply before the server reads the request. A failed
+request gets the OAuth error (`invalid_client`, 401), never the reason the secret was wrong.
 
 A token from a revoked client, or from an older generation, fails authentication everywhere it is
 presented: 401 on `hello`, on the hub's connect and on an app's own endpoints, as for an expired one.
