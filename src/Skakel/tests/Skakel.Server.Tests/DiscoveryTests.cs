@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
@@ -66,6 +67,46 @@ public sealed class DiscoveryTests : IAsyncLifetime
         SkakelDiscovery.TryParseAnswer(answer!, out var parsed).Should().BeTrue();
         parsed!.Fingerprint.Should().Be(next);
     }
+
+    [Fact]
+    public async Task A_probe_from_port_0_gets_no_answer_and_the_server_goes_on_answering()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var probe = SkakelDiscovery.CreateProbe();
+        var datagram = new byte[8 + probe.Length];
+        BinaryPrimitives.WriteUInt16BigEndian(datagram.AsSpan(0), 0);
+        BinaryPrimitives.WriteUInt16BigEndian(datagram.AsSpan(2), (ushort)_server.Port);
+        BinaryPrimitives.WriteUInt16BigEndian(datagram.AsSpan(4), (ushort)datagram.Length);
+        probe.CopyTo(datagram, 8);
+        try
+        {
+            // A UDP socket cannot send from port 0, so the datagram is built by hand, checksum left out.
+            using var raw = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Udp);
+            raw.SendTo(datagram, new IPEndPoint(IPAddress.Loopback, 0));
+        }
+        catch (SocketException ex)
+        {
+            Assert.Skip($"Sending a raw UDP datagram is not allowed here: {ex.SocketErrorCode}.");
+        }
+
+        await Task.Delay(300, ct);
+
+        (await ProbeAsync(SkakelDiscovery.CreateProbe(), ct)).Should().NotBeNull("one probe the server cannot answer must not stop the answers");
+    }
+
+    [Theory]
+    [InlineData("192.168.1.20", 50000, true)]
+    [InlineData("127.0.0.1", 50000, true)]
+    [InlineData("::ffff:10.0.0.5", 50000, true)]
+    [InlineData("fe80::1", 50000, true)]
+    [InlineData("192.168.1.20", 0, false)]
+    [InlineData("0.0.0.0", 50000, false)]
+    [InlineData("255.255.255.255", 50000, false)]
+    [InlineData("224.0.0.251", 50000, false)]
+    [InlineData("::", 50000, false)]
+    [InlineData("ff02::1", 50000, false)]
+    public void CanAnswer_takes_only_a_unicast_sender_on_a_real_port(string address, int port, bool answered) =>
+        SkakelDiscoveryService.CanAnswer(new IPEndPoint(IPAddress.Parse(address), port)).Should().Be(answered);
 
     private async Task<byte[]?> ProbeAsync(byte[] probe, CancellationToken ct)
     {
