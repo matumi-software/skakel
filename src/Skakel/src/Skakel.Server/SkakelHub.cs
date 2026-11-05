@@ -38,9 +38,21 @@ public abstract class SkakelHub<TClient> : Hub<TClient>
 
         var hub = (IHubContext)services.GetRequiredService(typeof(IHubContext<>).MakeGenericType(GetType()));
         var caller = hub.Clients.Client(Context.ConnectionId);
-        Context.Items[SessionKey] = services.GetRequiredService<SkakelSessions>().AddHub(clientId, generation, caller, Context.Abort);
-        await caller.SendAsync(SkakelHubMethods.Certificates, services.GetRequiredService<ServerState>().Certificates, Context.ConnectionAborted);
-        await base.OnConnectedAsync();
+        var session = services.GetRequiredService<SkakelSessions>().AddHub(clientId, generation, caller, Context.Abort);
+        Context.Items[SessionKey] = session;
+        try
+        {
+            await caller.SendAsync(SkakelHubMethods.Certificates, services.GetRequiredService<ServerState>().Certificates, Context.ConnectionAborted);
+            await base.OnConnectedAsync();
+        }
+        catch
+        {
+            // SignalR does not call OnDisconnectedAsync for a connection whose OnConnectedAsync failed, such as one
+            // that dropped during the first send, so the session would never be let go.
+            Context.Items.Remove(SessionKey);
+            session.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Stops tracking the connection.</summary>

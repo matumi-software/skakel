@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Connections;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.TestHost;
@@ -121,6 +123,33 @@ public sealed class HubTests : IAsyncLifetime
         FluentActions.Invoking(() => app.MapSkakelHub<RudeHub>("rude")).Should().Throw<ArgumentException>().WithMessage("*SkakelPing*");
         FluentActions.Invoking(() => app.MapSkakelHub<RudeClientHub>("rude")).Should().Throw<ArgumentException>().WithMessage("*SkakelPush*");
         FluentActions.Invoking(() => app.MapSkakelHub<TestHub>("streams")).Should().Throw<ArgumentException>();
+        FluentActions.Invoking(() => app.MapSkakelHub<LowercaseHub>("rude")).Should().Throw<ArgumentException>().WithMessage("*skakelPing*");
+        FluentActions.Invoking(() => app.MapSkakelHub<RenamedHub>("rude")).Should().Throw<ArgumentException>().WithMessage("*SkakelPing*");
+    }
+
+    [Fact]
+    public async Task MapSkakelHub_closes_connections_when_the_token_expires_whatever_the_app_configures()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<ISkakelStore>(new InMemorySkakelStore());
+        builder.Services.AddSkakelServer(o =>
+        {
+            o.AppId = "test-app";
+            o.AppVersion = "1";
+            o.Port = 5240;
+        });
+        await using var app = builder.Build();
+
+        app.MapSkakelHub<TestHub>("hub", options => options.CloseOnAuthenticationExpiration = false);
+
+        // The negotiate endpoint carries the options the hub was mapped with.
+        var settings = ((IEndpointRouteBuilder)app).DataSources.SelectMany(d => d.Endpoints)
+            .Select(e => e.Metadata.GetMetadata<HttpConnectionDispatcherOptions>())
+            .OfType<HttpConnectionDispatcherOptions>()
+            .Select(o => o.CloseOnAuthenticationExpiration)
+            .ToList();
+        settings.Should().NotBeEmpty().And.AllBeEquivalentTo(true);
     }
 
     public interface IRudeClient
@@ -134,4 +163,15 @@ public sealed class HubTests : IAsyncLifetime
     }
 
     public sealed class RudeClientHub : SkakelHub<IRudeClient>;
+
+    public sealed class LowercaseHub : SkakelHub<ITestClient>
+    {
+        public Task skakelPing() => Clients.Caller.Greeted("pong");
+    }
+
+    public sealed class RenamedHub : SkakelHub<ITestClient>
+    {
+        [HubMethodName("SkakelPing")]
+        public Task Ping() => Clients.Caller.Greeted("pong");
+    }
 }
