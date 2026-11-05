@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What an app adds to its ASP.NET Core host to serve Skakel clients. -->
+  <PropertyGroup>
+    <Description>Serve Skakel clients from ASP.NET Core: discovery, pairing, OAuth tokens, certificate handover, a SignalR hub base and WebSocket streams.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenIddict.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Skakel.Protocol\Skakel.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Skakel.Server.Tests" />
+  </ItemGroup>
+
+</Project>
