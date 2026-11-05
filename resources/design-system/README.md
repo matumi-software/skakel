@@ -24,7 +24,7 @@ same time.
 
 ## Wordmark
 
-"Skakel" set in Instrument Sans 600 beside the mark, with the mark's height matched to the cap
+"skakel", always lowercase like the other Matumi Software wordmarks, set in Instrument Sans 600 beside the mark, with the mark's height matched to the cap
 height plus ascender. There is no outlined wordmark file; set it in type.
 
 ## Colour
