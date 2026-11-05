@@ -1,3 +1,6 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+
 namespace Skakel.Client.Tests;
 
 /// <summary>A link against a real server: connecting, the app's own hub messages, and every way it fails.</summary>
@@ -187,6 +190,96 @@ public sealed class LinkTests : IAsyncLifetime
         var hello = await http.GetStringAsync(new Uri(Skakel.Protocol.SkakelProtocol.HelloPath, UriKind.Relative), TestContext.Current.CancellationToken);
 
         hello.Should().Contain(credentials.ClientId);
+    }
+
+    [Fact]
+    public async Task CreateHttpClient_sends_nothing_anywhere_but_the_servers_address_over_https()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (link, _) = await _host.LinkAsync();
+        await using var __ = link;
+        using var plain = new Listener("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+        using var http = link.CreateHttpClient();
+
+        var overHttp = () => http.GetAsync(new Uri($"http://127.0.0.1:{plain.Port}/anything"), ct);
+        var elsewhere = () => http.GetAsync(new Uri($"https://127.0.0.1:{plain.Port}/anything"), ct);
+
+        await overHttp.Should().ThrowAsync<InvalidOperationException>();
+        await elsewhere.Should().ThrowAsync<InvalidOperationException>();
+        plain.Received.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-100)]
+    [InlineData(100_000_000)]
+    public async Task A_server_that_gives_odd_token_lifetimes_is_connected_to_once(int expiresIn)
+    {
+        _host.TokenExpiresIn = expiresIn;
+        var (link, _) = await _host.LinkAsync();
+        await using var __ = link;
+        var statuses = Record(link);
+
+        link.Start();
+        await statuses.WaitAsync(s => s.State == SkakelLinkState.Connected);
+        await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        _host.Negotiates.Should().Be(1);
+        _host.Tokens.Should().Be(1);
+        statuses.Seen.Select(s => s.State).Should().Equal(SkakelLinkState.Connecting, SkakelLinkState.Connected);
+    }
+
+    [Theory]
+    [InlineData(null, 300)]
+    [InlineData(0, 120)]
+    [InlineData(-100, 120)]
+    [InlineData(1800, 1800)]
+    [InlineData(100_000_000, 1800)]
+    public void Lifetime_holds_what_the_server_says_to_2_to_30_minutes(int? expiresIn, int seconds)
+    {
+        TokenClient.Lifetime(expiresIn).Should().Be(TimeSpan.FromSeconds(seconds));
+    }
+
+    [Fact]
+    public async Task The_hub_does_not_follow_a_negotiation_that_points_elsewhere()
+    {
+        using var plain = new Listener();
+        await using var fake = await FakeServer.StartAsync(app =>
+        {
+            app.MapGet(Skakel.Protocol.SkakelProtocol.InfoPath, () => FakeServer.Info());
+            app.MapPost(Skakel.Protocol.SkakelProtocol.TokenPath, () => Results.Json(new Dictionary<string, object> { ["access_token"] = "t", ["token_type"] = "Bearer", ["expires_in"] = 1800 }));
+            app.MapPost("/skakel/v1/hub/negotiate", () => Results.Json(new { url = $"http://127.0.0.1:{plain.Port}/hub", accessToken = "t" }));
+        });
+        await using var link = new SkakelLink(fake.Address, fake.Pins, new SkakelCredentials("c", "s"));
+        var statuses = Record(link);
+
+        link.Start();
+
+        (await statuses.WaitAsync(s => s.State == SkakelLinkState.Failed)).Failure!.Kind.Should().Be(SkakelFailureKind.UnexpectedAnswer);
+        plain.Received.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_statement_about_a_certificate_the_server_does_not_present_is_ignored()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (link, _) = await _host.LinkAsync();
+        await using var __ = link;
+        var pins = new Recorder<SkakelPins>();
+        link.PinsChanged += pins.Record;
+        var statuses = Record(link);
+        link.Start();
+        await statuses.WaitAsync(s => s.State == SkakelLinkState.Connected);
+        var current = _host.Keys.Fingerprint;
+        var next = await _host.Keys.PrepareNextCertificateAsync(ct);
+        await pins.WaitAsync(p => p.NextFingerprint == next);
+
+        // The server has not switched, but says it presents the next certificate.
+        await link.InvokeAsync(nameof(TestHub.Claim), [next, null], ct);
+        await link.InvokeAsync<string>(nameof(TestHub.Echo), ["x"], ct);
+
+        link.Pins.Should().Be(new SkakelPins(current, next));
+        pins.Seen.Should().ContainSingle();
     }
 
     internal static Recorder<SkakelLinkStatus> Record(SkakelLink link)

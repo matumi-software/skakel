@@ -1,4 +1,7 @@
 using System.Runtime.CompilerServices;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Skakel.Protocol;
 using Skakel.Server;
 
 namespace Skakel.Client.Tests;
@@ -67,6 +70,46 @@ public sealed class PairingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task WaitAsync_gives_up_five_minutes_on_by_its_own_clock_whatever_the_server_says()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fake = await FakePairingAsync(DateTimeOffset.MaxValue, "f00d");
+        var time = new ManualTimeProvider();
+        await using var pairing = await SkakelPairingClient.OpenAsync(fake.Address, fake.Fingerprint, "laptop", new SkakelClientOptions { TimeProvider = time }, ct);
+        pairing.ExpiresAt.Should().Be(time.GetUtcNow() + TimeSpan.FromMinutes(5));
+
+        var wait = pairing.WaitAsync(ct);
+        await time.WhenTimersAsync(1);
+        time.Advance(TimeSpan.FromMinutes(6));
+
+        var waiting = () => wait;
+        (await waiting.Should().ThrowAsync<SkakelException>()).Which.Failure.Kind.Should().Be(SkakelFailureKind.PairingExpired);
+    }
+
+    [Theory]
+    [InlineData("a\r\nb")]
+    [InlineData("")]
+    [InlineData("tab\there")]
+    public async Task OpenAsync_refuses_a_poll_token_that_is_not_short_printable_text(string pollToken)
+    {
+        await using var fake = await FakePairingAsync(DateTimeOffset.UtcNow.AddMinutes(5), pollToken);
+
+        var open = () => SkakelPairingClient.OpenAsync(fake.Address, fake.Fingerprint, "laptop", cancellationToken: TestContext.Current.CancellationToken);
+
+        (await open.Should().ThrowAsync<SkakelException>()).Which.Failure.Kind.Should().Be(SkakelFailureKind.UnexpectedAnswer);
+    }
+
+    [Fact]
+    public async Task OpenAsync_refuses_a_poll_token_over_128_characters()
+    {
+        await using var fake = await FakePairingAsync(DateTimeOffset.UtcNow.AddMinutes(5), new string('a', 129));
+
+        var open = () => SkakelPairingClient.OpenAsync(fake.Address, fake.Fingerprint, "laptop", cancellationToken: TestContext.Current.CancellationToken);
+
+        (await open.Should().ThrowAsync<SkakelException>()).Which.Failure.Kind.Should().Be(SkakelFailureKind.UnexpectedAnswer);
+    }
+
+    [Fact]
     public async Task OpenAsync_refuses_a_server_of_another_protocol_version()
     {
         _host.InfoVersions = [2];
@@ -77,6 +120,16 @@ public sealed class PairingTests : IAsyncLifetime
         failure.Kind.Should().Be(SkakelFailureKind.VersionMismatch);
         failure.Message.Should().Be("This server speaks Skakel 2 and this app speaks Skakel 1. Update the app.");
     }
+
+    /// <summary>A server that opens every pairing request with this expiry and poll token, and keeps it waiting.</summary>
+    private static Task<FakeServer> FakePairingAsync(DateTimeOffset expiresAt, string pollToken) => FakeServer.StartAsync(app =>
+    {
+        app.MapGet(SkakelProtocol.InfoPath, () => FakeServer.Info());
+        app.MapPost(SkakelProtocol.PairPath, () => Results.Json(new { requestId = "r1", serverNonce = "n", expiresAt, pollToken }));
+        app.MapPost($"{SkakelProtocol.PairPath}/r1/reveal", () => Results.NoContent());
+        app.MapGet($"{SkakelProtocol.PairPath}/r1", () => Results.Json(new { state = "waiting" }));
+        app.MapDelete($"{SkakelProtocol.PairPath}/r1", () => Results.NoContent());
+    });
 }
 
 /// <summary>Polls quickly, so the tests do not wait two seconds a poll.</summary>

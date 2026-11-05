@@ -48,7 +48,7 @@ public sealed class SkakelDiscoveryTests
 
     [Theory]
     [InlineData("a")]
-    [InlineData("é")]
+    [InlineData("\u00E9")]
     [InlineData("😀")]
     [InlineData("\"")]
     public void CreateAnswer_always_fits_in_a_probe(string character)
@@ -94,6 +94,26 @@ public sealed class SkakelDiscoveryTests
         var datagram = Encoding.UTF8.GetBytes("SKAKEL-SERVER/1\n" + body.Replace("FP", Fingerprint, StringComparison.Ordinal));
 
         SkakelDiscovery.TryParseAnswer(datagram, out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("pi\u202Elab", "pilab")]
+    [InlineData("pi\u200Blab\u200D", "pilab")]
+    [InlineData("pi\u2066lab\u2069", "pilab")]
+    [InlineData(" pi\nlab\u2028 ", "pilab")]
+    [InlineData("pi\U000E0041lab", "pilab")]
+    [InlineData("pi-lab 😀", "pi-lab 😀")]
+    public void Clean_drops_control_and_format_characters(string text, string clean)
+    {
+        SkakelDiscovery.Clean(text, SkakelDiscovery.MaxNameLength).Should().Be(clean);
+    }
+
+    [Fact]
+    public void Clean_cuts_to_length_without_splitting_a_surrogate_pair()
+    {
+        SkakelDiscovery.Clean(new string('n', 100), 63).Should().HaveLength(63);
+        SkakelDiscovery.Clean(new string('n', 62) + "😀", 63).Should().Be(new string('n', 62));
+        SkakelDiscovery.Clean(null, 63).Should().BeEmpty();
     }
 
     [Fact]

@@ -1,10 +1,14 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Skakel.Protocol;
@@ -29,6 +33,14 @@ public sealed class TestHub : SkakelHub<ITestClient>
 #pragma warning restore CA1822
 
     public string Connection() => Context.ConnectionId;
+
+    /// <summary>
+    /// Tells the caller the server presents <paramref name="fingerprint"/>, true or not.
+    /// Sent past the typed client, which may not name Skakel's own messages.
+    /// </summary>
+    public Task Claim(string fingerprint, string? next) =>
+        Context.GetHttpContext()!.RequestServices.GetRequiredService<HubLifetimeManager<TestHub>>()
+            .SendConnectionAsync(Context.ConnectionId, SkakelHubMethods.Certificates, [new SkakelCertificates(fingerprint, next)]);
 }
 
 /// <summary>
@@ -68,6 +80,18 @@ internal sealed class SkakelHost : IAsyncDisposable
     /// <summary>When set, <c>/skakel/info</c> lists these versions instead, as a server of another version would.</summary>
     public IReadOnlyList<int>? InfoVersions { get; set; }
 
+    /// <summary>When set, the token endpoint says its tokens last this many seconds, whatever they really do.</summary>
+    public int? TokenExpiresIn { get; set; }
+
+    /// <summary>How many tokens the token endpoint handed out.</summary>
+    public int Tokens => Volatile.Read(ref _tokens);
+
+    /// <summary>How many times a client started a hub connection.</summary>
+    public int Negotiates => Volatile.Read(ref _negotiates);
+
+    private int _tokens;
+    private int _negotiates;
+
     /// <param name="store">The server's state; a second server given the same store has the same certificate and clients.</param>
     /// <param name="port">The TCP port; a free one unless given.</param>
     /// <param name="discoveryPort">Answers discovery on this UDP port; off unless given.</param>
@@ -100,6 +124,21 @@ internal sealed class SkakelHost : IAsyncDisposable
                 return;
             }
 
+            if (host is not null && http.Request.Path.StartsWithSegments("/skakel/v1/hub/negotiate"))
+            {
+                Interlocked.Increment(ref host._negotiates);
+            }
+
+            if (host is not null && http.Request.Path == SkakelProtocol.TokenPath)
+            {
+                Interlocked.Increment(ref host._tokens);
+                if (host.TokenExpiresIn is { } expiresIn)
+                {
+                    await RewriteExpiresInAsync(http, next, expiresIn);
+                    return;
+                }
+            }
+
             await next(http);
         });
         app.UseWebSockets();
@@ -107,6 +146,8 @@ internal sealed class SkakelHost : IAsyncDisposable
         app.MapSkakelHub<TestHub>("hub");
         app.MapSkakelStream("echo", EchoStream.OpenAsync);
         app.MapSkakelStream(SerialStreamType.Type, PretendSerial.OpenAsync);
+        // A stream type whose server never answers the upgrade.
+        app.MapGet($"{SkakelProtocol.StreamsPath}/stall", (HttpContext http) => Task.Delay(Timeout.Infinite, http.RequestAborted));
         await app.StartAsync(TestContext.Current.CancellationToken);
         host = new SkakelHost(app, store, tcp);
         return host;
@@ -128,6 +169,135 @@ internal sealed class SkakelHost : IAsyncDisposable
     public Task StopAsync() => _app.StopAsync(TestContext.Current.CancellationToken);
 
     public async ValueTask DisposeAsync() => await _app.DisposeAsync();
+
+    /// <summary>The real token answer, with <c>expires_in</c> replaced.</summary>
+    private static async Task RewriteExpiresInAsync(HttpContext http, RequestDelegate next, int expiresIn)
+    {
+        var original = http.Response.Body;
+        using var buffer = new MemoryStream();
+        http.Response.Body = buffer;
+        await next(http);
+        http.Response.Body = original;
+        var answer = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(buffer.ToArray())!;
+        var rewritten = answer.ToDictionary(p => p.Key, p => p.Key == "expires_in" ? (object)expiresIn : p.Value);
+        http.Response.ContentLength = null;
+        await http.Response.WriteAsJsonAsync(rewritten);
+    }
+}
+
+/// <summary>
+/// A server that is not a Skakel server: Kestrel on loopback with a certificate of its own, answering
+/// what the test maps, for answers a real server would never give.
+/// </summary>
+internal sealed class FakeServer : IAsyncDisposable
+{
+    private readonly WebApplication _app;
+
+    private FakeServer(WebApplication app, int port, string fingerprint)
+    {
+        _app = app;
+        Address = new Uri($"https://127.0.0.1:{port}/");
+        Fingerprint = fingerprint;
+    }
+
+    public Uri Address { get; }
+
+    public string Fingerprint { get; }
+
+    public SkakelPins Pins => new(Fingerprint);
+
+    public static async Task<FakeServer> StartAsync(Action<WebApplication> map)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest("CN=fake", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        using var created = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10));
+        var certificate = X509CertificateLoader.LoadPkcs12(created.Export(X509ContentType.Pfx), null);
+        var port = Ports.FreeTcp();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(kestrel => kestrel.Listen(IPAddress.Loopback, port, listen => listen.UseHttps(certificate)));
+        var app = builder.Build();
+        map(app);
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        return new FakeServer(app, port, Fingerprints.Of(certificate));
+    }
+
+    /// <summary>Info as a Skakel server of the test app gives it.</summary>
+    public static IResult Info(string name = "fake") => Results.Json(new SkakelInfo(name, new SkakelApp("test-app", "1"), [1]), SkakelJson.Options);
+
+    public async ValueTask DisposeAsync() => await _app.DisposeAsync();
+}
+
+/// <summary>A plain TCP listener on loopback that records what arrives and answers nothing, or what it is told to.</summary>
+internal sealed class Listener : IDisposable
+{
+    private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private readonly List<string> _received = [];
+
+    public Listener(string? answer = null)
+    {
+        _listener.Start();
+        _ = AcceptAsync(answer);
+    }
+
+    public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+
+    /// <summary>Everything any connection sent, as text.</summary>
+    public string Received
+    {
+        get
+        {
+            lock (_received)
+            {
+                return string.Concat(_received);
+            }
+        }
+    }
+
+    public void Dispose() => _listener.Stop();
+
+    private async Task AcceptAsync(string? answer)
+    {
+        try
+        {
+            while (true)
+            {
+                var client = await _listener.AcceptTcpClientAsync();
+                _ = ServeAsync(client, answer);
+            }
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+            // Stopped.
+        }
+    }
+
+    private async Task ServeAsync(TcpClient client, string? answer)
+    {
+        using var _ = client;
+        var buffer = new byte[4096];
+        try
+        {
+            var stream = client.GetStream();
+            int read;
+            while ((read = await stream.ReadAsync(buffer)) > 0)
+            {
+                lock (_received)
+                {
+                    _received.Add(Encoding.Latin1.GetString(buffer, 0, read));
+                }
+
+                if (answer is not null)
+                {
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(answer));
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+        {
+            // The other end went.
+        }
+    }
 }
 
 /// <summary>Free ports on loopback, for a server that has to know its own before it starts.</summary>
@@ -185,11 +355,16 @@ internal static class EchoStream
 /// <summary>
 /// A serial port as an app would serve it, with the port played by a loopback: bytes sent come back.
 /// <c>COM1</c> opens; <c>fault</c> opens and then reports a fault (4100); <c>busy</c> is 409; no port is
-/// 422; anything else 404. 12345 baud is a rate the port cannot do. Setting DTR raises DSR and DCD.
+/// 422; anything else 404. 12345 baud is a rate the port cannot do. A change to 54321 baud is never
+/// answered, one to 4800 only after a second. Setting DTR raises DSR and DCD.
 /// </summary>
 internal static class PretendSerial
 {
     public const int UnsupportedBaud = 12345;
+
+    public const int SilentBaud = 54321;
+
+    public const int SlowBaud = 4800;
 
     public static ValueTask<SkakelStreamResult> OpenAsync(SkakelStreamRequest request)
     {
@@ -229,6 +404,13 @@ internal static class PretendSerial
                     {
                         case SerialSetLineSettings { Baud: UnsupportedBaud }:
                             await SendAsync(session, new SerialError(SerialErrorCode.Unsupported, $"This port cannot run at {UnsupportedBaud} baud."));
+                            break;
+                        case SerialSetLineSettings { Baud: SilentBaud }:
+                            break;
+                        case SerialSetLineSettings { Baud: SlowBaud } slow:
+                            await Task.Delay(TimeSpan.FromSeconds(1), session.Ending);
+                            settings = slow.ToSettings();
+                            await SendAsync(session, SerialLineSettingsApplied.From(settings));
                             break;
                         case SerialSetLineSettings change:
                             settings = change.ToSettings();

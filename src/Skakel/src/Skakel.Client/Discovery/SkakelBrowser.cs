@@ -10,18 +10,31 @@ namespace Skakel.Client;
 /// <summary>
 /// Finds an app's servers on the local network: broadcasts a probe every ten seconds to the app's port
 /// on every IPv4 network this machine is on, and lists the servers that answer. Anyone on the network
-/// can answer anything, so what it keeps is bounded by the limits in the protocol: at most 64 entries
-/// and 8 from one address, fingerprints that are really fingerprints, short names, and entries that go
-/// when they stop answering. Entries are told apart by fingerprint and address, so a server that copies
-/// a name sits beside the real one instead of replacing it, and an app can warn about the two.
+/// can answer anything, so what it keeps is bounded by the limits in the protocol: answers only shortly
+/// after a probe, at most 64 entries and 8 from one address, fingerprints that are really fingerprints,
+/// short names, and entries that go when they stop answering.
 /// </summary>
-/// <remarks>One browser serves every link of an app; pass it to each in <see cref="SkakelClientOptions.Browser"/>.</remarks>
+/// <remarks>
+/// <para>
+/// Entries are told apart by fingerprint, address and port, so an answer that copies another server's
+/// name or fingerprint sits beside the real one instead of replacing it. The list shows one entry per
+/// fingerprint: the address that answered first, on the best network. Every other address that answered
+/// with the same fingerprint is in <see cref="SkakelDiscoveredServer.OtherEndpoints"/>, so an app can
+/// warn that several addresses claim one certificate; only a pinned connection tells which holds it.
+/// </para>
+/// <para>One browser serves every link of an app; pass it to each in <see cref="SkakelClientOptions.Browser"/>.</para>
+/// </remarks>
 public sealed partial class SkakelBrowser : IDisposable
 {
+    /// <summary>How long after a probe its answers are taken. Later ones are dropped.</summary>
+    internal static readonly TimeSpan AnswerWindow = TimeSpan.FromSeconds(3);
+
     private readonly IBrowseControl _control;
     private readonly TimeSpan _probeEvery;
     private readonly HashSet<string>? _appIds;
     private readonly Dictionary<EntryKey, Seen> _seen = [];
+    // What running links have pinned. Their entries are never pushed out to make room.
+    private readonly List<Func<SkakelPins>> _protected = [];
     private readonly Lock _gate = new();
     // Held around every start, stop and probe. The control's own threads take _gate, never this, so a stop can wait for them.
     private readonly Lock _browseLock = new();
@@ -34,6 +47,9 @@ public sealed partial class SkakelBrowser : IDisposable
     private readonly Task _raising;
     private IReadOnlyList<SkakelDiscoveredServer> _published = [];
     private bool _wanted;
+    // Counts the probes sent, so an entry knows how many it answered; and when the last one went out.
+    private long _probes;
+    private DateTimeOffset? _probedAt;
 
     /// <summary>A browser for the servers of the given apps. Call <see cref="Start"/> to begin.</summary>
     /// <param name="port">The app's port number: servers answer probes on UDP at the number their HTTPS listens on.</param>
@@ -62,7 +78,11 @@ public sealed partial class SkakelBrowser : IDisposable
     /// <summary>An entry that missed three probes in a row, and a little more, is gone: 35 seconds.</summary>
     internal TimeSpan EntryLifetime => _probeEvery * 3.5;
 
-    /// <summary>One entry per server, however many of its addresses answered, sorted by name.</summary>
+    /// <summary>
+    /// One entry per fingerprint, sorted by name: the address that answered first on the best network,
+    /// with every other address that answered with the same fingerprint in
+    /// <see cref="SkakelDiscoveredServer.OtherEndpoints"/>.
+    /// </summary>
     public IReadOnlyList<SkakelDiscoveredServer> Servers
     {
         get
@@ -70,6 +90,18 @@ public sealed partial class SkakelBrowser : IDisposable
             lock (_gate)
             {
                 return Snapshot();
+            }
+        }
+    }
+
+    /// <summary>Every address and port that answered, one entry each, the best network and the longest standing first. What a link looks through to follow its server.</summary>
+    internal IReadOnlyList<SkakelDiscoveredServer> Entries
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. Ordered(_seen.Values).Select(s => s.Server)];
             }
         }
     }
@@ -85,8 +117,8 @@ public sealed partial class SkakelBrowser : IDisposable
             _wanted = true;
             if (!_control.IsBrowsing)
             {
-                _control.StartBrowse(Add);
-                _control.Probe();
+                _control.StartBrowse(Answered);
+                ProbeNow();
             }
         }
     }
@@ -106,6 +138,7 @@ public sealed partial class SkakelBrowser : IDisposable
         lock (_gate)
         {
             _seen.Clear();
+            _probedAt = null;
             Publish();
         }
     }
@@ -135,11 +168,37 @@ public sealed partial class SkakelBrowser : IDisposable
         return new SkakelDiscoveredServer(name, address, parsed.Port, parsed.Fingerprint, parsed.App, parsed.Versions);
     }
 
+    /// <summary>Keeps the entries of servers with these pins from being pushed out to make room, until disposed. A link does this while it lives.</summary>
+    internal IDisposable Protect(Func<SkakelPins> pins)
+    {
+        lock (_gate)
+        {
+            _protected.Add(pins);
+        }
+
+        return new Unprotect(this, pins);
+    }
+
+    /// <summary>An answer from the network: taken only within a few seconds of a probe, as answers to it.</summary>
+    internal void Answered(SkakelDiscoveredServer server, int rank)
+    {
+        lock (_gate)
+        {
+            if (_probedAt is not { } probedAt || _time.GetUtcNow() - probedAt > AnswerWindow)
+            {
+                return;
+            }
+        }
+
+        Add(server, rank);
+    }
+
     /// <summary>
-    /// Keeps or refreshes an entry. When one address already holds its share, its stalest entry goes to
-    /// make room. When the whole list is full, the stalest entry of the address holding the most goes,
-    /// so a flood from one address pushes out its own entries and not other servers'. Another app's
-    /// server takes no room at all.
+    /// Keeps or refreshes an entry. When one address already holds its share, one of its entries goes to
+    /// make room. When the whole list is full, one goes from the address holding the most, so a flood from
+    /// one address pushes out its own entries and not other servers'. The one that goes is the one that
+    /// answered the fewest probes, then the stalest, and never one a running link has pinned; when only
+    /// those are left, the new answer is dropped instead. Another app's server takes no room at all.
     /// </summary>
     internal void Add(SkakelDiscoveredServer server, int rank)
     {
@@ -148,22 +207,24 @@ public sealed partial class SkakelBrowser : IDisposable
             return;
         }
 
-        var key = new EntryKey(server.Fingerprint, server.Address);
+        var key = new EntryKey(server.Fingerprint, server.Address, server.Port);
         lock (_gate)
         {
-            if (!_seen.ContainsKey(key))
+            var now = _time.GetUtcNow();
+            if (_seen.TryGetValue(key, out var seen))
             {
-                if (_seen.Count(e => e.Key.Address.Equals(server.Address)) >= SkakelDiscovery.MaxEntriesPerAddress)
-                {
-                    EvictStalest(server.Address);
-                }
-                else if (_seen.Count >= SkakelDiscovery.MaxEntries)
-                {
-                    EvictStalest(_seen.GroupBy(e => e.Key.Address).MaxBy(g => g.Count())!.Key);
-                }
+                var answered = seen.LastProbe == _probes ? seen.Answers : seen.Answers + 1;
+                _seen[key] = seen with { Server = server, Rank = rank, LastSeen = now, Answers = answered, LastProbe = _probes };
+            }
+            else if (MakeRoom(server.Address))
+            {
+                _seen[key] = new Seen(server, rank, now, now, 1, _probes);
+            }
+            else
+            {
+                return;
             }
 
-            _seen[key] = new Seen(server, rank, _time.GetUtcNow());
             Publish();
         }
     }
@@ -190,11 +251,54 @@ public sealed partial class SkakelBrowser : IDisposable
     /// <summary>The probe targets: the limited broadcast address and each IPv4 network's own.</summary>
     internal static IBrowseControl Udp(int port, IReadOnlyList<IPEndPoint>? targets = null) => new UdpBrowse(port, targets);
 
-    /// <summary>Drops the entry from this address that answered longest ago, with the gate held.</summary>
-    private void EvictStalest(IPAddress address)
+    /// <summary>Best network first, then the longest standing, so a newcomer does not take an older entry's place.</summary>
+    private static IOrderedEnumerable<Seen> Ordered(IEnumerable<Seen> entries) =>
+        entries.OrderBy(s => s.Rank).ThenBy(s => s.FirstSeen).ThenBy(s => s.Server.Address.ToString(), StringComparer.Ordinal).ThenBy(s => s.Server.Port);
+
+    /// <summary>
+    /// Makes room for an entry from <paramref name="address"/>, with the gate held: false when every entry
+    /// that could go is protected.
+    /// </summary>
+    private bool MakeRoom(IPAddress address)
     {
-        var stalest = _seen.Where(e => e.Key.Address.Equals(address)).MinBy(e => e.Value.LastSeen).Key;
-        _seen.Remove(stalest);
+        var candidates = _seen.Where(e => !IsProtected(e.Key.Fingerprint)).ToList();
+        IEnumerable<KeyValuePair<EntryKey, Seen>> from;
+        if (_seen.Count(e => e.Key.Address.Equals(address)) >= SkakelDiscovery.MaxEntriesPerAddress)
+        {
+            from = candidates.Where(e => e.Key.Address.Equals(address));
+        }
+        else if (_seen.Count >= SkakelDiscovery.MaxEntries)
+        {
+            from = candidates.GroupBy(e => e.Key.Address).MaxBy(g => g.Count()) ?? Enumerable.Empty<KeyValuePair<EntryKey, Seen>>();
+        }
+        else
+        {
+            return true;
+        }
+
+        var victim = from.OrderBy(e => e.Value.Answers).ThenBy(e => e.Value.LastSeen).Select(e => (KeyValuePair<EntryKey, Seen>?)e).FirstOrDefault();
+        if (victim is not { } evict)
+        {
+            return false;
+        }
+
+        _seen.Remove(evict.Key);
+        return true;
+    }
+
+    /// <summary>Whether a running link has pinned this fingerprint, with the gate held.</summary>
+    private bool IsProtected(string fingerprint) => _protected.Any(pins => pins().Trusts(fingerprint));
+
+    /// <summary>Sends a probe, and takes answers for the next few seconds. With the browse lock held.</summary>
+    private void ProbeNow()
+    {
+        lock (_gate)
+        {
+            _probes++;
+            _probedAt = _time.GetUtcNow();
+        }
+
+        _control.Probe();
     }
 
     /// <summary>
@@ -208,7 +312,7 @@ public sealed partial class SkakelBrowser : IDisposable
         {
             if (_wanted && _control.IsBrowsing)
             {
-                _control.Probe();
+                ProbeNow();
             }
         }
     }
@@ -229,7 +333,11 @@ public sealed partial class SkakelBrowser : IDisposable
     private IReadOnlyList<SkakelDiscoveredServer> Snapshot() =>
         [.. _seen.Values
             .GroupBy(s => s.Server.Fingerprint)
-            .Select(g => g.OrderBy(s => s.Rank).ThenByDescending(s => s.LastSeen).First().Server)
+            .Select(g =>
+            {
+                var ordered = Ordered(g).ToList();
+                return ordered[0].Server with { OtherEndpoints = [.. ordered.Skip(1).Select(s => new IPEndPoint(s.Server.Address, s.Server.Port))] };
+            })
             .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(s => s.Fingerprint, StringComparer.Ordinal)];
 
@@ -255,10 +363,22 @@ public sealed partial class SkakelBrowser : IDisposable
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not sweep the list of servers or send a probe")]
     private partial void LogTickFailed(Exception exception);
 
-    /// <summary>One server at one address: the fingerprint tells servers apart, the address tells the copies of one server apart.</summary>
-    private readonly record struct EntryKey(string Fingerprint, IPAddress Address);
+    /// <summary>One answer: the fingerprint tells servers apart, the address and port tell the copies of one apart.</summary>
+    private readonly record struct EntryKey(string Fingerprint, IPAddress Address, int Port);
 
-    private sealed record Seen(SkakelDiscoveredServer Server, int Rank, DateTimeOffset LastSeen);
+    /// <summary>An entry, when it first and last answered, and how many probes it answered (up to the one numbered <see cref="LastProbe"/>).</summary>
+    private sealed record Seen(SkakelDiscoveredServer Server, int Rank, DateTimeOffset FirstSeen, DateTimeOffset LastSeen, long Answers, long LastProbe);
+
+    private sealed class Unprotect(SkakelBrowser browser, Func<SkakelPins> pins) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (browser._gate)
+            {
+                browser._protected.Remove(pins);
+            }
+        }
+    }
 
     /// <summary>Starting and stopping the browse and sending probes, so a test can stand in for the network.</summary>
     internal interface IBrowseControl
@@ -275,9 +395,14 @@ public sealed partial class SkakelBrowser : IDisposable
 
     private sealed class UdpBrowse(int port, IReadOnlyList<IPEndPoint>? targets) : IBrowseControl, IDisposable
     {
+        /// <summary>How long the list of physical networks is reused before it is read again.</summary>
+        private static readonly TimeSpan NetworksFor = TimeSpan.FromSeconds(10);
+
         private readonly Lock _lock = new();
         private Socket? _socket;
         private CancellationTokenSource? _stop;
+        private IReadOnlyList<UnicastIPAddressInformation> _physical = [];
+        private long _physicalUntil = long.MinValue;
 
         public bool IsBrowsing
         {
@@ -307,7 +432,7 @@ public sealed partial class SkakelBrowser : IDisposable
 
                 _socket = socket;
                 _stop = new CancellationTokenSource();
-                _ = ListenAsync(socket, found, _stop.Token);
+                _ = ListenAsync(socket, found, Rank, _stop.Token);
             }
         }
 
@@ -352,7 +477,7 @@ public sealed partial class SkakelBrowser : IDisposable
             }
         }
 
-        private static async Task ListenAsync(Socket socket, Action<SkakelDiscoveredServer, int> found, CancellationToken cancellationToken)
+        private static async Task ListenAsync(Socket socket, Action<SkakelDiscoveredServer, int> found, Func<IPAddress, int> rank, CancellationToken cancellationToken)
         {
             var buffer = new byte[2048];
             var anyone = new IPEndPoint(IPAddress.Any, 0);
@@ -376,7 +501,7 @@ public sealed partial class SkakelBrowser : IDisposable
                 var from = ((IPEndPoint)received.RemoteEndPoint).Address;
                 if (Read(buffer.AsSpan(0, received.ReceivedBytes), from) is { } server)
                 {
-                    found(server, Rank(from));
+                    found(server, rank(from));
                 }
             }
         }
@@ -407,14 +532,26 @@ public sealed partial class SkakelBrowser : IDisposable
 
         /// <summary>
         /// Prefers an address on a wired or wireless network over one on a virtual network, such as a
-        /// Hyper-V switch or Docker's bridge, when a server answers on both.
+        /// Hyper-V switch or Docker's bridge, when a server answers on both. The networks are read at most
+        /// once every ten seconds, not for every answer.
         /// </summary>
-        private static int Rank(IPAddress address)
+        private int Rank(IPAddress address)
         {
-            var physical = LocalNetworks(n =>
-                n.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211
-                && !n.Description.Contains("Virtual", StringComparison.OrdinalIgnoreCase)
-                && !n.Description.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase));
+            IReadOnlyList<UnicastIPAddressInformation> physical;
+            lock (_lock)
+            {
+                if (Environment.TickCount64 >= _physicalUntil)
+                {
+                    _physical = [.. LocalNetworks(n =>
+                        n.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211
+                        && !n.Description.Contains("Virtual", StringComparison.OrdinalIgnoreCase)
+                        && !n.Description.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase))];
+                    _physicalUntil = Environment.TickCount64 + (long)NetworksFor.TotalMilliseconds;
+                }
+
+                physical = _physical;
+            }
+
             return physical.Any(u => SameSubnet(address, u)) ? 0 : 1;
         }
 

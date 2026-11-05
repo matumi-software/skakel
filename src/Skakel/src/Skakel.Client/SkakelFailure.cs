@@ -188,8 +188,12 @@ internal static class Failures
                     return SkakelFailure.Of(SkakelFailureKind.ClientUnknown);
                 case TokenRequestException:
                 case HttpRequestException { StatusCode: not null }:
+                // An answer longer than the client reads, or headers longer than it takes.
+                case HttpRequestException { HttpRequestError: HttpRequestError.ConfigurationLimitExceeded }:
                 case JsonException:
                 case InvalidDataException:
+                // Values in an answer that the client cannot use, such as a time past the calendar's end.
+                case FormatException or ArgumentException or OverflowException or NotSupportedException:
                     return SkakelFailure.Of(SkakelFailureKind.UnexpectedAnswer);
             }
         }

@@ -59,11 +59,61 @@ public sealed class StreamTests : IAsyncLifetime
         using var handler = Pinning.CreateHandler(() => _host.Pins);
         using var invoker = new HttpMessageInvoker(handler);
 
-        var opened = await StreamOpener.OpenAsync(invoker, StreamOpener.Path(_host.Address, "echo", [new("target", "a")]), "echo", "not-a-token", TestContext.Current.CancellationToken);
+        var opened = await StreamOpener.OpenAsync(invoker, StreamOpener.Path(_host.Address, "echo", [new("target", "a")]), "echo", "not-a-token", TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         opened.Refusal!.Status.Should().Be(401);
         opened.Refusal.Reason.Should().Be(SkakelStreamRefusalReason.Unauthorized);
         opened.Refusal.Message.Should().StartWith("Open streams over HTTPS with a current token.");
+    }
+
+    [Fact]
+    public async Task OpenStreamAsync_gives_up_when_the_server_does_not_answer_within_the_request_timeout()
+    {
+        var (link, _) = await _host.LinkAsync(new SkakelClientOptions { RequestTimeout = TimeSpan.FromSeconds(1) });
+        await using var __ = link;
+
+        var open = () => link.OpenStreamAsync("stall", cancellationToken: TestContext.Current.CancellationToken);
+
+        (await open.Should().ThrowAsync<SkakelException>()).Which.InnerException.Should().BeOfType<TaskCanceledException>()
+            .Which.InnerException.Should().BeOfType<TimeoutException>();
+    }
+
+    [Fact]
+    public async Task SetLineSettingsAsync_gives_up_on_a_change_the_server_never_answers_and_lets_the_next_one_through()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (link, _) = await _host.LinkAsync();
+        await using var __ = link;
+        await using var serial = (await link.OpenSerialAsync("COM1", ct)).Stream!;
+        serial.ChangeTimeout = TimeSpan.FromMilliseconds(500);
+        var before = serial.LineSettings;
+
+        var silent = () => serial.SetLineSettingsAsync(before with { Baud = PretendSerial.SilentBaud }, ct);
+
+        (await silent.Should().ThrowAsync<SkakelException>()).Which.Failure.Kind.Should().Be(SkakelFailureKind.UnexpectedAnswer);
+        var wanted = before with { Baud = 115200 };
+        (await serial.SetLineSettingsAsync(wanted, ct)).Should().Be(new SkakelSerialChange(true, wanted, null));
+    }
+
+    [Fact]
+    public async Task SetLineSettingsAsync_does_not_take_a_late_answer_for_the_next_change()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (link, _) = await _host.LinkAsync();
+        await using var __ = link;
+        await using var serial = (await link.OpenSerialAsync("COM1", ct)).Stream!;
+        serial.ChangeTimeout = TimeSpan.FromMilliseconds(200);
+        var before = serial.LineSettings;
+        var slow = () => serial.SetLineSettingsAsync(before with { Baud = PretendSerial.SlowBaud }, ct);
+        await slow.Should().ThrowAsync<SkakelException>();
+        serial.ChangeTimeout = TimeSpan.FromSeconds(10);
+
+        // The slow change's echo comes first, then this one's refusal.
+        var refused = await serial.SetLineSettingsAsync(before with { Baud = PretendSerial.UnsupportedBaud }, ct);
+
+        refused.Applied.Should().BeFalse();
+        refused.Detail.Should().Be("This port cannot run at 12345 baud.");
+        serial.LineSettings.Baud.Should().Be(PretendSerial.SlowBaud, "the slow change was applied in the end");
     }
 
     [Fact]

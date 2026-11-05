@@ -33,8 +33,13 @@ internal static class StreamOpener
         return builder.Uri;
     }
 
-    /// <summary>Asks for the upgrade. The stream, or the refusal with its status and detail.</summary>
-    public static async Task<SkakelOpenResult<SkakelStreamConnection>> OpenAsync(HttpMessageInvoker invoker, Uri uri, string type, string token, CancellationToken cancellationToken)
+    /// <summary>
+    /// Asks for the upgrade. The stream, or the refusal with its status and detail. The upgrade and the
+    /// reading of a refusal together take at most <paramref name="timeout"/>; an open stream has no
+    /// time limit of its own.
+    /// </summary>
+    /// <exception cref="TimeoutException">The server did not answer within <paramref name="timeout"/>, inside a <see cref="TaskCanceledException"/> as <see cref="HttpClient"/> reports it.</exception>
+    public static async Task<SkakelOpenResult<SkakelStreamConnection>> OpenAsync(HttpMessageInvoker invoker, Uri uri, string type, string token, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
         using var request = new HttpRequestMessage(HttpMethod.Get, uri)
@@ -48,19 +53,31 @@ internal static class StreamOpener
         request.Headers.TryAddWithoutValidation("Sec-WebSocket-Key", key);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await invoker.SendAsync(request, cancellationToken);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(timeout);
+        HttpResponseMessage response;
+        try
+        {
+            response = await invoker.SendAsync(request, limit.Token);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw TimedOut(timeout, ex);
+        }
+
         try
         {
             if (response.StatusCode != HttpStatusCode.SwitchingProtocols)
             {
-                var refusal = SkakelStreamRefusal.From((int)response.StatusCode, await ReadDetailAsync(response, cancellationToken));
+                var refusal = SkakelStreamRefusal.From((int)response.StatusCode, await ReadDetailAsync(response, limit.Token));
+                cancellationToken.ThrowIfCancellationRequested();
                 response.Dispose();
                 return SkakelOpenResult<SkakelStreamConnection>.Refused(refusal);
             }
 
-            if (!response.Headers.TryGetValues("Sec-WebSocket-Accept", out var accept) || accept.SingleOrDefault() != Accept(key))
+            if (!response.Headers.TryGetValues("Sec-WebSocket-Accept", out var accepts) || accepts.ToList() is not [var accept] || accept != Accept(key))
             {
-                throw new InvalidDataException("The server switched protocols without a WebSocket accept for this key.");
+                throw new InvalidDataException("The server switched protocols without a single WebSocket accept for this key.");
             }
 
             var connection = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -78,6 +95,9 @@ internal static class StreamOpener
             throw;
         }
     }
+
+    private static TaskCanceledException TimedOut(TimeSpan timeout, Exception cause) =>
+        new($"The stream did not open within {timeout.TotalSeconds:0.#} seconds.", new TimeoutException("The request timed out.", cause));
 
     [SuppressMessage("Security", "CA5350:Do Not Use Weak Cryptographic Algorithms", Justification = "RFC 6455 defines the accept key with SHA-1. It shows the server understood the upgrade; it protects nothing.")]
     private static string Accept(string key) => Convert.ToBase64String(SHA1.HashData(Encoding.ASCII.GetBytes(key + AcceptGuid)));
@@ -98,8 +118,9 @@ internal static class StreamOpener
 
             return JsonSerializer.Deserialize<SkakelProblem>(buffer.AsSpan(0, length), SkakelJson.Options)?.Detail;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or HttpRequestException)
+        catch (Exception ex) when (ex is JsonException or IOException or HttpRequestException or OperationCanceledException)
         {
+            // A body that is not a problem, or that took too long: the status alone still says why.
             return null;
         }
     }
