@@ -26,7 +26,7 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <!-- GitHub Packages takes no symbol packages, so the PDB goes inside the DLL. -->
+    <!-- The PDB goes inside the DLL, so stepping into Skakel works without a symbol server. -->
     <DebugType>embedded</DebugType>
     <PackageTags>lan;discovery;pairing;oauth;signalr;websocket</PackageTags>
   </PropertyGroup>
