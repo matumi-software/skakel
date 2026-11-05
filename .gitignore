@@ -1,0 +1,30 @@
+bin/
+obj/
+*.user
+.vs/
+.vscode/
+TestResults/
+*.binlog
+coverage/
+artifacts/
+*.log
+*.nupkg
+*.snupkg
+
+# Editors and OS
+.idea/
+*.suo
+*.DotSettings.user
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Keys, certificates and environment files
+*.pfx
+*.p12
+*.pem
+*.key
+.env
+.env.*
+!.env.example
