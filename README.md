@@ -38,6 +38,14 @@ dotnet add package Skakel.Client
 - **Control:** REST for commands, SignalR for state the server pushes.
 - **Data:** a binary WebSocket for each stream.
 
+## Notes for apps
+
+- Keep the `OpenIddict` log categories at `Warning`. At `Information` and below, OpenIddict logs
+  every token request it reads, in full.
+- `AddSkakelServer` puts a small middleware at the start of the app's pipeline. It applies the
+  per-address limits to the token and pairing paths and caps their bodies at 4 KiB, before routing,
+  authentication or the app's own middleware run.
+
 ## License
 
 MIT, see [LICENSE](https://github.com/matumi-software/skakel/blob/main/LICENSE). Copyright (c) 2026 Matumi Software.
