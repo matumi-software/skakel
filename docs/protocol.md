@@ -38,6 +38,10 @@ The server's certificate is self-signed. Clients pin its SHA-256 fingerprint and
 (see "Certificates"). A fingerprint is written as 32 hex pairs separated by colons and compares by
 its hex digits alone.
 
+A client connects to a server directly, never through a proxy, and reads at most 64 KB of any HTTP
+answer other than a stream. A longer answer, like any other it cannot use, is one that "did not
+answer like a Skakel server".
+
 ## Discovery
 
 1. A client broadcasts a probe every ten seconds to its app's port, on each IPv4 network it is on.
@@ -67,10 +71,22 @@ layout does.
 
 **Limits a client applies:** a fingerprint of exactly 64 hex digits; a name of at most 63
 characters; an app id of at most 32 characters from `a-z`, `0-9` and `-`; an app version of at most
-32 characters; at most 8 versions. Anything else drops the answer. A client keeps at most 64
-entries, at most 8 from one address, and when full drops the stalest entry of the address that
-holds the most. An entry that misses three probes in a row (35 seconds) expires. An app shows only
-the servers whose app id it can use.
+32 characters; at most 8 versions. Anything else drops the answer. From the name and the app
+version the client takes out Unicode control and format characters and line and paragraph
+separators (categories Cc, Cf, Zl and Zp), and trims them. It takes answers only within 3 seconds
+of a probe it sent.
+
+A client keeps one entry per fingerprint, address and port, so an answer that copies another
+server's fingerprint sits beside it and never changes it. It keeps at most 64 entries and at most
+8 from one address. When it has to make room it drops an entry from that address, or when the list
+is full from the address that holds the most: the one that answered the fewest probes, then the
+stalest. It never drops an entry with a fingerprint a running link has pinned; when only those are
+left, the new answer is dropped. An entry that misses three probes in a row (35 seconds) expires.
+
+A client lists one server per fingerprint: the address that answered first, on its best network,
+with the other addresses that answered with the same fingerprint beside it. Anyone can copy a
+fingerprint, so several addresses for one is worth showing; only a pinned connection tells which
+holds the certificate. An app shows only the servers whose app id it can use.
 
 Broadcasts stay on the local network: a server elsewhere is entered by address. IPv6 discovery is
 not in version 1.
@@ -90,6 +106,10 @@ not in version 1.
 Any answer over a connection pinned to a fingerprint proves the server holds that certificate. A
 client that follows a server to a new address checks it this way before it moves (see "Following a
 server").
+
+**Limits a client applies:** the same as discovery's. The name is cleaned the same way and cut to
+63 characters (the server's address stands in when nothing is left); an app id that breaks the rule
+or an app version over 32 characters makes the answer one the client cannot use.
 
 ## Pairing
 
@@ -147,6 +167,12 @@ Many addresses that each open and reveal can still spend the server's 60 for eve
 window that a person opens on the server, outside which it takes no requests, is the planned answer;
 it is not in this version.
 
+**Limits a client applies:** a `requestId` and `pollToken` of 1 to 128 printable ASCII characters,
+or the answer is one the client cannot use. It polls until the earlier of `expiresAt` and five
+minutes after it opened, by its own clock, plus 30 seconds for a clock that differs, and then takes
+the request as expired. A 429 on opening or revealing means the server takes no more requests for
+now.
+
 A client paired with several servers holds one client ID and secret for each.
 
 ## Tokens
@@ -154,6 +180,7 @@ A client paired with several servers holds one client ID and secret for each.
 - OAuth 2.0 client credentials at `POST /skakel/v1/token`, HTTPS only.
 - Access tokens last 30 minutes and are signed with an RSA key whose key id is in the token header.
   Clients do not read what is inside a token.
+- A client takes a token to last what `expires_in` says, held to between 2 and 30 minutes.
 - Every token carries the issuer `https://skakel.invalid/`, whatever address or name the client
   used, so a token issued at one of a server's addresses works at all of them. The server publishes
   no OpenID Connect discovery document and no key set; the token endpoint is all there is.
@@ -189,6 +216,10 @@ off:
 Cancelling sends `SkakelCertificates` with no next fingerprint, and clients forget it. A client that
 was offline for the whole handover sees a certificate it does not know and must pair again.
 
+A client acts on `SkakelCertificates` only when its `fingerprint` is the certificate the hub
+connection presented, or the one a new connection to the server presents, as right after a switch,
+when the hub connection still runs on the old certificate. Anything else it ignores.
+
 ## Following a server
 
 When a client cannot reach a server's saved address at all (refused, timed out, no route, a name that
@@ -198,11 +229,18 @@ pinned to those fingerprints, within 5 seconds, and moves only if that answers. 
 does not match, or credentials the server refused, are not a reason to move. An address it moved to
 is not moved to again for five minutes.
 
+Every address heard with such a fingerprint is a candidate, not only the one the list shows. One
+search checks at most 8, the saved host first; an address that failed its check in the last five
+minutes goes after those that did not. The search runs beside everything else, and a new list while
+it runs makes it look once more when it is done.
+
 ## Hub
 
 One SignalR hub per server, at a path the app picks under `/skakel/v1/`, such as
 `/skakel/v1/hub`. HTTPS, bearer token, pinned certificate. The server closes a connection when its
-token expires; the client connects again 30 seconds before that, with a fresh token.
+token expires; the client connects again 30 seconds before that, with a fresh token. A client starts
+connections at most once a second, whatever the tokens say, and does not follow a negotiation that
+sends it to another address or to plain HTTP.
 
 Skakel's own messages start with `Skakel`. Every other name belongs to the app. An app may not start
 a message name with `Skakel`.
@@ -227,7 +265,8 @@ defines.
 
 - **Opening:** a WebSocket upgrade at `/skakel/v1/streams/{type}`, with the bearer token and the
   pinned certificate. `{type}` is from `a-z`, `0-9` and `-`. What the stream is for goes in the
-  query string, defined by the type.
+  query string, defined by the type. A client gives the server its request timeout (30 seconds
+  unless the app sets another) to answer the upgrade and send any refusal.
 - **Refusing:** the server checks everything before it accepts the upgrade, so a refusal is an HTTP
   answer with a problem JSON body (`application/problem+json`) whose `detail` a person can read:
 
@@ -300,6 +339,10 @@ bytes.
   XON and XOFF and they do not appear in the data.
 - A port the server cannot set a value on (a baud rate it does not support, `1.5` stop bits with 8
   data bits) gets an `error` with `unsupported`.
+- The server answers each `lineSettings` change once, with `lineSettings` or an `unsupported`
+  `error`, in the order the changes came. A client waits 10 seconds for the answer. An answer that
+  comes after its change stopped waiting is taken as that change's, not the next one's, unless it
+  echoes exactly what the next one asked for.
 
 **Close codes:** 4100, the port reported a fault and was closed.
 
