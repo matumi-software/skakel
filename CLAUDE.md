@@ -21,8 +21,10 @@ folder per solution, each with its own `src/` and `tests/`.
   contributors included, and never take a dependency under those licences. Code from Koppel may
   move here only when its author agrees to MIT for it. Permissive code (MIT, BSD, Apache-2.0) may
   come in with its copyright and licence notice kept in the file.
-- **No app logic.** USB, serial ports and anything else a particular app does stays in that app.
-  Skakel moves bytes and state, and knows who is allowed to.
+- **No app logic.** Skakel moves bytes and state, and knows who is allowed to. A stream type that
+  more than one app speaks (serial) has its wire format here, so apps of any licence can use it,
+  but the code that opens a real port or device stays in the app. A type only one app uses (USB) is
+  that app's.
 - C#: file-scoped namespaces, internal by default, `[LoggerMessage]` for logging. Tests are named
   `Method_does_thing`.
 
