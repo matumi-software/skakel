@@ -73,13 +73,27 @@ public static class SkakelAuthorizationExtensions
 /// </summary>
 internal static class SkakelAuth
 {
+    /// <summary>
+    /// The issuer every token carries and validation expects. Fixed, rather than taken from the Host header
+    /// as OpenIddict does by default, so a token issued at one of the server's addresses or names works at
+    /// all of them, and a client that follows the server to a new address keeps its token. It names no real
+    /// host: the token server publishes no discovery document, and only this server validates its tokens.
+    /// </summary>
+    public static readonly Uri Issuer = new("https://skakel.invalid/");
+
     public static void AddSkakelAuth(this IServiceCollection services)
     {
         services.AddOpenIddict()
             .AddServer(options =>
             {
                 options.EnableDegradedMode();
+                options.SetIssuer(Issuer);
                 options.SetTokenEndpointUris(SkakelProtocol.TokenPath);
+
+                // The token endpoint is all the protocol has. OpenIddict serves its discovery document and key
+                // set unless told not to, and nothing reads them.
+                options.SetConfigurationEndpointUris(Array.Empty<Uri>());
+                options.SetJsonWebKeySetEndpointUris(Array.Empty<Uri>());
                 options.AllowClientCredentialsFlow();
                 options.SetAccessTokenLifetime(SkakelProtocol.AccessTokenLifetime);
 
@@ -99,6 +113,7 @@ internal static class SkakelAuth
             })
             .AddValidation(options =>
             {
+                options.SetIssuer(Issuer);
                 options.UseLocalServer();
                 options.UseAspNetCore();
 

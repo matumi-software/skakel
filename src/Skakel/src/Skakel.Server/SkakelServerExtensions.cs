@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,6 +21,11 @@ public static class SkakelServerExtensions
     /// with <see cref="SkakelHttpsExtensions.UseSkakelCertificate"/>, calls <c>UseWebSockets</c>, and maps
     /// the endpoints with <see cref="MapSkakel"/>.
     /// </summary>
+    /// <remarks>
+    /// This also puts a small middleware at the start of the app's pipeline, through a startup filter. It
+    /// applies the per-address limits on <c>/skakel/v1/token</c> and <c>/skakel/v1/pair</c> and caps their
+    /// bodies before routing, authentication or the app's own middleware run.
+    /// </remarks>
     /// <param name="services">The app's services.</param>
     /// <param name="configure">Sets the app's id, version and port, and anything else in <see cref="SkakelServerOptions"/>.</param>
     public static IServiceCollection AddSkakelServer(this IServiceCollection services, Action<SkakelServerOptions> configure)
@@ -43,6 +49,7 @@ public static class SkakelServerExtensions
         services.AddSingleton<SkakelDiscoveryService>();
         services.AddHostedService(sp => sp.GetRequiredService<SkakelDiscoveryService>());
         services.AddSingleton<SkakelRateLimits>();
+        services.TryAddEnumerable(ServiceDescriptor.Transient<IStartupFilter, SkakelRequestGate.Startup>());
 
         services.AddSignalR();
         services.AddSkakelAuth();
