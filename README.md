@@ -11,8 +11,8 @@ the network, is the first app built on it.
 
 ## Status
 
-Preview. Protocol version 1 is settled in [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md). Both libraries are built and
-tested against each other. The API may still change before 0.1.0.
+Version 0.1.0. Protocol version 1 is settled in [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), and the
+client and server libraries are tested against each other. Koppel 0.1.1 is the first app built on them.
 
 ## What it holds
 
@@ -25,7 +25,7 @@ tested against each other. The API may still change before 0.1.0.
 All three are .NET 10 libraries on NuGet.org:
 
 ```sh
-dotnet add package Skakel.Client --prerelease
+dotnet add package Skakel.Client
 ```
 
 ## How it talks
