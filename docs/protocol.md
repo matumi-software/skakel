@@ -43,7 +43,9 @@ its hex digits alone.
 1. A client broadcasts a probe every ten seconds to its app's port, on each IPv4 network it is on.
 2. A probe is exactly 512 bytes: the line `SKAKEL-DISCOVER/1\n`, then zero padding.
 3. A server answers only a probe of at least 512 bytes that starts with that line, and never with
-   more bytes than the probe had, so it cannot be used to multiply traffic.
+   more bytes than the probe had, so it cannot be used to multiply traffic. A server cuts its name
+   to 63 characters and its app version to 32, and shortens the name further if that is what it
+   takes for the answer to fit in 512 bytes.
 4. The answer goes to the address and port the probe came from: the line `SKAKEL-SERVER/1\n`, then
    JSON (UTF-8, camelCase):
 
@@ -101,6 +103,7 @@ discovery, with no token.
 
    `clientName` is 1 to 80 characters after trimming. The server answers
    `{ "requestId", "serverNonce", "expiresAt", "pollToken" }`. Only the opener gets the poll token.
+   A body that breaks these rules gets 400.
 2. The client reveals its nonce: `POST /skakel/v1/pair/{requestId}/reveal` with
    `{ "clientNonce": "..." }`. The server checks it against the commitment and answers 204, or 404.
 3. Both ends derive the code:
@@ -113,8 +116,11 @@ discovery, with no token.
 
 4. The person types the code on the server, in the app's own screen. A match registers the client.
 5. The client polls `GET /skakel/v1/pair/{requestId}` with the header `X-Pair-Token: <pollToken>`
-   and gets `{ "state" }`, and once approved `{ "state", "clientId", "clientSecret" }`. `DELETE` on
-   the same path, with the same header, withdraws the request. The token is compared in constant
+   and gets `{ "state" }`, and once approved `{ "state", "clientId", "clientSecret" }`. The state is
+   `waiting`, `approved`, `denied` (refused on the server, or the code was wrong three times) or
+   `expired`. The poll that sees `approved` carries the credentials, once; after it the request is
+   gone. `DELETE` on the same path, with the same header, withdraws a waiting request and answers
+   204. An unknown request or a wrong token gets 404 on both. The token is compared in constant
    time.
 
 A man in the middle has its own certificate and has to fix each nonce before seeing the other
@@ -123,7 +129,9 @@ side's, so it cannot make the two codes match.
 **Limits a server applies:** 60 opens per 5 minutes in total and 5 per address (an IPv4 address or
 an IPv6 /64), never refunded; at most 3 open requests per address; at most 10 requests that have
 revealed their nonce; a request that has not revealed within 30 seconds is dropped; requests expire
-after five minutes; three wrong codes refuse a request. An open that goes over a limit gets 429.
+after five minutes; three wrong codes refuse a request. An open that goes over a limit gets 429. All
+pairing calls together, polls included, are limited to 120 a minute per address, also answered with
+429, so a client polls no more than once a second. A pairing call over plain HTTP gets 400.
 
 A client paired with several servers holds one client ID and secret for each.
 
@@ -139,8 +147,12 @@ A client paired with several servers holds one client ID and secret for each.
 - `GET /skakel/v1/hello` with a token answers `{ "server", "clientId" }`. An app's Test button uses
   it to check credentials.
 
-**Limits a server applies:** 60 token requests per minute per address. A failed request gets the
-OAuth error, never the reason the secret was wrong.
+**Limits a server applies:** 60 token requests per minute per address, counted as pairing counts
+addresses; one over the limit gets 429. A failed request gets the OAuth error (`invalid_client`,
+401), never the reason the secret was wrong.
+
+A token from a revoked client, or from an older generation, fails authentication everywhere it is
+presented: 401 on `hello`, on the hub's connect and on an app's own endpoints, as for an expired one.
 
 ## Certificates
 
@@ -197,6 +209,7 @@ defines.
 
   | Status | When |
   |---|---|
+  | 400 | The request is not a WebSocket upgrade |
   | 401 | No token, an expired one, or one from an older generation |
   | 404 | The server has no such type, or no such target |
   | 409 | The target is in use; `detail` names who holds it, when the app allows that |
@@ -208,7 +221,8 @@ defines.
   control messages uses binary frames only.
 - **Keep-alive:** both ends send WebSocket pings every 15 seconds and give up after 30 without an
   answer.
-- **Closing:** a close frame with a code a client can act on:
+- **Closing:** a close frame with a code a client can act on. Its reason text is for logs; a client
+  acts on the code:
 
   | Code | Meaning |
   |---|---|
@@ -241,7 +255,7 @@ bytes.
 | `lineSettings` | `baud` (integer), `dataBits` (5 to 8), `parity` (`none`, `odd`, `even`, `mark`, `space`), `stopBits` (`1`, `1.5`, `2`), `flowControl` (`none`, `rtsCts`, `xonXoff`) | Change the port's settings. Every field is required |
 | `modemLines` | `dtr`, `rts` (booleans, either may be left out) | Set the output lines |
 | `break` | `on` (boolean) | Start or end a break |
-| `purge` | `input`, `output` (booleans) | Throw away what is buffered on the server |
+| `purge` | `input`, `output` (booleans, either may be left out for false) | Throw away what is buffered on the server |
 
 **Control, server to client:**
 
