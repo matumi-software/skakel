@@ -11,17 +11,18 @@ the network, is the first app built on it.
 
 ## Status
 
-Nothing to install yet. The protocol is written up as a draft in [docs/protocol.md](docs/protocol.md),
-taken from what Koppel does today. The code moves over from Koppel next.
+Protocol version 1 is settled in [docs/protocol.md](docs/protocol.md). Both libraries are built and
+tested against each other, at 0.1.0-preview, and not on NuGet yet.
 
-## What it will hold
+## What it holds
 
 | Package | What |
 |---|---|
+| `Skakel.Protocol` | What clients and servers share: wire constants, discovery packets, the pairing code, the JSON contract and the serial stream's messages |
 | `Skakel.Client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub, open data streams |
 | `Skakel.Server` | Issue tokens, approve pairing, revoke clients, host the control hub and the data stream endpoints |
 
-Both are .NET libraries, published to NuGet.
+All three are .NET 10 libraries, to be published to NuGet.
 
 ## How it talks
 

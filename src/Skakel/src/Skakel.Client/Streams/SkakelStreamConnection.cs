@@ -120,9 +120,7 @@ public sealed record SkakelStreamClose(SkakelStreamCloseReason Reason, int? Code
     };
 
     /// <summary>The close for a code, or for none when the connection just ended.</summary>
-    /// <param name="code">The close code, or null.</param>
-    /// <param name="description">The reason text.</param>
-    public static SkakelStreamClose From(int? code, string? description) => new(code switch
+    internal static SkakelStreamClose From(int? code, string? description) => new(code switch
     {
         null or 1006 => SkakelStreamCloseReason.ConnectionLost,
         SkakelCloseCodes.Normal => SkakelStreamCloseReason.Normal,

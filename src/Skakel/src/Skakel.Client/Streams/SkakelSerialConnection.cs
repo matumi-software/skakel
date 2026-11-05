@@ -45,6 +45,7 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
     private Task _receiving = Task.CompletedTask;
     private SerialLineSettings _lineSettings;
     private SerialModemStatus _modemStatus;
+    private int _disposed;
 
     private SkakelSerialConnection(SkakelStreamConnection stream, SerialOpened opened, ILogger logger)
     {
@@ -160,6 +161,11 @@ public sealed partial class SkakelSerialConnection : IAsyncDisposable
     /// <summary>Closes the stream normally, waits briefly for the server's answer, and lets go of it.</summary>
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        {
+            return;
+        }
+
         await _stream.CloseAsync();
         await _stop.CancelAsync();
         await _receiving.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
