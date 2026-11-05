@@ -11,6 +11,9 @@
          release build, so it fails instead of picking up a different package. Regenerate with
          `dotnet restore` after changing a package version. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Release builds map source paths to /_/, so the packages carry no local paths and the same
+         commit builds the same DLLs wherever it is checked out. -->
+    <ContinuousIntegrationBuild Condition="'$(Configuration)' == 'Release'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <!-- What every package says about itself. Test projects set IsPackable to false. -->
