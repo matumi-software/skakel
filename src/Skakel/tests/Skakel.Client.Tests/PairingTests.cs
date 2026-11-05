@@ -109,6 +109,19 @@ public sealed class PairingTests : IAsyncLifetime
         (await open.Should().ThrowAsync<SkakelException>()).Which.Failure.Kind.Should().Be(SkakelFailureKind.UnexpectedAnswer);
     }
 
+    [Theory]
+    [InlineData(200, 429, SkakelFailureKind.TooManyRequests)]
+    [InlineData(429, 204, SkakelFailureKind.TooManyRequests)]
+    [InlineData(413, 204, SkakelFailureKind.UnexpectedAnswer)]
+    public async Task OpenAsync_reports_a_server_that_takes_no_more_requests_or_too_large_a_body(int openStatus, int revealStatus, SkakelFailureKind kind)
+    {
+        await using var fake = await FakePairingAsync(DateTimeOffset.UtcNow.AddMinutes(5), "f00d", openStatus, revealStatus);
+
+        var open = () => SkakelPairingClient.OpenAsync(fake.Address, fake.Fingerprint, "laptop", cancellationToken: TestContext.Current.CancellationToken);
+
+        (await open.Should().ThrowAsync<SkakelException>()).Which.Failure.Kind.Should().Be(kind);
+    }
+
     [Fact]
     public async Task OpenAsync_refuses_a_server_of_another_protocol_version()
     {
@@ -122,11 +135,13 @@ public sealed class PairingTests : IAsyncLifetime
     }
 
     /// <summary>A server that opens every pairing request with this expiry and poll token, and keeps it waiting.</summary>
-    private static Task<FakeServer> FakePairingAsync(DateTimeOffset expiresAt, string pollToken) => FakeServer.StartAsync(app =>
+    private static Task<FakeServer> FakePairingAsync(DateTimeOffset expiresAt, string pollToken, int openStatus = 200, int revealStatus = 204) => FakeServer.StartAsync(app =>
     {
         app.MapGet(SkakelProtocol.InfoPath, () => FakeServer.Info());
-        app.MapPost(SkakelProtocol.PairPath, () => Results.Json(new { requestId = "r1", serverNonce = "n", expiresAt, pollToken }));
-        app.MapPost($"{SkakelProtocol.PairPath}/r1/reveal", () => Results.NoContent());
+        app.MapPost(SkakelProtocol.PairPath, () => openStatus == 200
+            ? Results.Json(new { requestId = "r1", serverNonce = "n", expiresAt, pollToken })
+            : Results.StatusCode(openStatus));
+        app.MapPost($"{SkakelProtocol.PairPath}/r1/reveal", () => Results.StatusCode(revealStatus));
         app.MapGet($"{SkakelProtocol.PairPath}/r1", () => Results.Json(new { state = "waiting" }));
         app.MapDelete($"{SkakelProtocol.PairPath}/r1", () => Results.NoContent());
     });
