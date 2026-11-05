@@ -15,7 +15,7 @@
 
   <!-- What every package says about itself. Test projects set IsPackable to false. -->
   <PropertyGroup>
-    <Version>0.1.0-preview</Version>
+    <Version>0.1.0</Version>
     <Authors>Matumi Software</Authors>
     <Company>Matumi Software</Company>
     <Copyright>Copyright (c) 2026 Matumi Software</Copyright>
