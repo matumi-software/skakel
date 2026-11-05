@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What an app uses to reach Skakel servers: discovery, pairing, tokens over a pinned connection,
+       the control hub with its certificate handover, and the streams. Storage is the app's: what it
+       keeps comes in as arguments and changes go out as events. -->
+  <PropertyGroup>
+    <Description>Reach Skakel servers: discovery, pairing, OAuth tokens over a pinned certificate, the SignalR control hub with certificate handover, and WebSocket streams.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Skakel.Protocol\Skakel.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Skakel.Client.Tests" />
+  </ItemGroup>
+
+</Project>
