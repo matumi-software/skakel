@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Skakel.Protocol;
 
 namespace Skakel.Server.Tests;
@@ -159,6 +162,54 @@ public sealed class PairingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Open_refuses_a_body_over_the_limit_before_reading_it()
+    {
+        var body = Encoding.UTF8.GetBytes($"{{\"clientName\":\"{new string('n', 64 * 1024)}\",\"commitment\":\"{PairingCode.Commit("n")}\"}}");
+
+        var answer = await _host.SendFromAsync(IPAddress.Parse("10.0.0.9"), "POST", SkakelProtocol.PairPath, "application/json", body);
+
+        answer.Response.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+    }
+
+    [Fact]
+    public async Task Reveal_answers_429_while_ten_revealed_requests_are_waiting()
+    {
+        var opened = new List<(PairOpened Opened, string Nonce, IPAddress From)>();
+        for (var i = 0; i <= SkakelPairing.MaxOpen; i++)
+        {
+            var nonce = PairingCode.NewNonce();
+            var from = IPAddress.Parse($"10.2.0.{i + 1}");
+            opened.Add((await OpenFromAsync(from, "bench", PairingCode.Commit(nonce)), nonce, from));
+        }
+
+        var statuses = new List<int>();
+        foreach (var (request, nonce, from) in opened)
+        {
+            statuses.Add(await RevealFromAsync(from, request, nonce));
+        }
+
+        statuses.Take(SkakelPairing.MaxOpen).Should().AllBeEquivalentTo(StatusCodes.Status204NoContent);
+        statuses[^1].Should().Be(StatusCodes.Status429TooManyRequests, "a person already has ten requests to look at");
+        _host.Pairing.Overview.Requests.Should().HaveCount(SkakelPairing.MaxOpen);
+    }
+
+    [Fact]
+    public async Task Open_takes_control_and_format_characters_out_of_the_name()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var https = _host.Https();
+        var nonce = PairingCode.NewNonce();
+
+        using var open = await https.PostAsJsonAsync(SkakelProtocol.PairPath, new PairOpenRequest(" ‮bench\r\n-2\u0000​ ", PairingCode.Commit(nonce)), SkakelJson.Options, ct);
+        var opened = (await open.Content.ReadFromJsonAsync<PairOpened>(SkakelJson.Options, ct))!;
+        using var reveal = await https.PostAsJsonAsync($"{SkakelProtocol.PairPath}/{opened.RequestId}/reveal", new PairRevealRequest(nonce), SkakelJson.Options, ct);
+        using var empty = await https.PostAsJsonAsync(SkakelProtocol.PairPath, new PairOpenRequest("\r\n‮\u0000", PairingCode.Commit(nonce)), SkakelJson.Options, ct);
+
+        _host.Pairing.Overview.Requests.Should().ContainSingle().Which.ClientName.Should().Be("bench-2");
+        empty.StatusCode.Should().Be(HttpStatusCode.BadRequest, "nothing is left of that name");
+    }
+
+    [Fact]
     public async Task Info_answers_the_name_the_app_and_the_versions_without_a_token()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -178,6 +229,16 @@ public sealed class PairingTests : IAsyncLifetime
         reveal.EnsureSuccessStatusCode();
         return (opened, PairingCode.Compute(_host.Keys.Fingerprint, nonce, opened.ServerNonce));
     }
+
+    private async Task<PairOpened> OpenFromAsync(IPAddress from, string name, string commitment)
+    {
+        var answer = await _host.SendFromAsync(from, "POST", SkakelProtocol.PairPath, "application/json", JsonSerializer.SerializeToUtf8Bytes(new PairOpenRequest(name, commitment), SkakelJson.Options));
+        answer.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        return (await JsonSerializer.DeserializeAsync<PairOpened>(answer.Response.Body, SkakelJson.Options, TestContext.Current.CancellationToken))!;
+    }
+
+    private async Task<int> RevealFromAsync(IPAddress from, PairOpened opened, string nonce) =>
+        (await _host.SendFromAsync(from, "POST", $"{SkakelProtocol.PairPath}/{opened.RequestId}/reveal", "application/json", JsonSerializer.SerializeToUtf8Bytes(new PairRevealRequest(nonce), SkakelJson.Options))).Response.StatusCode;
 
     private static async Task<PairPoll?> PollAsync(HttpClient https, PairOpened opened, CancellationToken ct)
     {

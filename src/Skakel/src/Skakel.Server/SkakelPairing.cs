@@ -16,7 +16,7 @@ namespace Skakel.Server;
 /// <param name="Message">Why it was denied.</param>
 public sealed record SkakelPairingRequest(string Id, string ClientName, string From, DateTimeOffset RequestedAt, DateTimeOffset ExpiresAt, string State = PairStates.Waiting, string? Message = null);
 
-/// <summary>What the app's UI shows: the requests, and whether the server stopped taking new ones because its budget of opens is spent.</summary>
+/// <summary>What the app's UI shows: the requests, and whether the server stopped taking new ones because its budget of revealed requests is spent.</summary>
 /// <param name="Requests">Requests waiting for a person, newest first, and for a moment the ones just denied.</param>
 /// <param name="BudgetExhausted">The server takes no new requests until the window moves on.</param>
 public sealed record SkakelPairingOverview(IReadOnlyList<SkakelPairingRequest> Requests, bool BudgetExhausted);
@@ -34,6 +34,19 @@ public enum SkakelApproval
     Approved,
 }
 
+/// <summary>What revealing a nonce did.</summary>
+internal enum SkakelReveal
+{
+    /// <summary>The nonce matched; the request now has a code and the UI shows it.</summary>
+    Revealed,
+
+    /// <summary>No such request waiting for its nonce, or the nonce does not match the commitment.</summary>
+    NotFound,
+
+    /// <summary>A person already has as many requests to look at as the server shows, or the server-wide ceiling is spent.</summary>
+    Full,
+}
+
 /// <summary>How a pairing request ended, for the app's log.</summary>
 /// <param name="RequestId">The request.</param>
 /// <param name="ClientName">What the client calls itself.</param>
@@ -49,12 +62,13 @@ public sealed record SkakelPairingDecision(string RequestId, string ClientName, 
 /// </summary>
 /// <remarks>
 /// A man in the middle gets a one in a million chance per request, so what bounds it is how many
-/// requests the server takes: a budget of opens per window that nothing refunds, split into a small
-/// share per address and a ceiling for the whole server, a limit on live requests per address, and a
-/// cap on requests a person has to look at. The shares keep one address from spending what everyone
-/// else needs; the ceiling stops many addresses grinding. A request that never reveals its nonce is
-/// dropped after a few seconds. Each request has its own gate, so approving, refusing and counting
-/// wrong codes on one request cannot overlap.
+/// requests the server takes: a small share of opens per address and window, a ceiling on revealed
+/// requests per window for the whole server, neither refunded, a limit on live requests per address,
+/// and a cap on revealed requests a person has to look at. The shares keep one address from spending
+/// what everyone else needs; the ceiling stops many addresses grinding. Only a revealed request has a
+/// code, so only those count against the ceiling: a request that never reveals its nonce is dropped
+/// after a few seconds and costs the server nothing. Each request has its own gate, so approving,
+/// refusing, withdrawing, collecting and counting wrong codes on one request cannot overlap.
 /// </remarks>
 public sealed partial class SkakelPairing : IDisposable
 {
@@ -63,15 +77,22 @@ public sealed partial class SkakelPairing : IDisposable
     internal static readonly TimeSpan DeniedVisibleFor = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(5);
     internal static readonly TimeSpan OpenWindow = TimeSpan.FromMinutes(5);
-    internal const int OpensPerWindow = 60;
+    internal const int RevealsPerWindow = 60;
     internal const int OpensPerAddressPerWindow = 5;
     internal const int MaxOpen = 10;
     internal const int MaxOpenPerAddress = 3;
     internal const int MaxWrongCodes = 3;
     internal const int MaxClientNameLength = 80;
 
+    /// <summary>
+    /// A request that is over: withdrawn, or its credentials collected. Set with the gate held and the
+    /// request removed, so a call already waiting on the gate finds it gone. Never sent to a client.
+    /// </summary>
+    private const string Gone = "gone";
+
     private readonly ConcurrentDictionary<string, Request> _requests = new();
     private readonly Queue<(DateTimeOffset At, string Key)> _opens = new();
+    private readonly Queue<DateTimeOffset> _reveals = new();
     private readonly Dictionary<string, int> _opensByAddress = [];
     private readonly Lock _admission = new();
     private readonly ServerState _state;
@@ -98,7 +119,7 @@ public sealed partial class SkakelPairing : IDisposable
     /// <summary>The pending requests with the state of the open budget.</summary>
     public SkakelPairingOverview Overview => new(Pending, BudgetExhausted);
 
-    /// <summary>True while the server-wide ceiling of opens is spent, so every address is turned away until the window moves on.</summary>
+    /// <summary>True while the server-wide ceiling of revealed requests is spent, so every address is turned away until the window moves on.</summary>
     internal bool BudgetExhausted
     {
         get
@@ -106,7 +127,7 @@ public sealed partial class SkakelPairing : IDisposable
             lock (_admission)
             {
                 ForgetOldOpens(_time.GetUtcNow());
-                return _opens.Count >= OpensPerWindow;
+                return _reveals.Count >= RevealsPerWindow;
             }
         }
     }
@@ -238,7 +259,7 @@ public sealed partial class SkakelPairing : IDisposable
         lock (_admission)
         {
             ForgetOldOpens(now);
-            if (_opens.Count >= OpensPerWindow
+            if (_reveals.Count >= RevealsPerWindow
                 || _opensByAddress.GetValueOrDefault(key) >= OpensPerAddressPerWindow
                 || _requests.Values.Count(r => IsRevealedAndWaiting(r, now)) >= MaxOpen
                 || _requests.Values.Count(r => r.AddressKey == key && IsLive(r, now)) >= MaxOpenPerAddress)
@@ -265,24 +286,47 @@ public sealed partial class SkakelPairing : IDisposable
         }
     }
 
-    /// <summary>Step 2: the client reveals its nonce. Only now is there a code, and the UI shows the request.</summary>
-    internal async Task<bool> RevealAsync(string id, string clientNonce)
+    /// <summary>
+    /// Step 2: the client reveals its nonce. Only now is there a code, and the UI shows the request. It
+    /// counts against the server-wide ceiling, and is refused while a person already has as many
+    /// requests to look at as the server shows, or the ceiling is spent.
+    /// </summary>
+    internal async Task<SkakelReveal> RevealAsync(string id, string clientNonce)
     {
         if (!_requests.TryGetValue(id, out var request))
         {
-            return false;
+            return SkakelReveal.NotFound;
         }
 
-        bool revealed;
+        SkakelReveal result;
         await request.Gate.WaitAsync();
         try
         {
             var now = _time.GetUtcNow();
-            revealed = request.State == PairStates.Waiting && request.Code is null && !IsStale(request, now) && request.ExpiresAt > now
-                && PairingCode.Matches(request.Commitment, clientNonce);
-            if (revealed)
+            if (request.State != PairStates.Waiting || request.Code is not null || IsStale(request, now) || request.ExpiresAt <= now
+                || !PairingCode.Matches(request.Commitment, clientNonce))
             {
-                request.Code = PairingCode.Compute(_state.Fingerprint, clientNonce, request.ServerNonce);
+                result = SkakelReveal.NotFound;
+            }
+            else
+            {
+                var code = PairingCode.Compute(_state.Fingerprint, clientNonce, request.ServerNonce);
+
+                // Counted and set under the admission lock, so two reveals at once cannot both take the last place.
+                lock (_admission)
+                {
+                    ForgetOldOpens(now);
+                    if (_reveals.Count >= RevealsPerWindow || _requests.Values.Count(r => IsRevealedAndWaiting(r, now)) >= MaxOpen)
+                    {
+                        result = SkakelReveal.Full;
+                    }
+                    else
+                    {
+                        _reveals.Enqueue(now);
+                        request.Code = code;
+                        result = SkakelReveal.Revealed;
+                    }
+                }
             }
         }
         finally
@@ -290,12 +334,12 @@ public sealed partial class SkakelPairing : IDisposable
             request.Gate.Release();
         }
 
-        if (revealed)
+        if (result == SkakelReveal.Revealed)
         {
             await RaiseAsync();
         }
 
-        return revealed;
+        return result;
     }
 
     /// <summary>The client gave up. Only the client holding the poll token can, and only for a request still waiting.</summary>
@@ -312,8 +356,13 @@ public sealed partial class SkakelPairing : IDisposable
         try
         {
             Lapse(request, _time.GetUtcNow());
-            withdrawn = request.State == PairStates.Waiting && _requests.TryRemove(id, out _);
+            withdrawn = request.State == PairStates.Waiting && _requests.TryRemove(KeyValuePair.Create(id, request));
             wasVisible = withdrawn && request.Code is not null;
+            if (withdrawn)
+            {
+                // An approval already waiting on the gate finds it over, and registers nobody.
+                request.State = Gone;
+            }
         }
         finally
         {
@@ -328,7 +377,10 @@ public sealed partial class SkakelPairing : IDisposable
         return withdrawn;
     }
 
-    /// <summary>The client polls. Credentials are handed over once, then the request is gone. Null for an unknown request or a wrong token.</summary>
+    /// <summary>
+    /// The client polls. Credentials are handed over once, then the request is gone. Null for an unknown
+    /// request, a wrong token, or a request that is over, so a second poll at the same moment gets nothing.
+    /// </summary>
     internal async Task<PairPoll?> PollAsync(string id, string? pollToken)
     {
         if (!_requests.TryGetValue(id, out var request) || !Secrets.SameToken(request.PollToken, pollToken))
@@ -336,20 +388,21 @@ public sealed partial class SkakelPairing : IDisposable
             return null;
         }
 
-        PairPoll poll;
+        PairPoll? poll;
         bool changed;
         await request.Gate.WaitAsync();
         try
         {
             changed = Lapse(request, _time.GetUtcNow());
-            if (request.State == PairStates.Approved)
+            if (request.State == PairStates.Approved && _requests.TryRemove(KeyValuePair.Create(id, request)))
             {
-                _requests.TryRemove(id, out _);
                 poll = new PairPoll(PairStates.Approved, request.ClientId, request.ClientSecret);
+                request.State = Gone;
+                request.ClientSecret = null;
             }
             else
             {
-                poll = new PairPoll(request.State);
+                poll = request.State is Gone or PairStates.Approved ? null : new PairPoll(request.State);
             }
         }
         finally
@@ -373,9 +426,14 @@ public sealed partial class SkakelPairing : IDisposable
     internal static string AddressKey(IPAddress? address) =>
         address is null ? "unknown" : (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
 
-    /// <summary>Drops opens older than the window, with the admission lock held. The per-address counts never hold more keys than the queue holds opens.</summary>
+    /// <summary>Drops opens and reveals older than the window, with the admission lock held. The per-address counts never hold more keys than the queue holds opens.</summary>
     private void ForgetOldOpens(DateTimeOffset now)
     {
+        while (_reveals.Count > 0 && _reveals.Peek() + OpenWindow <= now)
+        {
+            _reveals.Dequeue();
+        }
+
         while (_opens.Count > 0 && _opens.Peek().At + OpenWindow <= now)
         {
             var (_, key) = _opens.Dequeue();

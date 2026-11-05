@@ -176,9 +176,15 @@ internal sealed partial class ServerState : IHostedService, IDisposable
 
     public async Task<SkakelNewClient> RegisterClientAsync(string name, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(name);
+        var clean = ClientNames.Clean(name);
+        if (clean.Length == 0)
+        {
+            throw new ArgumentException("The name is empty once control and format characters and the spaces around it are taken out.", nameof(name));
+        }
+
         var secret = Secrets.NewSecret();
-        var client = new SkakelClientRecord(Secrets.NewId("client"), name.Trim(), Secrets.Hash(secret), _time.GetUtcNow(), 1, _options.KeepClientSecrets ? secret : null);
+        var client = new SkakelClientRecord(Secrets.NewId("client"), clean, Secrets.Hash(secret), _time.GetUtcNow(), 1, _options.KeepClientSecrets ? secret : null);
         await UpdateAsync(current => current with { Clients = [.. current.Clients, client] }, cancellationToken);
         return new SkakelNewClient(client.Id, client.Name, secret);
     }

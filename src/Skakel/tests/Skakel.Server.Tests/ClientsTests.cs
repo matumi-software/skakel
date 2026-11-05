@@ -28,6 +28,20 @@ public sealed class ClientsTests
     }
 
     [Fact]
+    public async Task RegisterAsync_takes_control_and_format_characters_out_of_the_name()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await SkakelTestHost.StartAsync();
+
+        var client = await host.Clients.RegisterAsync(" ‮bench\r\n-1\u0000 ", ct);
+
+        client.Name.Should().Be("bench-1");
+        host.Clients.NameOf(client.ClientId).Should().Be("bench-1");
+        await FluentActions.Awaiting(() => host.Clients.RegisterAsync("‮\r\n", ct)).Should().ThrowAsync<ArgumentException>();
+        host.Clients.All.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Changed_on_the_keys_fires_for_the_certificates_and_not_for_a_client()
     {
         var ct = TestContext.Current.CancellationToken;
