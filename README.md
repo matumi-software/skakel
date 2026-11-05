@@ -22,11 +22,9 @@ tested against each other. The API may still change before 0.1.0.
 | `Skakel.Client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub, open data streams |
 | `Skakel.Server` | Issue tokens, approve pairing, revoke clients, host the control hub and the data stream endpoints |
 
-All three are .NET 10 libraries, published to GitHub Packages for now. GitHub asks for a token to
-restore from it, even for public packages: a personal access token with `read:packages`.
+All three are .NET 10 libraries on NuGet.org:
 
 ```sh
-dotnet nuget add source https://nuget.pkg.github.com/matumi-software/index.json   --name matumi-software --username <your GitHub user> --password <token> --store-password-in-clear-text
 dotnet add package Skakel.Client --prerelease
 ```
 
