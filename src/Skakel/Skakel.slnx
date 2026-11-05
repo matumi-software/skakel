@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Skakel.Protocol/Skakel.Protocol.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Skakel.Protocol.Tests/Skakel.Protocol.Tests.csproj" />
+  </Folder>
+</Solution>

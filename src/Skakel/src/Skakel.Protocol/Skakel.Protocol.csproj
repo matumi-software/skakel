@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What a Skakel client and server share: the wire constants, the discovery packet, the pairing
+       code, the JSON contract and the serial stream's control messages. No ASP.NET dependency, so a
+       client of any kind can use it. -->
+  <PropertyGroup>
+    <Description>The Skakel protocol: wire constants, discovery packets, the pairing code and the JSON contract shared by Skakel clients and servers.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Skakel.Protocol.Tests" />
+  </ItemGroup>
+
+</Project>
