@@ -11,8 +11,8 @@ the network, is the first app built on it.
 
 ## Status
 
-Protocol version 1 is settled in [docs/protocol.md](docs/protocol.md). Both libraries are built and
-tested against each other, at 0.1.0-preview, and not on NuGet yet.
+Preview. Protocol version 1 is settled in [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md). Both libraries are built and
+tested against each other. The API may still change before 0.1.0.
 
 ## What it holds
 
@@ -22,7 +22,13 @@ tested against each other, at 0.1.0-preview, and not on NuGet yet.
 | `Skakel.Client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub, open data streams |
 | `Skakel.Server` | Issue tokens, approve pairing, revoke clients, host the control hub and the data stream endpoints |
 
-All three are .NET 10 libraries, to be published to NuGet.
+All three are .NET 10 libraries, published to GitHub Packages for now. GitHub asks for a token to
+restore from it, even for public packages: a personal access token with `read:packages`.
+
+```sh
+dotnet nuget add source https://nuget.pkg.github.com/matumi-software/index.json   --name matumi-software --username <your GitHub user> --password <token> --store-password-in-clear-text
+dotnet add package Skakel.Client --prerelease
+```
 
 ## How it talks
 
@@ -36,7 +42,7 @@ All three are .NET 10 libraries, to be published to NuGet.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Matumi Software.
+MIT, see [LICENSE](https://github.com/matumi-software/skakel/blob/main/LICENSE). Copyright (c) 2026 Matumi Software.
 
 Contributions are accepted under the same licence. Skakel takes no GPL code, so apps of any licence
 can use it.
