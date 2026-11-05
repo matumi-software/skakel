@@ -71,8 +71,8 @@ public static class SkakelServerExtensions
     /// <typeparam name="THub">The app's hub.</typeparam>
     /// <param name="endpoints">The app's endpoints.</param>
     /// <param name="path">The path under <c>/skakel/v1/</c>, such as <c>hub</c>.</param>
-    /// <param name="configure">Further options for the hub's connections.</param>
-    /// <exception cref="ArgumentException">The path is taken by Skakel, or the hub or its client has a message name that starts with <c>Skakel</c>.</exception>
+    /// <param name="configure">Further options for the hub's connections. <c>CloseOnAuthenticationExpiration</c> stays on whatever this sets.</param>
+    /// <exception cref="ArgumentException">The path is taken by Skakel, or the hub or its client has a message name that starts with <c>Skakel</c>, in any case.</exception>
     public static HubEndpointConventionBuilder MapSkakelHub<THub>(this IEndpointRouteBuilder endpoints, string path, Action<Microsoft.AspNetCore.Http.Connections.HttpConnectionDispatcherOptions>? configure = null)
         where THub : Hub
     {
@@ -88,8 +88,10 @@ public static class SkakelServerExtensions
         CheckMessageNames(typeof(THub));
         return endpoints.MapHub<THub>($"{SkakelProtocol.BasePath}/{relative}", options =>
             {
-                options.CloseOnAuthenticationExpiration = true;
                 configure?.Invoke(options);
+
+                // After the app's configure: a connection outliving its token would outlive a revoke or rotation's reach too.
+                options.CloseOnAuthenticationExpiration = true;
             })
             .RequireSkakelClient();
     }
@@ -115,22 +117,27 @@ public static class SkakelServerExtensions
         return SkakelEndpoints.MapStream(endpoints, type, handler);
     }
 
-    /// <summary>App messages may not start with Skakel: the hub's own methods and the client interface's.</summary>
+    /// <summary>
+    /// App messages may not start with Skakel: the hub's own methods and the client interface's, by the
+    /// name they go over the wire with, in any case, since SignalR matches hub methods without regard to case.
+    /// </summary>
     private static void CheckMessageNames(Type hub)
     {
         var names = hub.GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Where(m => !m.IsSpecialName && m.DeclaringType is { } declaring && !IsFramework(declaring))
-            .Select(m => m.Name);
+            .Select(WireName);
         if (FindClientInterface(hub) is { } client)
         {
-            names = names.Concat(new[] { client }.Concat(client.GetInterfaces()).SelectMany(i => i.GetMethods()).Select(m => m.Name));
+            names = names.Concat(new[] { client }.Concat(client.GetInterfaces()).SelectMany(i => i.GetMethods()).Select(WireName));
         }
 
-        if (names.FirstOrDefault(n => n.StartsWith(SkakelHubMethods.Prefix, StringComparison.Ordinal)) is { } taken)
+        if (names.FirstOrDefault(n => n.StartsWith(SkakelHubMethods.Prefix, StringComparison.OrdinalIgnoreCase)) is { } taken)
         {
             throw new ArgumentException($"{hub.Name} has a message named {taken}. Names that start with {SkakelHubMethods.Prefix} are Skakel's own.", nameof(hub));
         }
     }
+
+    private static string WireName(MethodInfo method) => method.GetCustomAttribute<HubMethodNameAttribute>()?.Name ?? method.Name;
 
     private static bool IsFramework(Type declaring) =>
         declaring == typeof(object) || declaring == typeof(Hub)
