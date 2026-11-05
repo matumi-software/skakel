@@ -103,8 +103,8 @@ internal static partial class SkakelEndpoints
                 return Problem(StatusCodes.Status400BadRequest, "Send the client's name and commitment as JSON.");
             }
 
-            var name = request.ClientName?.Trim();
-            if (string.IsNullOrEmpty(name) || name.Length > SkakelPairing.MaxClientNameLength)
+            var name = ClientNames.Clean(request.ClientName);
+            if (name.Length == 0 || name.Length > SkakelPairing.MaxClientNameLength)
             {
                 return Problem(StatusCodes.Status400BadRequest, $"Give the client a name of 1 to {SkakelPairing.MaxClientNameLength} characters.");
             }
@@ -120,8 +120,13 @@ internal static partial class SkakelEndpoints
         });
 
         pair.MapPost("/{requestId}/reveal", async Task<IResult> (string requestId, SkakelPairing pairing, HttpContext http) =>
-            await ReadAsync<PairRevealRequest>(http) is { ClientNonce: { Length: > 0 } nonce } && await pairing.RevealAsync(requestId, nonce)
-                ? TypedResults.NoContent()
+            await ReadAsync<PairRevealRequest>(http) is { ClientNonce: { Length: > 0 } nonce }
+                ? await pairing.RevealAsync(requestId, nonce) switch
+                {
+                    SkakelReveal.Revealed => TypedResults.NoContent(),
+                    SkakelReveal.Full => Problem(StatusCodes.Status429TooManyRequests, "This server has as many pairing requests waiting as a person can look at. Try again in a few minutes."),
+                    _ => NoSuchRequest(),
+                }
                 : NoSuchRequest());
 
         pair.MapGet("/{requestId}", async Task<IResult> (string requestId, SkakelPairing pairing, HttpContext http) =>

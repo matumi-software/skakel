@@ -37,7 +37,8 @@ public sealed class SkakelClients
     public IReadOnlyList<SkakelClientView> All => _state.Clients;
 
     /// <summary>Registers a client. The secret is in the result, and is kept only with <see cref="SkakelServerOptions.KeepClientSecrets"/>.</summary>
-    /// <param name="name">What people call it, such as the machine it runs on.</param>
+    /// <param name="name">What people call it, such as the machine it runs on. Control and format characters are taken out and the rest trimmed, as for a name that comes in by pairing.</param>
+    /// <exception cref="ArgumentException">Nothing is left of the name.</exception>
     /// <param name="cancellationToken">Cancels the save.</param>
     public Task<SkakelNewClient> RegisterAsync(string name, CancellationToken cancellationToken = default) => _state.RegisterClientAsync(name, cancellationToken);
 

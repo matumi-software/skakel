@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -61,13 +62,12 @@ public sealed class SkakelPairingTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_server_takes_a_fixed_number_of_opens_per_window_and_withdrawing_does_not_give_them_back()
+    public async Task The_server_takes_a_fixed_number_of_revealed_requests_per_window_and_withdrawing_does_not_give_them_back()
     {
-        for (var i = 0; i < SkakelPairing.OpensPerWindow; i++)
+        for (var i = 0; i < SkakelPairing.RevealsPerWindow; i++)
         {
-            var opened = _store.Open("bench", Commitment(), Address(i));
-            opened.Should().NotBeNull();
-            (await _store.WithdrawAsync(opened!.RequestId, opened.PollToken)).Should().BeTrue();
+            var (opened, _) = await OpenAndRevealAsync(Address(i));
+            (await _store.WithdrawAsync(opened.RequestId, opened.PollToken)).Should().BeTrue();
         }
 
         _store.Open("bench", Commitment(), Address(99)).Should().BeNull("nothing is open, yet the budget is spent");
@@ -98,33 +98,34 @@ public sealed class SkakelPairingTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_ipv6_slash_64_shares_one_share_of_the_budget()
+    public async Task Each_ipv6_address_has_its_own_share_of_the_budget()
     {
+        var noisy = IPAddress.Parse("2001:db8:1:1::1");
         for (var i = 0; i < SkakelPairing.OpensPerAddressPerWindow; i++)
         {
-            var opened = _store.Open("v6", Commitment(), IPAddress.Parse($"2001:db8:1:1::{i + 1}"));
+            var opened = _store.Open("v6", Commitment(), noisy);
             opened.Should().NotBeNull();
             await _store.WithdrawAsync(opened!.RequestId, opened.PollToken);
         }
 
-        _store.Open("v6", Commitment(), IPAddress.Parse("2001:db8:1:1:ffff::1")).Should().BeNull();
-        _store.Open("v6", Commitment(), IPAddress.Parse("2001:db8:1:2::1")).Should().NotBeNull("another /64 has its own share");
+        _store.Open("v6", Commitment(), noisy).Should().BeNull();
+        _store.Open("v6", Commitment(), IPAddress.Parse("2001:db8:1:1::2")).Should().NotBeNull("another host on the same /64 has its own share");
+        _store.Open("v6", Commitment(), IPAddress.Parse("fe80::2")).Should().NotBeNull();
     }
 
     [Fact]
-    public void The_ceiling_for_the_whole_server_holds_however_many_addresses_ask()
+    public async Task The_ceiling_for_the_whole_server_holds_however_many_addresses_ask()
     {
-        for (var i = 0; i < SkakelPairing.OpensPerWindow; i++)
-        {
-            _store.Open("grind", Commitment(), Address(i)).Should().NotBeNull();
-        }
+        var early = _store.Open("early", PairingCode.Commit("early"), Address(499))!;
+        await SpendTheCeilingAsync();
 
         _store.Open("one more", Commitment(), Address(500)).Should().BeNull("every address is fresh, the server is out");
         _store.BudgetExhausted.Should().BeTrue();
+        (await _store.RevealAsync(early.RequestId, "early")).Should().Be(SkakelReveal.Full, "a request opened before the ceiling was spent cannot reveal past it");
     }
 
     [Fact]
-    public void The_ui_is_told_when_the_budget_runs_out_and_when_it_comes_back()
+    public async Task The_ui_is_told_when_the_budget_runs_out_and_when_it_comes_back()
     {
         var pushed = new List<bool>();
         _store.Changed += overview =>
@@ -134,10 +135,7 @@ public sealed class SkakelPairingTests : IAsyncLifetime
         };
         _store.Overview.BudgetExhausted.Should().BeFalse();
 
-        for (var i = 0; i < SkakelPairing.OpensPerWindow; i++)
-        {
-            _store.Open("grind", Commitment(), Address(i));
-        }
+        await SpendTheCeilingAsync();
 
         _store.Overview.BudgetExhausted.Should().BeTrue();
         _time.Advance(SkakelPairing.SweepInterval);
@@ -147,19 +145,6 @@ public sealed class SkakelPairingTests : IAsyncLifetime
 
         _store.Overview.BudgetExhausted.Should().BeFalse();
         pushed.Should().EndWith(false);
-    }
-
-    [Fact]
-    public void Expiry_does_not_give_opens_back_either()
-    {
-        for (var i = 0; i < SkakelPairing.OpensPerWindow; i++)
-        {
-            _store.Open("bench", Commitment(), Address(i)).Should().NotBeNull();
-        }
-
-        _time.Advance(SkakelPairing.UnrevealedLifetime + TimeSpan.FromSeconds(10));
-
-        _store.Open("bench", Commitment(), Address(99)).Should().BeNull("those requests are gone, but they were spent");
     }
 
     [Fact]
@@ -191,23 +176,24 @@ public sealed class SkakelPairingTests : IAsyncLifetime
 
         _time.Advance(SkakelPairing.UnrevealedLifetime + TimeSpan.FromSeconds(1));
 
-        (await _store.RevealAsync(opened.RequestId, "n")).Should().BeFalse();
+        (await _store.RevealAsync(opened.RequestId, "n")).Should().Be(SkakelReveal.NotFound);
         (await _store.PollAsync(opened.RequestId, opened.PollToken)).Should().BeNull("the sweep removed it");
     }
 
     [Fact]
-    public void Addresses_count_per_ipv4_address_and_per_ipv6_slash_64()
+    public void Addresses_count_per_whole_address()
     {
         var one = IPAddress.Parse("2001:db8:1:1::1");
         for (var i = 0; i < SkakelPairing.MaxOpenPerAddress; i++)
         {
-            _store.Open("v6", Commitment(), IPAddress.Parse($"2001:db8:1:1::{i + 1:x}")).Should().NotBeNull();
+            _store.Open("v6", Commitment(), one).Should().NotBeNull();
         }
 
-        _store.Open("v6", Commitment(), IPAddress.Parse("2001:db8:1:1:ffff::9")).Should().BeNull("same /64, different address");
-        _store.Open("v6", Commitment(), IPAddress.Parse("2001:db8:1:2::1")).Should().NotBeNull("another /64");
+        _store.Open("v6", Commitment(), one).Should().BeNull();
+        _store.Open("v6", Commitment(), IPAddress.Parse("2001:db8:1:1::2")).Should().NotBeNull("same /64, another host");
         _store.Open("v4", Commitment(), IPAddress.Parse("10.0.0.1")).Should().NotBeNull();
-        SkakelPairing.AddressKey(one).Should().Be(SkakelPairing.AddressKey(IPAddress.Parse("2001:db8:1:1:aaaa:bbbb:cccc:dddd")));
+        SkakelPairing.AddressKey(one).Should().NotBe(SkakelPairing.AddressKey(IPAddress.Parse("2001:db8:1:1:aaaa:bbbb:cccc:dddd")));
+        SkakelPairing.AddressKey(IPAddress.Parse("fe80::1")).Should().NotBe(SkakelPairing.AddressKey(IPAddress.Parse("fe80::2")));
         SkakelPairing.AddressKey(IPAddress.Parse("::ffff:10.0.0.1")).Should().Be(SkakelPairing.AddressKey(IPAddress.Parse("10.0.0.1")));
     }
 
@@ -299,12 +285,77 @@ public sealed class SkakelPairingTests : IAsyncLifetime
         (await _store.PollAsync(opened.RequestId, opened.PollToken))!.State.Should().Be("denied");
     }
 
+    [Fact]
+    public async Task Two_polls_at_once_hand_the_credentials_over_once()
+    {
+        var (opened, code) = await OpenAndRevealAsync();
+        (await _store.ApproveAsync(opened.RequestId, code, CancellationToken.None)).Should().Be(SkakelApproval.Approved);
+
+        var gate = GateOf(opened.RequestId);
+        await gate.WaitAsync(TestContext.Current.CancellationToken);
+        var first = _store.PollAsync(opened.RequestId, opened.PollToken);
+        var second = _store.PollAsync(opened.RequestId, opened.PollToken);
+        gate.Release();
+        var polls = await Task.WhenAll(first, second);
+
+        polls.Count(p => p?.ClientSecret is not null).Should().Be(1);
+        polls.Count(p => p is null).Should().Be(1, "the second poll finds the request gone");
+    }
+
+    [Fact]
+    public async Task A_request_withdrawn_while_a_person_approves_it_registers_nobody()
+    {
+        var (opened, code) = await OpenAndRevealAsync();
+
+        var gate = GateOf(opened.RequestId);
+        await gate.WaitAsync(TestContext.Current.CancellationToken);
+        var withdraw = _store.WithdrawAsync(opened.RequestId, opened.PollToken);
+        var approve = _store.ApproveAsync(opened.RequestId, code, CancellationToken.None);
+        gate.Release();
+
+        (await withdraw).Should().BeTrue();
+        (await approve).Should().Be(SkakelApproval.NotWaiting);
+        _state.Clients.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Opens_that_never_reveal_give_their_place_under_the_ceiling_back()
+    {
+        for (var i = 0; i < SkakelPairing.RevealsPerWindow; i++)
+        {
+            _store.Open("silent", Commitment(), Address(i)).Should().NotBeNull();
+        }
+
+        _time.Advance(SkakelPairing.UnrevealedLifetime + SkakelPairing.SweepInterval);
+
+        _store.BudgetExhausted.Should().BeFalse("nobody revealed, so nobody could have been fooled");
+        _store.Open("legit", Commitment(), Address(200)).Should().NotBeNull();
+    }
+
+    /// <summary>The gate a request's state changes wait on, so a test can line calls up behind it.</summary>
+    private SemaphoreSlim GateOf(string requestId)
+    {
+        var requests = (System.Collections.IDictionary)typeof(SkakelPairing).GetField("_requests", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_store)!;
+        var request = requests[requestId]!;
+        return (SemaphoreSlim)request.GetType().GetProperty("Gate")!.GetValue(request)!;
+    }
+
     private async Task<(PairOpened Opened, string Code)> OpenAndRevealAsync(IPAddress? address = null)
     {
         var nonce = PairingCode.NewNonce();
         var opened = _store.Open("bench", PairingCode.Commit(nonce), address ?? Address(0))!;
-        (await _store.RevealAsync(opened.RequestId, nonce)).Should().BeTrue();
+        (await _store.RevealAsync(opened.RequestId, nonce)).Should().Be(SkakelReveal.Revealed);
         return (opened, PairingCode.Compute(_state.Fingerprint, nonce, opened.ServerNonce));
+    }
+
+    /// <summary>Reveals as many requests as the window allows, each from its own address, withdrawing each so the cap on waiting requests stays clear.</summary>
+    private async Task SpendTheCeilingAsync()
+    {
+        for (var i = 0; i < SkakelPairing.RevealsPerWindow; i++)
+        {
+            var (opened, _) = await OpenAndRevealAsync(Address(i));
+            (await _store.WithdrawAsync(opened.RequestId, opened.PollToken)).Should().BeTrue();
+        }
     }
 
     private static string Commitment() => PairingCode.Commit(PairingCode.NewNonce());
