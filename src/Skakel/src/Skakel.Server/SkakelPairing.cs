@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Skakel.Protocol;
 using Skakel.Server.Security;
@@ -366,23 +365,13 @@ public sealed partial class SkakelPairing : IDisposable
         return poll;
     }
 
-    /// <summary>The address a limit counts: one IPv4 address, or one IPv6 /64, which is what a single network hands a host.</summary>
-    internal static string AddressKey(IPAddress? address)
-    {
-        if (address is null)
-        {
-            return "unknown";
-        }
-
-        if (address.IsIPv4MappedToIPv6)
-        {
-            address = address.MapToIPv4();
-        }
-
-        return address.AddressFamily == AddressFamily.InterNetworkV6
-            ? $"{Convert.ToHexString(address.GetAddressBytes().AsSpan(0, 8))}/64"
-            : address.ToString();
-    }
+    /// <summary>
+    /// The address a limit counts: the whole address, IPv4 or IPv6, with an IPv4-mapped IPv6 address
+    /// counted as its IPv4 one. Counting an IPv6 /64 as one would let one host on a LAN spend the
+    /// allowance of every other host on it, link-local addresses all sharing fe80::/64.
+    /// </summary>
+    internal static string AddressKey(IPAddress? address) =>
+        address is null ? "unknown" : (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
 
     /// <summary>Drops opens older than the window, with the admission lock held. The per-address counts never hold more keys than the queue holds opens.</summary>
     private void ForgetOldOpens(DateTimeOffset now)

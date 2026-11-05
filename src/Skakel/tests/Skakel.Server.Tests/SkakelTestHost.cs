@@ -1,9 +1,12 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.WebSockets;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.TestHost;
@@ -93,6 +96,35 @@ internal sealed class SkakelTestHost : IAsyncDisposable
     }
 
     public HttpClient PlainHttp() => Server.CreateClient();
+
+    /// <summary>A request over HTTPS from <paramref name="from"/>, to the server under <paramref name="host"/>. The answer is in the returned context.</summary>
+    public Task<HttpContext> SendFromAsync(IPAddress from, string method, string path, string? contentType = null, byte[]? body = null, string host = "localhost", string? pollToken = null) =>
+        Server.SendAsync(context =>
+        {
+            context.Connection.RemoteIpAddress = from;
+            context.Request.Scheme = "https";
+            context.Request.Host = new HostString(host);
+            context.Request.Method = method;
+            context.Request.Path = path;
+            if (pollToken is not null)
+            {
+                context.Request.Headers[SkakelProtocol.PairTokenHeader] = pollToken;
+            }
+
+            if (body is not null)
+            {
+                context.Request.ContentType = contentType;
+                context.Request.ContentLength = body.Length;
+                context.Request.Body = new MemoryStream(body);
+            }
+        });
+
+    /// <summary>A token request from <paramref name="from"/>, answered with its status.</summary>
+    public async Task<int> RequestTokenFromAsync(IPAddress from, string clientId, string secret, string host = "localhost")
+    {
+        var body = Encoding.ASCII.GetBytes($"grant_type=client_credentials&client_id={Uri.EscapeDataString(clientId)}&client_secret={Uri.EscapeDataString(secret)}");
+        return (await SendFromAsync(from, "POST", SkakelProtocol.TokenPath, "application/x-www-form-urlencoded", body, host)).Response.StatusCode;
+    }
 
     public async Task<HttpResponseMessage> RequestTokenAsync(string clientId, string secret, CancellationToken ct)
     {

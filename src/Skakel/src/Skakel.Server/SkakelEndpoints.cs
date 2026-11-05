@@ -60,7 +60,8 @@ internal static partial class SkakelEndpoints
     public static SkakelEndpointConventionBuilder Map(IEndpointRouteBuilder endpoints)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
-        var limits = endpoints.ServiceProvider.GetRequiredService<SkakelRateLimits>();
+
+        // The per-address limits on pairing and tokens, and the cap on their bodies, run before routing, in SkakelRequestGate.
         var all = endpoints.MapGroup("/skakel");
 
         var info = all.MapGet("/info", (IOptions<SkakelServerOptions> options) =>
@@ -68,9 +69,7 @@ internal static partial class SkakelEndpoints
 
         var v1 = all.MapGroup($"/v{SkakelProtocol.Version}");
         var pairing = MapPairing(v1.MapGroup("/pair"));
-        pairing.AddEndpointFilter(limits.Pair);
-
-        var token = v1.MapPost("/token", IssueTokenAsync).AddEndpointFilter(limits.Token);
+        var token = v1.MapPost("/token", IssueTokenAsync);
 
         var hello = v1.MapGet("/hello", (HttpContext http, IOptions<SkakelServerOptions> options) =>
             Json(new SkakelHello(options.Value.Name, http.User.GetSkakelClientId()!))).RequireSkakelClient();
@@ -138,9 +137,10 @@ internal static partial class SkakelEndpoints
 
     /// <summary>
     /// OAuth 2.0 client credentials. OpenIddict has read and checked the request by now; this checks the
-    /// secret and issues the token for the generation it was checked at.
+    /// secret and issues the token for the generation it was checked at. A registered client that had too
+    /// many wrong secrets this minute gets 429 without its secret being checked.
     /// </summary>
-    private static IResult IssueTokenAsync(HttpContext http, ServerState state)
+    private static IResult IssueTokenAsync(HttpContext http, ServerState state, SkakelRateLimits limits)
     {
         var request = http.GetOpenIddictServerRequest() ?? throw new InvalidOperationException("The token request did not pass through OpenIddict.");
         if (!request.IsClientCredentialsGrantType())
@@ -148,9 +148,24 @@ internal static partial class SkakelEndpoints
             return SkakelAuth.Refuse(Errors.UnsupportedGrantType, "Only the client_credentials grant is supported.");
         }
 
-        return !string.IsNullOrEmpty(request.ClientId) && !string.IsNullOrEmpty(request.ClientSecret) && state.Validate(request.ClientId, request.ClientSecret) is { } generation
-            ? SkakelAuth.Issue(request.ClientId, generation)
-            : SkakelAuth.Refuse(Errors.InvalidClient, "The client ID or secret is wrong, or the client was revoked.");
+        // Only registered clients are counted, so made-up IDs cannot fill the limiter.
+        if (string.IsNullOrEmpty(request.ClientId) || string.IsNullOrEmpty(request.ClientSecret) || state.Find(request.ClientId) is null)
+        {
+            return SkakelAuth.Refuse(Errors.InvalidClient, "The client ID or secret is wrong, or the client was revoked.");
+        }
+
+        if (limits.TooManyFailures(request.ClientId))
+        {
+            return Problem(StatusCodes.Status429TooManyRequests, "Too many failed requests for this client. Wait a minute and try again.");
+        }
+
+        if (state.Validate(request.ClientId, request.ClientSecret) is { } generation)
+        {
+            return SkakelAuth.Issue(request.ClientId, generation);
+        }
+
+        limits.CountFailure(request.ClientId);
+        return SkakelAuth.Refuse(Errors.InvalidClient, "The client ID or secret is wrong, or the client was revoked.");
     }
 
     /// <summary>
