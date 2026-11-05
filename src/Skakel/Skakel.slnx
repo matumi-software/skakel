@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Skakel.Protocol/Skakel.Protocol.csproj" />
+    <Project Path="src/Skakel.Server/Skakel.Server.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Skakel.Protocol.Tests/Skakel.Protocol.Tests.csproj" />
+    <Project Path="tests/Skakel.Server.Tests/Skakel.Server.Tests.csproj" />
   </Folder>
 </Solution>
