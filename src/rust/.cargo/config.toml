@@ -1,0 +1,5 @@
+# Link the C runtime statically on Windows. The virtual camera's media source DLL is loaded by the
+# Frame Server service, and vcruntime140.dll is not part of Windows, so the DLL must not depend on it.
+# Microsoft's own virtual camera sample builds its media source the same way.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
