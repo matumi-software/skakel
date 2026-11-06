@@ -1,2 +1,10 @@
 * text=auto eol=lf
-*.{png,jpg,ico,woff,woff2} binary
+
+# Binary files: no line ending changes, no text diffs. Git patterns do not support braces, so
+# each extension gets its own line.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
