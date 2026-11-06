@@ -315,6 +315,17 @@ async fn pump(
         }
     }
     ending.send_replace(true);
+    drain(&mut socket).await;
+}
+
+/// Lets the close handshake finish: the answer to a close frame the client sent only leaves when the
+/// socket is read once more, and the client's answer to ours is read here. Anything else that arrives is
+/// dropped; the stream is over.
+pub(crate) async fn drain(socket: &mut WebSocket) {
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT / 2, async {
+        while let Some(Ok(_)) = socket.recv().await {}
+    })
+    .await;
 }
 
 /// Sends the close frame and starts the wait for the client's.

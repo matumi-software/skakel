@@ -27,6 +27,17 @@ pub trait SkakelStore: Send + Sync + 'static {
     fn save<'a>(&'a self, state: &'a SkakelState) -> StoreFuture<'a, ()>;
 }
 
+/// A shared store is a store, so the app can keep a handle to the one it gave the server.
+impl<T: SkakelStore> SkakelStore for std::sync::Arc<T> {
+    fn load(&self) -> StoreFuture<'_, Option<SkakelState>> {
+        (**self).load()
+    }
+
+    fn save<'a>(&'a self, state: &'a SkakelState) -> StoreFuture<'a, ()> {
+        (**self).save(state)
+    }
+}
+
 /// Everything the server persists.
 ///
 /// The JSON the file store writes is this type's own; it is not the .NET server's state (which
@@ -224,7 +235,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_file_store_round_trips_and_makes_its_folder() {
-        let folder = std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        let folder =
+            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
         let store = FileStore::new(folder.join("nested").join("state.json"));
         assert_eq!(store.load().await.unwrap(), None);
 
@@ -238,7 +250,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_file_store_says_so_when_the_file_is_not_json() {
-        let folder = std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        let folder =
+            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("state.json"), b"not json").unwrap();
 

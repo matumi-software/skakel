@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use skakel_pairing::{
-    PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpened, PairPoll,
-    compute, is_code, matches, new_nonce,
+    PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpened, PairPoll, compute, is_code,
+    matches, new_nonce,
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -296,7 +296,11 @@ impl Pairing {
 
     /// Types a code for a request. A right code registers the client; a third wrong one refuses
     /// the request.
-    pub async fn approve(&self, request_id: &str, typed_code: &str) -> Result<Approval, ServerError> {
+    pub async fn approve(
+        &self,
+        request_id: &str,
+        typed_code: &str,
+    ) -> Result<Approval, ServerError> {
         let mut decision = None;
         let result;
         let changed;
@@ -310,7 +314,11 @@ impl Pairing {
             match request.code.clone() {
                 Some(code) if request.stage == Stage::Waiting => {
                     if is_code(&code, typed_code) {
-                        let client = self.inner.state.register_client(&request.client_name).await?;
+                        let client = self
+                            .inner
+                            .state
+                            .register_client(&request.client_name)
+                            .await?;
                         request.client_id = Some(client.client_id.clone());
                         request.client_secret = Some(client.client_secret);
                         request.stage = Stage::Approved;
@@ -464,7 +472,9 @@ impl Pairing {
                 &request.server_nonce,
             );
             data.forget_old_opens(now);
-            if data.reveals.len() >= REVEALS_PER_WINDOW || data.revealed_and_waiting(now) >= MAX_OPEN {
+            if data.reveals.len() >= REVEALS_PER_WINDOW
+                || data.revealed_and_waiting(now) >= MAX_OPEN
+            {
                 result = Reveal::Full;
             } else {
                 data.reveals.push_back(now);
@@ -483,7 +493,11 @@ impl Pairing {
 
     /// The state of a request, with the credentials once, when it was approved. `None` for an
     /// unknown request or a wrong token.
-    pub(crate) async fn poll(&self, request_id: &str, poll_token: Option<&str>) -> Option<PairPoll> {
+    pub(crate) async fn poll(
+        &self,
+        request_id: &str,
+        poll_token: Option<&str>,
+    ) -> Option<PairPoll> {
         let poll;
         let changed;
         {
@@ -604,7 +618,11 @@ mod tests {
 
     /// Opens and reveals a request, as a client does; returns the opened request, the nonce and
     /// the code both ends have.
-    async fn revealed(pairing: &Pairing, state: &ServerState, from: IpAddr) -> (PairOpened, String) {
+    async fn revealed(
+        pairing: &Pairing,
+        state: &ServerState,
+        from: IpAddr,
+    ) -> (PairOpened, String) {
         let nonce = new_nonce();
         let opened = pairing
             .open("lab pc", &commitment_of(&nonce), from)
@@ -623,7 +641,10 @@ mod tests {
         let (pairing, state) = pairing().await;
         let (opened, code) = revealed(&pairing, &state, addr(1)).await;
         let token = Some(opened.poll_token.as_str());
-        assert_eq!(pairing.poll(&opened.request_id, token).await.unwrap().state, "waiting");
+        assert_eq!(
+            pairing.poll(&opened.request_id, token).await.unwrap().state,
+            "waiting"
+        );
         assert_eq!(pairing.overview().await.requests.len(), 1);
 
         assert_eq!(
@@ -668,13 +689,19 @@ mod tests {
 
         let overview = pairing.overview().await;
         assert_eq!(overview.requests[0].state, "denied");
-        assert_eq!(overview.requests[0].message.as_deref(), Some("The code was wrong three times."));
+        assert_eq!(
+            overview.requests[0].message.as_deref(),
+            Some("The code was wrong three times.")
+        );
         assert_eq!(
             pairing.approve(&opened.request_id, &code).await.unwrap(),
             Approval::NotWaiting
         );
         let token = Some(opened.poll_token.as_str());
-        assert_eq!(pairing.poll(&opened.request_id, token).await.unwrap().state, "denied");
+        assert_eq!(
+            pairing.poll(&opened.request_id, token).await.unwrap().state,
+            "denied"
+        );
         tokio::time::advance(Duration::from_secs(16)).await;
         assert!(pairing.overview().await.requests.is_empty());
     }
@@ -687,7 +714,10 @@ mod tests {
         assert!(pairing.deny(&opened.request_id).await);
 
         let token = Some(opened.poll_token.as_str());
-        assert_eq!(pairing.poll(&opened.request_id, token).await.unwrap().state, "denied");
+        assert_eq!(
+            pairing.poll(&opened.request_id, token).await.unwrap().state,
+            "denied"
+        );
         assert!(!pairing.deny(&opened.request_id).await);
         assert!(!pairing.deny("nobody").await);
     }
@@ -696,11 +726,23 @@ mod tests {
     async fn a_reveal_with_the_wrong_nonce_or_twice_finds_nothing() {
         let (pairing, state) = pairing().await;
         let nonce = new_nonce();
-        let opened = pairing.open("lab pc", &commitment_of(&nonce), addr(1)).await.unwrap();
+        let opened = pairing
+            .open("lab pc", &commitment_of(&nonce), addr(1))
+            .await
+            .unwrap();
 
-        assert_eq!(pairing.reveal(&opened.request_id, "other").await, Reveal::NotFound);
-        assert_eq!(pairing.reveal(&opened.request_id, &nonce).await, Reveal::Revealed);
-        assert_eq!(pairing.reveal(&opened.request_id, &nonce).await, Reveal::NotFound);
+        assert_eq!(
+            pairing.reveal(&opened.request_id, "other").await,
+            Reveal::NotFound
+        );
+        assert_eq!(
+            pairing.reveal(&opened.request_id, &nonce).await,
+            Reveal::Revealed
+        );
+        assert_eq!(
+            pairing.reveal(&opened.request_id, &nonce).await,
+            Reveal::NotFound
+        );
         assert_eq!(pairing.reveal("nobody", &nonce).await, Reveal::NotFound);
         let _ = state;
     }
@@ -709,11 +751,17 @@ mod tests {
     async fn a_request_that_never_reveals_is_dropped_after_thirty_seconds() {
         let (pairing, _) = pairing().await;
         let nonce = new_nonce();
-        let opened = pairing.open("lab pc", &commitment_of(&nonce), addr(1)).await.unwrap();
+        let opened = pairing
+            .open("lab pc", &commitment_of(&nonce), addr(1))
+            .await
+            .unwrap();
 
         tokio::time::advance(Duration::from_secs(31)).await;
 
-        assert_eq!(pairing.reveal(&opened.request_id, &nonce).await, Reveal::NotFound);
+        assert_eq!(
+            pairing.reveal(&opened.request_id, &nonce).await,
+            Reveal::NotFound
+        );
         pairing.sweep().await;
         let token = Some(opened.poll_token.as_str());
         assert!(pairing.poll(&opened.request_id, token).await.is_none());
@@ -727,7 +775,10 @@ mod tests {
         tokio::time::advance(Duration::from_secs(301)).await;
 
         let token = Some(opened.poll_token.as_str());
-        assert_eq!(pairing.poll(&opened.request_id, token).await.unwrap().state, "expired");
+        assert_eq!(
+            pairing.poll(&opened.request_id, token).await.unwrap().state,
+            "expired"
+        );
         assert_eq!(
             pairing.approve(&opened.request_id, &code).await.unwrap(),
             Approval::NotWaiting
@@ -740,11 +791,24 @@ mod tests {
         let (opened, _) = revealed(&pairing, &state, addr(1)).await;
 
         assert!(pairing.poll(&opened.request_id, None).await.is_none());
-        assert!(pairing.poll(&opened.request_id, Some("wrong")).await.is_none());
+        assert!(
+            pairing
+                .poll(&opened.request_id, Some("wrong"))
+                .await
+                .is_none()
+        );
         assert!(!pairing.withdraw(&opened.request_id, Some("wrong")).await);
-        assert!(pairing.withdraw(&opened.request_id, Some(&opened.poll_token)).await);
+        assert!(
+            pairing
+                .withdraw(&opened.request_id, Some(&opened.poll_token))
+                .await
+        );
         assert!(pairing.overview().await.requests.is_empty());
-        assert!(!pairing.withdraw(&opened.request_id, Some(&opened.poll_token)).await);
+        assert!(
+            !pairing
+                .withdraw(&opened.request_id, Some(&opened.poll_token))
+                .await
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -759,7 +823,11 @@ mod tests {
         assert!(pairing.open("a", &"A".repeat(64), addr(2)).await.is_some());
 
         for request in &opened {
-            assert!(pairing.withdraw(&request.request_id, Some(&request.poll_token)).await);
+            assert!(
+                pairing
+                    .withdraw(&request.request_id, Some(&request.poll_token))
+                    .await
+            );
         }
         for _ in 0..2 {
             assert!(pairing.open("a", &"A".repeat(64), addr(1)).await.is_some());
@@ -778,7 +846,12 @@ mod tests {
             revealed(&pairing, &state, addr(i + 1)).await;
         }
         let nonce = new_nonce();
-        assert!(pairing.open("a", &commitment_of(&nonce), addr(50)).await.is_none());
+        assert!(
+            pairing
+                .open("a", &commitment_of(&nonce), addr(50))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -787,7 +860,9 @@ mod tests {
         for i in 0..60u32 {
             let from = IpAddr::V4(Ipv4Addr::new(10, 1, (i / 200) as u8, (i % 200) as u8 + 1));
             let (opened, _) = revealed(&pairing, &state, from).await;
-            pairing.withdraw(&opened.request_id, Some(&opened.poll_token)).await;
+            pairing
+                .withdraw(&opened.request_id, Some(&opened.poll_token))
+                .await;
         }
 
         assert!(pairing.overview().await.budget_exhausted);
@@ -812,11 +887,15 @@ mod tests {
         .unwrap();
         let pairing = Pairing::new(state.clone());
         revealed(&pairing, &state, addr(1)).await;
-        assert!(matches!(listener.try_recv(), Ok(ServerEvent::Pairing(o)) if o.requests.len() == 1));
+        assert!(
+            matches!(listener.try_recv(), Ok(ServerEvent::Pairing(o)) if o.requests.len() == 1)
+        );
 
         tokio::time::advance(Duration::from_secs(301)).await;
         pairing.sweep().await;
 
-        assert!(matches!(listener.try_recv(), Ok(ServerEvent::Pairing(o)) if o.requests.is_empty()));
+        assert!(
+            matches!(listener.try_recv(), Ok(ServerEvent::Pairing(o)) if o.requests.is_empty())
+        );
     }
 }

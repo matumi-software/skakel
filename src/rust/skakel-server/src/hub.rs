@@ -12,14 +12,13 @@
 //! belongs to the app, which supplies a [`HubHandler`].
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Query, State};
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -186,7 +185,11 @@ pub(crate) struct HubRoute {
 }
 
 impl HubRoute {
-    pub(crate) fn new(shared: Arc<Shared>, handler: Arc<dyn HubHandler>, handle: HubHandle) -> Arc<Self> {
+    pub(crate) fn new(
+        shared: Arc<Shared>,
+        handler: Arc<dyn HubHandler>,
+        handle: HubHandle,
+    ) -> Arc<Self> {
         Arc::new(Self {
             shared,
             handler,
@@ -269,7 +272,6 @@ fn unauthorized() -> Response {
 
 async fn connect(
     State(route): State<Arc<HubRoute>>,
-    ConnectInfo(_remote): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     uri: Uri,
     Query(query): Query<ConnectQuery>,
@@ -288,7 +290,9 @@ async fn connect(
         .id
         .and_then(|id| route.negotiated.lock().expect("hub lock").remove(&id));
     match negotiated {
-        Some(n) if n.client_id == principal.client_id && n.at + NEGOTIATION_LIFETIME > Instant::now() => {}
+        Some(n)
+            if n.client_id == principal.client_id
+                && n.at + NEGOTIATION_LIFETIME > Instant::now() => {}
         _ => return (StatusCode::NOT_FOUND, "No connection with that ID.").into_response(),
     }
     upgrade
@@ -348,7 +352,15 @@ async fn run(route: Arc<HubRoute>, principal: Principal, mut socket: WebSocket) 
         .is_ok();
     if started {
         route.handler.connected(connection.clone()).await;
-        serve(&route, &principal, &connection, &mut socket, &mut buffer, &mut out_rx).await;
+        serve(
+            &route,
+            &principal,
+            &connection,
+            &mut socket,
+            &mut buffer,
+            &mut out_rx,
+        )
+        .await;
         route.handler.disconnected(connection.clone()).await;
     }
 
@@ -360,6 +372,7 @@ async fn run(route: Arc<HubRoute>, principal: Principal, mut socket: WebSocket) 
         .remove(&connection.connection_id);
     drop(guard);
     let _ = socket.send(Message::Close(None)).await;
+    crate::streams::drain(&mut socket).await;
 }
 
 /// Reads the handshake and answers it. The records that arrived after it stay in the buffer.
@@ -372,15 +385,21 @@ async fn handshake(socket: &mut WebSocket) -> Option<Vec<u8>> {
             let protocol = request.get("protocol").and_then(Value::as_str);
             let reply = match (protocol, request.get("version").and_then(Value::as_u64)) {
                 (Some("json"), Some(1)) => json!({}),
-                (Some("json"), _) => json!({ "error": "The server does not support version of the protocol." }),
-                (Some(other), _) => json!({ "error": format!("The protocol '{other}' is not supported.") }),
+                (Some("json"), _) => {
+                    json!({ "error": "The server does not support version of the protocol." })
+                }
+                (Some(other), _) => {
+                    json!({ "error": format!("The protocol '{other}' is not supported.") })
+                }
                 (None, _) => json!({ "error": "Handshake was canceled." }),
             };
             let ok = reply == json!({});
             socket.send(record(&reply)).await.ok()?;
             return ok.then_some(buffer);
         }
-        let frame = tokio::time::timeout_at(deadline, socket.recv()).await.ok()??;
+        let frame = tokio::time::timeout_at(deadline, socket.recv())
+            .await
+            .ok()??;
         match frame.ok()? {
             Message::Text(text) => buffer.extend_from_slice(text.as_bytes()),
             Message::Binary(data) => buffer.extend_from_slice(&data),
@@ -478,7 +497,10 @@ async fn handle_record(
     let invocation_id = message.get("invocationId").and_then(Value::as_str);
     match message.get("type").and_then(Value::as_u64) {
         Some(1) => {
-            let target = message.get("target").and_then(Value::as_str).unwrap_or_default();
+            let target = message
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let arguments = message
                 .get("arguments")
                 .and_then(Value::as_array)
@@ -590,7 +612,9 @@ mod tests {
 
         assert!(connection.send("SkakelSomething", vec![]).is_err());
         assert!(connection.send("Greeted", vec![json!("hi")]).is_ok());
-        assert!(matches!(received.try_recv(), Ok(HubOut::Invoke { target, .. }) if target == "Greeted"));
+        assert!(
+            matches!(received.try_recv(), Ok(HubOut::Invoke { target, .. }) if target == "Greeted")
+        );
     }
 
     #[test]

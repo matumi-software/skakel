@@ -27,7 +27,7 @@ use crate::events::{Events, ServerEvent};
 use crate::http::{self, looks_like_tls, plain_http_answer};
 use crate::hub::{HubHandle, HubHandler, HubRoute};
 use crate::limits::Limits;
-use crate::pairing::{PairingOverview, Pairing};
+use crate::pairing::{Pairing, PairingOverview};
 use crate::sessions::Sessions;
 use crate::state::{CertificateSwitch, ClientView, KeysView, NewClient, ServerState};
 use crate::store::SkakelStore;
@@ -285,7 +285,10 @@ impl SkakelServerBuilder {
             name: name.clone(),
             app: app.clone(),
             state: state.clone(),
-            limits: Limits::new(self.token_requests_per_minute, self.pair_requests_per_minute),
+            limits: Limits::new(
+                self.token_requests_per_minute,
+                self.pair_requests_per_minute,
+            ),
             pairing: pairing.clone(),
             sessions: sessions.clone(),
             streams: self.streams,
@@ -304,7 +307,9 @@ impl SkakelServerBuilder {
         }
         let router = http::guard(router, shared.clone());
 
-        let listener = TcpListener::bind(self.listen).await.map_err(ServerError::Bind)?;
+        let listener = TcpListener::bind(self.listen)
+            .await
+            .map_err(ServerError::Bind)?;
         let local_addr = listener.local_addr().map_err(ServerError::Bind)?;
         let (stop, stopped) = watch::channel(false);
         let mut tasks = vec![];
@@ -425,7 +430,9 @@ impl SkakelServer {
     /// Stops the server. Hub connections and streams get `stopping`, the listener closes, and
     /// connections have a few seconds to finish.
     pub async fn shutdown(mut self) {
-        self.shared.sessions.end_all(skakel_protocol::CLOSING_STOPPING);
+        self.shared
+            .sessions
+            .end_all(skakel_protocol::CLOSING_STOPPING);
         // Time for the closing messages to leave before connections are asked to wind down.
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.stop.send_replace(true);
@@ -437,7 +444,9 @@ impl SkakelServer {
 
 impl Drop for SkakelServer {
     fn drop(&mut self) {
-        self.shared.sessions.end_all(skakel_protocol::CLOSING_STOPPING);
+        self.shared
+            .sessions
+            .end_all(skakel_protocol::CLOSING_STOPPING);
         self.stop.send_replace(true);
     }
 }
@@ -557,6 +566,12 @@ fn tls_acceptor(state: &Arc<ServerState>) -> Result<TlsAcceptor, ServerError> {
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(Resolver(state.clone())));
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    // No session resumption. A resumed session shows the client no certificate, and a client that follows
+    // a handover proves the new certificate by the one a new connection presents (docs/protocol.md,
+    // "Certificates"). rustls would also resume a session made under the old certificate after the
+    // switch. A full handshake on a P-256 certificate costs next to nothing.
+    config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    config.send_tls13_tickets = 0;
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
@@ -617,7 +632,9 @@ async fn serve_connection(
         return;
     };
     let service = hyper::service::service_fn(move |mut request: hyper::Request<Incoming>| {
-        request.extensions_mut().insert(axum::extract::ConnectInfo(remote));
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(remote));
         let mut router = router.clone();
         async move { router.call(request).await }
     });
@@ -636,4 +653,3 @@ async fn serve_connection(
         }
     }
 }
-
