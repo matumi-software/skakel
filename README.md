@@ -46,6 +46,8 @@ part:
 | `skakel-serial` | The serial stream's line settings, modem lines and control messages |
 | `skakel-client` | Empty for now, the same part as the package above |
 | `skakel-server` | Serve clients: discovery answers, pairing approval, OAuth tokens, revoking clients, the control hub (SignalR's JSON protocol over a WebSocket), data stream endpoints, the per-address limits and the self-signed certificate with its handover. tokio, axum and rustls; the app supplies a store, its hubs, stream types and the pairing screen |
+| `skakel-client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub and open data streams, on tokio; the hub is a small SignalR client written for what Skakel's hub uses |
+| `skakel-server` | Empty for now, the same part as the package above |
 | `skakel-vcam` | Feed the virtual camera from Rust, the same API as `Skakel.VirtualCamera`, and `skakel-vcam-install` to install its media source |
 | `skakel-vcam-source` | The virtual camera's media source: the COM DLL Windows' Frame Server loads |
 
