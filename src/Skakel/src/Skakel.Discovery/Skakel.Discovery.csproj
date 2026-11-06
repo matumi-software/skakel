@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The discovery packet a server answers and a client reads: the probe, the answer, the limits a
+       client applies and the cleaning of what a server calls itself. Only the packet: the client that
+       sends probes is Skakel.Client, the server that answers is Skakel.Server. -->
+  <PropertyGroup>
+    <Description>The Skakel discovery packet: the UDP probe and answer, and the limits a client applies to what a server calls itself.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageTags>lan;discovery;udp</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Skakel.Protocol\Skakel.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Skakel.Discovery.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -21,7 +21,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "skakel-client"
+version = "0.2.0"
+
+[[package]]
+name = "skakel-discovery"
+version = "0.2.0"
+
+[[package]]
+name = "skakel-pairing"
+version = "0.2.0"
+
+[[package]]
 name = "skakel-protocol"
+version = "0.2.0"
+
+[[package]]
+name = "skakel-serial"
+version = "0.2.0"
+
+[[package]]
+name = "skakel-server"
 version = "0.2.0"
 
 [[package]]

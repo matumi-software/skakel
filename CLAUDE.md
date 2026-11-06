@@ -14,9 +14,9 @@ folder per solution or workspace.
 
 | Folder | What |
 |---|---|
-| `docs/` | The protocol (`protocol.md`), the virtual camera's contract (`virtual-camera.md`) and decisions |
-| `src/Skakel/` | The .NET libraries: `Skakel.Protocol` (what clients and servers share), `Skakel.Client`, `Skakel.Server` and `Skakel.VirtualCamera`, each with its tests under `src/` and `tests/`, and samples under `samples/`. The client's tests run against a real `Skakel.Server` on Kestrel |
-| `src/rust/` | The Rust workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-protocol`, `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
+| `docs/` | The protocol (`protocol.md`), the parts and what each depends on (`parts.md`), the virtual camera's contract (`virtual-camera.md`) and decisions |
+| `src/Skakel/` | The .NET libraries: `Skakel.Protocol`, `Skakel.Discovery`, `Skakel.Pairing`, `Skakel.Serial`, `Skakel.Client`, `Skakel.Server` and `Skakel.VirtualCamera`, cut as `docs/parts.md` says, each with its tests under `src/` and `tests/`, and samples under `samples/`. The client's tests run against a real `Skakel.Server` on Kestrel |
+| `src/rust/` | The Rust workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-protocol`, `skakel-discovery`, `skakel-pairing`, `skakel-serial`, `skakel-client`, `skakel-server` (the last five still empty), `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
 
 Build and test each side from its own folder:
 
@@ -38,6 +38,9 @@ cd src/rust && cargo build && cargo test && cargo clippy --all-targets -- -D war
   language. Check a package's or crate's licence, and those it pulls in, before adding it. Code
   from Koppel may move here only when its author agrees to MIT for it. Permissive code (MIT, BSD,
   Apache-2.0) may come in with its copyright and licence notice kept in the file.
+- **A part depends only on the parts it cannot work without.** `docs/parts.md` has the list and the
+  allowed dependencies; a new project reference or package between parts changes that file in the
+  same pull request. Both languages keep the same parts.
 - **No app logic.** Skakel moves bytes and state, and knows who is allowed to. A stream type that
   more than one app speaks (serial) has its wire format here, so apps of any licence can use it,
   but the code that opens a real port or device stays in the app. A type only one app uses (USB) is

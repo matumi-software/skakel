@@ -2,8 +2,9 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Skakel.Protocol;
 
-namespace Skakel.Protocol.Tests;
+namespace Skakel.Pairing.Tests;
 
 public sealed class PairingCodeTests
 {

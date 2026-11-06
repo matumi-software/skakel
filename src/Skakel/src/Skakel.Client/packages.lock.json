@@ -116,7 +116,19 @@
         "resolved": "10.0.14",
         "contentHash": "1bbZqqCJTPba3inTADExbp/9PsGVyvGOX3zr6tFr7ySCgVkX9Lpw7BV0TizktNItd3SsbUu1sQfSAYm1GZMoNw=="
       },
+      "skakel.discovery": {
+        "type": "Project",
+        "dependencies": {
+          "Skakel.Protocol": "[0.2.0, )"
+        }
+      },
+      "skakel.pairing": {
+        "type": "Project"
+      },
       "skakel.protocol": {
+        "type": "Project"
+      },
+      "skakel.serial": {
         "type": "Project"
       }
     }

@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Skakel.Protocol\Skakel.Protocol.csproj" />
+    <ProjectReference Include="..\Skakel.Discovery\Skakel.Discovery.csproj" />
+    <ProjectReference Include="..\Skakel.Pairing\Skakel.Pairing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

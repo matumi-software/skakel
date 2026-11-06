@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["skakel-protocol", "skakel-vcam", "skakel-vcam-source"]
+members = ["skakel-client", "skakel-discovery", "skakel-pairing", "skakel-protocol", "skakel-serial", "skakel-server", "skakel-vcam", "skakel-vcam-source"]
 
 [workspace.package]
 version = "0.2.0"

@@ -1,7 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using Skakel.Protocol;
 
-namespace Skakel.Protocol.Tests;
+namespace Skakel.Discovery.Tests;
 
 public sealed class SkakelDiscoveryTests
 {

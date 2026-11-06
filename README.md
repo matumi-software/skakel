@@ -11,19 +11,25 @@ the network, is the first app built on it.
 
 ## Status
 
-Version 0.1.0. Protocol version 1 is settled in [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), and the
+Version 0.2.0. Protocol version 1 is settled in [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), and the
 client and server libraries are tested against each other. Koppel 0.1.1 is the first app built on them.
 
 ## What it holds
 
-| Package | What |
-|---|---|
-| `Skakel.Protocol` | What clients and servers share: wire constants, discovery packets, the pairing code, the JSON contract and the serial stream's messages |
-| `Skakel.Client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub, open data streams |
-| `Skakel.Server` | Issue tokens, approve pairing, revoke clients, host the control hub and the data stream endpoints |
-| `Skakel.VirtualCamera` | A Windows 11 virtual camera any app can feed: create or remove it, push frames, set the frame it shows while the app is closed |
+| Package | What | Depends on |
+|---|---|---|
+| `Skakel.Protocol` | The core: wire constants and paths, the JSON contract, certificate fingerprints, the hub's messages | nothing |
+| `Skakel.Discovery` | The discovery packet: the probe, the answer and the limits a client applies | Protocol |
+| `Skakel.Pairing` | The pairing code and the JSON bodies of the pairing calls | nothing |
+| `Skakel.Serial` | The serial stream's wire format: line settings, modem lines and the control messages | nothing |
+| `Skakel.Client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub, open data streams | Protocol, Discovery, Pairing, Serial |
+| `Skakel.Server` | Issue tokens, approve pairing, revoke clients, host the control hub and the data stream endpoints | Protocol, Discovery, Pairing |
+| `Skakel.VirtualCamera` | A Windows 11 virtual camera any app can feed: create or remove it, push frames, set the frame it shows while the app is closed | nothing |
 
-The first three are .NET 10 libraries on NuGet.org:
+[docs/parts.md](https://github.com/matumi-software/skakel/blob/main/docs/parts.md) says what each
+part holds and which one an app takes.
+
+The .NET parts are .NET 10 libraries, one package each:
 
 ```sh
 dotnet add package Skakel.Client
@@ -35,6 +41,7 @@ part:
 | Crate | What |
 |---|---|
 | `skakel-protocol` | The protocol version, so far |
+| `skakel-discovery`, `skakel-pairing`, `skakel-serial`, `skakel-client`, `skakel-server` | Empty for now, the same parts as the packages above |
 | `skakel-vcam` | Feed the virtual camera from Rust, the same API as `Skakel.VirtualCamera`, and `skakel-vcam-install` to install its media source |
 | `skakel-vcam-source` | The virtual camera's media source: the COM DLL Windows' Frame Server loads |
 
