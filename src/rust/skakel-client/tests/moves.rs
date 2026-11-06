@@ -102,14 +102,7 @@ async fn a_link_follows_its_server_to_another_port() {
     assert_eq!(moves.wait(|_| true).await, second.address());
     assert_eq!(link.address(), second.address());
     statuses
-        .wait(|_| {
-            statuses
-                .seen()
-                .iter()
-                .filter(|s| s.state == LinkState::Connected)
-                .count()
-                == 2
-        })
+        .wait_count(2, |s| s.state == LinkState::Connected)
         .await;
     link.stop().await;
     browser.stop();

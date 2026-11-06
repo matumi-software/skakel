@@ -255,14 +255,15 @@ impl SerialConnection {
         .await;
 
         let mut answers = lock(&self.shared.answers);
-        answers.change = None;
-        // Sent and not answered: its answer is still on its way.
-        if sent.load(Ordering::SeqCst)
+        // Sent and not answered: its answer is still on its way. Looked at while the change still
+        // holds the sending end, or the receiver would only say it is closed.
+        let unanswered = sent.load(Ordering::SeqCst)
             && matches!(
                 answered.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty)
-            )
-        {
+            );
+        answers.change = None;
+        if unanswered {
             answers.owed += 1;
         }
         result

@@ -29,4 +29,5 @@ log.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+skakel-server = { path = "../skakel-server", version = "0.2.0" }
 tokio = { workspace = true, features = ["process", "io-util"] }
