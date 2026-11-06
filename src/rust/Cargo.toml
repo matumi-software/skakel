@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["skakel-protocol"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.99"
+authors = ["Matumi Software"]
+license = "MIT"
+repository = "https://github.com/matumi-software/skakel"
+
+[workspace.dependencies]
+skakel-protocol = { path = "skakel-protocol", version = "0.2.0" }

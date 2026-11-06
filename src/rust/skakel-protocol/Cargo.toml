@@ -1,0 +1,9 @@
+[package]
+name = "skakel-protocol"
+description = "What Skakel clients and servers share: wire constants, contracts and messages"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
