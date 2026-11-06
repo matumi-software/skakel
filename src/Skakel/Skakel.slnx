@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Skakel.Client.Tests/Skakel.Client.Tests.csproj" />
+    <Project Path="tests/Skakel.Discovery.Interop/Skakel.Discovery.Interop.csproj" />
     <Project Path="tests/Skakel.Discovery.Tests/Skakel.Discovery.Tests.csproj" />
     <Project Path="tests/Skakel.Pairing.Tests/Skakel.Pairing.Tests.csproj" />
     <Project Path="tests/Skakel.Protocol.Tests/Skakel.Protocol.Tests.csproj" />
