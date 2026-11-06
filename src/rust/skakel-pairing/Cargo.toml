@@ -1,0 +1,9 @@
+[package]
+name = "skakel-pairing"
+description = "The Skakel pairing code and the JSON bodies of the pairing calls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true

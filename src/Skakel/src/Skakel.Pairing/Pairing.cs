@@ -9,7 +9,7 @@ public sealed record PairOpenRequest(string? ClientName, string? Commitment);
 /// <param name="RequestId">The request's handle, in the paths that follow.</param>
 /// <param name="ServerNonce">The server's nonce for the code.</param>
 /// <param name="ExpiresAt">When the request runs out.</param>
-/// <param name="PollToken">Sent in <see cref="SkakelProtocol.PairTokenHeader"/> to poll and to withdraw.</param>
+/// <param name="PollToken">Sent in the <c>X-Pair-Token</c> header to poll and to withdraw.</param>
 public sealed record PairOpened(string RequestId, string ServerNonce, DateTimeOffset ExpiresAt, string PollToken);
 
 /// <summary>Reveals the client's nonce: <c>POST /skakel/v1/pair/{requestId}/reveal</c>.</summary>

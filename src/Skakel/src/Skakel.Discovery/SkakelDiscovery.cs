@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace Skakel.Protocol;
@@ -21,6 +22,15 @@ public sealed record DiscoveryAnswer(string Name, int Port, string Fingerprint, 
 /// </summary>
 public static class SkakelDiscovery
 {
+    /// <summary>
+    /// For the discovery answer, which has to fit in a probe's size: text outside ASCII goes as UTF-8
+    /// rather than as six-byte escapes. Never used for anything a browser renders.
+    /// </summary>
+    private static readonly JsonSerializerOptions Compact = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     /// <summary>A probe's size, and the most an answer may take.</summary>
     public const int ProbeSize = 512;
 
@@ -28,7 +38,7 @@ public static class SkakelDiscovery
     public const int MaxNameLength = 63;
 
     /// <summary>The most characters an app id has.</summary>
-    public const int MaxAppIdLength = 32;
+    public const int MaxAppIdLength = SkakelProtocol.MaxAppIdLength;
 
     /// <summary>The most characters of an app version a client keeps.</summary>
     public const int MaxAppVersionLength = 32;
@@ -94,7 +104,7 @@ public static class SkakelDiscovery
         var app = new SkakelApp(answer.App.Id, Clean(answer.App.Version, MaxAppVersionLength));
         while (true)
         {
-            var body = JsonSerializer.SerializeToUtf8Bytes(new DiscoveryAnswer(name, answer.Port, fingerprint, app, versions), SkakelJson.Compact);
+            var body = JsonSerializer.SerializeToUtf8Bytes(new DiscoveryAnswer(name, answer.Port, fingerprint, app, versions), Compact);
             if (AnswerLine.Length + body.Length <= ProbeSize)
             {
                 return [.. AnswerLine, .. body];
@@ -127,7 +137,7 @@ public static class SkakelDiscovery
         DiscoveryAnswer? body;
         try
         {
-            body = JsonSerializer.Deserialize<DiscoveryAnswer>(datagram[AnswerLine.Length..], SkakelJson.Compact);
+            body = JsonSerializer.Deserialize<DiscoveryAnswer>(datagram[AnswerLine.Length..], Compact);
         }
         catch (JsonException)
         {

@@ -1,6 +1,7 @@
 //! What Skakel clients and servers share. See `docs/protocol.md` at the repository root.
 //!
-//! For now this holds only the protocol version; the rest follows in its own issue.
+//! For now this holds only the protocol version; the rest follows in its own issue. Discovery, the
+//! pairing code and the serial messages are their own crates, see `docs/parts.md`.
 
 /// The protocol version this crate speaks.
 pub const VERSION: u32 = 1;

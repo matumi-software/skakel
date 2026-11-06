@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The serial stream type's wire format: the stream's name, the query that picks a port and the
+       control messages. Only the wire format: the code that opens a real port stays in the app. No
+       dependency on any other part, so an app of any licence can use it. -->
+  <PropertyGroup>
+    <Description>The Skakel serial stream's wire format: the stream type, line settings, modem lines and the control messages.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageTags>serial;uart;lan</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Skakel.Serial.Tests" />
+  </ItemGroup>
+
+</Project>

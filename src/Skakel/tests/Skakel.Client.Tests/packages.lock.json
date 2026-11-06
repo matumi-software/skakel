@@ -358,10 +358,25 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.AspNetCore.SignalR.Client": "[10.0.14, )",
-          "Skakel.Protocol": "[0.1.0, )"
+          "Skakel.Discovery": "[0.2.0, )",
+          "Skakel.Pairing": "[0.2.0, )",
+          "Skakel.Protocol": "[0.2.0, )",
+          "Skakel.Serial": "[0.2.0, )"
         }
       },
+      "skakel.discovery": {
+        "type": "Project",
+        "dependencies": {
+          "Skakel.Protocol": "[0.2.0, )"
+        }
+      },
+      "skakel.pairing": {
+        "type": "Project"
+      },
       "skakel.protocol": {
+        "type": "Project"
+      },
+      "skakel.serial": {
         "type": "Project"
       },
       "skakel.server": {
@@ -370,7 +385,9 @@
           "OpenIddict.Server.AspNetCore": "[7.7.2, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.2, )",
           "OpenIddict.Validation.ServerIntegration": "[7.7.2, )",
-          "Skakel.Protocol": "[0.1.0, )"
+          "Skakel.Discovery": "[0.2.0, )",
+          "Skakel.Pairing": "[0.2.0, )",
+          "Skakel.Protocol": "[0.2.0, )"
         }
       },
       "Microsoft.AspNetCore.SignalR.Client": {

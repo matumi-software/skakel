@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Skakel.Protocol.Serial;
 
-namespace Skakel.Protocol.Tests;
+namespace Skakel.Serial.Tests;
 
 public sealed class SerialMessagesTests
 {

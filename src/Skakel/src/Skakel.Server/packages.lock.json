@@ -100,6 +100,15 @@
           "OpenIddict.Abstractions": "7.7.2"
         }
       },
+      "skakel.discovery": {
+        "type": "Project",
+        "dependencies": {
+          "Skakel.Protocol": "[0.2.0, )"
+        }
+      },
+      "skakel.pairing": {
+        "type": "Project"
+      },
       "skakel.protocol": {
         "type": "Project"
       }

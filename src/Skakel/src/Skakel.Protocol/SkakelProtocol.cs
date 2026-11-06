@@ -48,8 +48,11 @@ public static class SkakelProtocol
     /// <summary>True for a stream type: one or more of <c>a-z</c>, <c>0-9</c> and <c>-</c>.</summary>
     public static bool IsStreamType(string? type) => !string.IsNullOrEmpty(type) && type.All(IsNameCharacter);
 
+    /// <summary>The most characters an app id has.</summary>
+    public const int MaxAppIdLength = 32;
+
     /// <summary>True for an app id: 1 to 32 of <c>a-z</c>, <c>0-9</c> and <c>-</c>.</summary>
-    public static bool IsAppId(string? id) => id is { Length: >= 1 and <= SkakelDiscovery.MaxAppIdLength } && id.All(IsNameCharacter);
+    public static bool IsAppId(string? id) => id is { Length: >= 1 and <= MaxAppIdLength } && id.All(IsNameCharacter);
 
     private static bool IsNameCharacter(char c) => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-';
 }

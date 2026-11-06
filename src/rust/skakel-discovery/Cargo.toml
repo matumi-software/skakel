@@ -1,0 +1,9 @@
+[package]
+name = "skakel-discovery"
+description = "The Skakel discovery packet: the probe, the answer and the limits a client applies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
