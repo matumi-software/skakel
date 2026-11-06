@@ -31,7 +31,15 @@ fn built() -> bool {
     static BUILT: OnceLock<bool> = OnceLock::new();
     *BUILT.get_or_init(|| {
         let built = std::process::Command::new("dotnet")
-            .args(["build", "-nologo", "-v", "q"])
+            // No build server and no shared compiler: they would keep the pipes this reads open.
+            .args([
+                "build",
+                "-nologo",
+                "-v",
+                "q",
+                "-nodeReuse:false",
+                "-p:UseSharedCompilation=false",
+            ])
             .arg(project())
             .output();
         match built {
@@ -273,6 +281,24 @@ impl<T: Clone + Send + 'static> Recorder<T> {
     /// The first value, among those seen so far and after, that satisfies `matches`.
     pub async fn wait(&self, matches: impl Fn(&T) -> bool) -> T {
         self.wait_for(Duration::from_secs(20), matches).await
+    }
+
+    /// Waits until at least `count` of the values seen satisfy `matches`.
+    pub async fn wait_count(&self, count: usize, matches: impl Fn(&T) -> bool) {
+        let timeout = Duration::from_secs(20);
+        tokio::time::timeout(timeout, async {
+            loop {
+                let arrived = self.arrived.notified();
+                tokio::pin!(arrived);
+                arrived.as_mut().enable();
+                if self.seen().iter().filter(|v| matches(v)).count() >= count {
+                    return;
+                }
+                arrived.await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("fewer than {count} values matched in {timeout:?}"));
     }
 
     pub async fn wait_for(&self, timeout: Duration, matches: impl Fn(&T) -> bool) -> T {

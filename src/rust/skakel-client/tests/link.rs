@@ -323,13 +323,7 @@ async fn a_server_that_ends_every_connection_is_connected_to_again() {
     let failed = statuses.wait(|s| s.state == LinkState::Failed).await;
     assert_eq!(failed.failure.unwrap().kind(), FailureKind::ServerStopping);
     statuses
-        .wait(|_| {
-            states(&statuses)
-                .iter()
-                .filter(|s| **s == LinkState::Connected)
-                .count()
-                == 2
-        })
+        .wait_count(2, |s| s.state == LinkState::Connected)
         .await;
     assert_eq!(link.status().state, LinkState::Connected);
     link.stop().await;
