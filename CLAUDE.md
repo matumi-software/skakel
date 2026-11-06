@@ -14,9 +14,9 @@ folder per solution or workspace.
 
 | Folder | What |
 |---|---|
-| `docs/` | The protocol and decisions |
-| `src/Skakel/` | The .NET libraries: `Skakel.Protocol` (what clients and servers share), `Skakel.Client` and `Skakel.Server`, each with its tests under `src/` and `tests/`. The client's tests run against a real `Skakel.Server` on Kestrel |
-| `src/rust/` | The Rust workspace, one crate per part (`skakel-<part>`), tests beside the code |
+| `docs/` | The protocol (`protocol.md`), the virtual camera's contract (`virtual-camera.md`) and decisions |
+| `src/Skakel/` | The .NET libraries: `Skakel.Protocol` (what clients and servers share), `Skakel.Client`, `Skakel.Server` and `Skakel.VirtualCamera`, each with its tests under `src/` and `tests/`, and samples under `samples/`. The client's tests run against a real `Skakel.Server` on Kestrel |
+| `src/rust/` | The Rust workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-protocol`, `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
 
 Build and test each side from its own folder:
 
@@ -29,7 +29,10 @@ cd src/rust && cargo build && cargo test && cargo clippy --all-targets -- -D war
 
 - **`docs/protocol.md` is the contract.** A change to what goes over the wire changes that file in
   the same pull request. Apps other than Koppel depend on it. Both languages follow it; a test that
-  pins wire bytes in one has its counterpart in the other.
+  pins wire bytes in one has its counterpart in the other. `docs/virtual-camera.md` is the same for
+  the camera's shared memory.
+- **The virtual camera is never registered by a build or a test.** Installing the media source and
+  creating a camera change the machine; that is a hand test, steps in `docs/virtual-camera.md`.
 - **MIT, and nothing that would stop that.** Never copy GPL or LGPL code in, from Koppel's
   contributors included, and never take a dependency under those licences, or AGPL, in either
   language. Check a package's or crate's licence, and those it pulls in, before adding it. Code
