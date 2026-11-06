@@ -12,8 +12,23 @@ repository = "https://github.com/matumi-software/skakel"
 
 [workspace.dependencies]
 skakel-protocol = { path = "skakel-protocol", version = "0.2.0" }
+skakel-discovery = { path = "skakel-discovery", version = "0.2.0" }
 skakel-vcam = { path = "skakel-vcam", version = "0.2.0" }
 # Microsoft's Windows bindings (MIT OR Apache-2.0). `windows-core` is named directly because the
 # `#[implement]` macro expands to paths in it.
 windows = "0.62.2"
 windows-core = "0.62.2"
+
+# Wire formats and hashing. Every one is MIT or Apache-2.0 (or BSD-3-Clause for subtle,
+# Apache-2.0 for unicode-general-category), checked with `cargo info` before it was added.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+# Constant-time comparison for secrets and fingerprints.
+subtle = "2.6.1"
+getrandom = "0.4.3"
+base64 = "0.23.1"
+# `expiresAt` in the pairing answer is an RFC 3339 timestamp.
+time = { version = "0.3.55", features = ["serde-well-known", "parsing", "formatting"] }
+# The Unicode categories (Cc, Cf, Zl, Zp) the discovery cleaning needs; the standard library has no Cf.
+unicode-general-category = "1.1.0"
