@@ -44,7 +44,8 @@ part:
 | `skakel-discovery` | The discovery packet (probe, answer, cleaning, limits) and a small `std` UDP helper for answering and probing |
 | `skakel-pairing` | The pairing code, nonces and commitments, and the JSON bodies of the pairing calls |
 | `skakel-serial` | The serial stream's line settings, modem lines and control messages |
-| `skakel-client`, `skakel-server` | Empty for now, the same parts as the packages above |
+| `skakel-client` | Empty for now, the same part as the package above |
+| `skakel-server` | Serve clients: discovery answers, pairing approval, OAuth tokens, revoking clients, the control hub (SignalR's JSON protocol over a WebSocket), data stream endpoints, the per-address limits and the self-signed certificate with its handover. tokio, axum and rustls; the app supplies a store, its hubs, stream types and the pairing screen |
 | `skakel-vcam` | Feed the virtual camera from Rust, the same API as `Skakel.VirtualCamera`, and `skakel-vcam-install` to install its media source |
 | `skakel-vcam-source` | The virtual camera's media source: the COM DLL Windows' Frame Server loads |
 

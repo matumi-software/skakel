@@ -177,9 +177,15 @@ A client paired with several servers holds one client ID and secret for each.
 
 ## Tokens
 
-- OAuth 2.0 client credentials at `POST /skakel/v1/token`, HTTPS only.
-- Access tokens last 30 minutes and are signed with an RSA key whose key id is in the token header.
-  Clients do not read what is inside a token.
+- OAuth 2.0 client credentials at `POST /skakel/v1/token`, HTTPS only, as a form
+  (`application/x-www-form-urlencoded`) with `grant_type=client_credentials`, `client_id` and
+  `client_secret`. A server also takes the id and secret as HTTP Basic credentials, and answers
+  `{ "access_token", "token_type": "Bearer", "expires_in" }`. Any other grant is `unsupported_grant_type`
+  (400), a body that is not a form is `invalid_request` (400).
+- Access tokens last 30 minutes and are JWTs signed with a key whose id is in the token's `kid`
+  header. Clients do not read what is inside a token, so the algorithm is the server's own: the .NET
+  server signs with RSA (`RS256`), the Rust server with ECDSA P-256 (`ES256`). A server also takes
+  tokens signed by the keys it replaced, until the tokens they signed would have expired.
 - A client takes a token to last what `expires_in` says, held to between 2 and 30 minutes.
 - Every token carries the issuer `https://skakel.invalid/`, whatever address or name the client
   used, so a token issued at one of a server's addresses works at all of them. The server publishes
@@ -220,6 +226,11 @@ A client acts on `SkakelCertificates` only when its `fingerprint` is the certifi
 connection presented, or the one a new connection to the server presents, as right after a switch,
 when the hub connection still runs on the old certificate. Anything else it ignores.
 
+A server presents its current certificate on every new connection, so a connection made after the
+switch never shows the old one. The Rust server turns TLS session resumption off for this: a resumed
+session shows the client no certificate, and a client that proves a certificate by what a new
+connection presents (see above) would take that for a failed proof.
+
 ## Following a server
 
 When a client cannot reach a server's saved address at all (refused, timed out, no route, a name that
@@ -241,6 +252,11 @@ One SignalR hub per server, at a path the app picks under `/skakel/v1/`, such as
 token expires; the client connects again 30 seconds before that, with a fresh token. A client starts
 connections at most once a second, whatever the tokens say, and does not follow a negotiation that
 sends it to another address or to plain HTTP.
+
+A client uses SignalR's JSON hub protocol over a WebSocket, and a server need offer nothing else: the
+Rust server's negotiation lists the WebSockets transport only, and its hub does not take streaming
+invocations, which Skakel does not use. A client may send the access token in the `Authorization`
+header or, as SignalR does for WebSockets, in the `access_token` query parameter of the hub paths.
 
 Skakel's own messages start with `Skakel`. Every other name belongs to the app. An app may not start
 a message name with `Skakel`.

@@ -18,7 +18,10 @@ The wire format is in [protocol.md](protocol.md); this file says how the code is
 
 Beyond Skakel's own parts, the .NET client takes `Microsoft.AspNetCore.SignalR.Client`, and the
 .NET server takes ASP.NET Core and OpenIddict (server and validation only). The other .NET parts
-take no packages at all.
+take no packages at all. The Rust server takes tokio, axum, rustls (with ring) and rcgen,
+with everything they pull in under MIT, Apache-2.0, BSD, ISC, Unlicense or Unicode-3.0 (`r-efi`, built
+only for UEFI targets, offers LGPL as one of three options and is used under its MIT one; checked with
+`cargo metadata`). The hub's SignalR subset is written here: the SignalR crates on crates.io are clients.
 
 The virtual camera's Rust side is two crates because Windows loads the media source as a DLL of its
 own: `skakel-vcam` is the producer and the installer (the counterpart of `Skakel.VirtualCamera`),
