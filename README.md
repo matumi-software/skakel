@@ -21,15 +21,43 @@ client and server libraries are tested against each other. Koppel 0.1.1 is the f
 | `Skakel.Protocol` | What clients and servers share: wire constants, discovery packets, the pairing code, the JSON contract and the serial stream's messages |
 | `Skakel.Client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub, open data streams |
 | `Skakel.Server` | Issue tokens, approve pairing, revoke clients, host the control hub and the data stream endpoints |
+| `Skakel.VirtualCamera` | A Windows 11 virtual camera any app can feed: create or remove it, push frames, set the frame it shows while the app is closed |
 
-All three are .NET 10 libraries on NuGet.org:
+The first three are .NET 10 libraries on NuGet.org:
 
 ```sh
 dotnet add package Skakel.Client
 ```
 
 A Rust implementation with the same feature set is being written in `src/rust/`, one crate per
-part. Its first crate, `skakel-protocol`, holds only the protocol version so far.
+part:
+
+| Crate | What |
+|---|---|
+| `skakel-protocol` | The protocol version, so far |
+| `skakel-vcam` | Feed the virtual camera from Rust, the same API as `Skakel.VirtualCamera`, and `skakel-vcam-install` to install its media source |
+| `skakel-vcam-source` | The virtual camera's media source: the COM DLL Windows' Frame Server loads |
+
+## Virtual camera
+
+A camera that Teams, Zoom, browsers and the Camera app list by name, fed with frames by an app, on
+Windows 11 (`MFCreateVirtualCamera`, no driver). The media source is installed once per machine,
+elevated; after that an app creates its camera and feeds it without elevation, from Rust or .NET:
+
+```csharp
+using var camera = SkakelVirtualCamera.Create(new SkakelVirtualCameraOptions("Tweeling", 1280, 720, 30));
+camera.SetIdleFrame(closedPicture, FramePixelFormat.Bgra);
+camera.PushFrame(frame, FramePixelFormat.Bgra);
+```
+
+```rust
+let mut camera = VirtualCamera::create(CameraOptions::new("Tweeling", 1280, 720, 30))?;
+camera.set_idle_frame(&closed_picture, PixelFormat::Bgra)?;
+camera.push_frame(&frame, PixelFormat::Bgra)?;
+```
+
+[docs/virtual-camera.md](https://github.com/matumi-software/skakel/blob/main/docs/virtual-camera.md)
+has how it works, the shared memory contract, installing and upgrading, and signing.
 
 ## How it talks
 
