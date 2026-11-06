@@ -40,13 +40,34 @@ pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024;
 /// A problem answer: `application/problem+json` with a `detail` a person can read.
 pub(crate) fn problem(status: StatusCode, detail: &str) -> Response {
     let (kind, title) = match status.as_u16() {
-        400 => ("https://tools.ietf.org/html/rfc9110#section-15.5.1", "Bad Request"),
-        401 => ("https://tools.ietf.org/html/rfc9110#section-15.5.2", "Unauthorized"),
-        404 => ("https://tools.ietf.org/html/rfc9110#section-15.5.5", "Not Found"),
-        409 => ("https://tools.ietf.org/html/rfc9110#section-15.5.10", "Conflict"),
-        413 => ("https://tools.ietf.org/html/rfc9110#section-15.5.14", "Content Too Large"),
-        422 => ("https://tools.ietf.org/html/rfc9110#section-15.5.21", "Unprocessable Content"),
-        429 => ("https://tools.ietf.org/html/rfc6585#section-4", "Too Many Requests"),
+        400 => (
+            "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+            "Bad Request",
+        ),
+        401 => (
+            "https://tools.ietf.org/html/rfc9110#section-15.5.2",
+            "Unauthorized",
+        ),
+        404 => (
+            "https://tools.ietf.org/html/rfc9110#section-15.5.5",
+            "Not Found",
+        ),
+        409 => (
+            "https://tools.ietf.org/html/rfc9110#section-15.5.10",
+            "Conflict",
+        ),
+        413 => (
+            "https://tools.ietf.org/html/rfc9110#section-15.5.14",
+            "Content Too Large",
+        ),
+        422 => (
+            "https://tools.ietf.org/html/rfc9110#section-15.5.21",
+            "Unprocessable Content",
+        ),
+        429 => (
+            "https://tools.ietf.org/html/rfc6585#section-4",
+            "Too Many Requests",
+        ),
         _ => ("about:blank", status.canonical_reason().unwrap_or("Error")),
     };
     let body = json!({ "type": kind, "title": title, "status": status.as_u16(), "detail": detail });
@@ -80,7 +101,9 @@ pub(crate) fn authenticate_request(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| {
             let (scheme, token) = value.split_once(' ')?;
-            scheme.eq_ignore_ascii_case("bearer").then(|| token.trim().to_owned())
+            scheme
+                .eq_ignore_ascii_case("bearer")
+                .then(|| token.trim().to_owned())
         });
     let token = from_header.or_else(|| {
         if !allow_query {
@@ -117,7 +140,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientPrincipal {
 
 /// The server's own routes, with the gate in front.
 pub(crate) fn router(shared: Arc<Shared>) -> Router {
-    let routes = Router::new()
+    Router::new()
         .route(INFO_PATH, get(info))
         .route(PAIR_PATH, post(pair_open))
         .route(&format!("{PAIR_PATH}/{{id}}/reveal"), post(pair_reveal))
@@ -128,8 +151,7 @@ pub(crate) fn router(shared: Arc<Shared>) -> Router {
         .route(TOKEN_PATH, post(token))
         .route(HELLO_PATH, get(hello))
         .route(&format!("{BASE_PATH}/streams/{{type}}"), any(open_stream))
-        .with_state(shared);
-    routes
+        .with_state(shared)
 }
 
 /// Puts the limits and the layer around `router`: every request carries the server's state for
@@ -148,7 +170,8 @@ async fn gate(
     request.extensions_mut().insert(shared.clone());
     let path = request.uri().path().to_ascii_lowercase();
     let on = |base: &str| {
-        path == base.to_ascii_lowercase() || path.starts_with(&format!("{}/", base.to_ascii_lowercase()))
+        path == base.to_ascii_lowercase()
+            || path.starts_with(&format!("{}/", base.to_ascii_lowercase()))
     };
     let (is_token, is_pair) = (on(TOKEN_PATH), on(PAIR_PATH));
     if !is_token && !is_pair {
@@ -210,8 +233,14 @@ fn has_json_content_type(headers: &HeaderMap) -> bool {
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| {
-            let media = value.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-            media == "application/json" || (media.starts_with("application/") && media.ends_with("+json"))
+            let media = value
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            media == "application/json"
+                || (media.starts_with("application/") && media.ends_with("+json"))
         })
 }
 
@@ -244,7 +273,11 @@ async fn pair_open(
         );
     }
     let commitment = match request.commitment {
-        Some(commitment) if commitment.len() == 64 && commitment.bytes().all(|b| b.is_ascii_hexdigit()) => commitment,
+        Some(commitment)
+            if commitment.len() == 64 && commitment.bytes().all(|b| b.is_ascii_hexdigit()) =>
+        {
+            commitment
+        }
         _ => {
             return problem(
                 StatusCode::BAD_REQUEST,
@@ -292,7 +325,9 @@ async fn pair_reveal(
 }
 
 fn poll_token(headers: &HeaderMap) -> Option<&str> {
-    headers.get(PAIR_TOKEN_HEADER).and_then(|value| value.to_str().ok())
+    headers
+        .get(PAIR_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
 }
 
 async fn pair_poll(
@@ -385,7 +420,11 @@ async fn token(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Body
         );
     };
     let Ok(form) = serde_urlencoded::from_bytes::<TokenForm>(&bytes) else {
-        return oauth_error(StatusCode::BAD_REQUEST, "invalid_request", "The request body is not a form.");
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "The request body is not a form.",
+        );
     };
     if form.grant_type.as_deref() != Some("client_credentials") {
         return oauth_error(
@@ -413,12 +452,17 @@ async fn token(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Body
         return invalid_client();
     };
     let Ok((access_token, expires_at)) = shared.state.issue_token(&client_id, generation) else {
-        return oauth_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "The token could not be issued.");
+        return oauth_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "The token could not be issued.",
+        );
     };
     let expires_in = (expires_at - OffsetDateTime::now_utc())
         .whole_seconds()
         .clamp(0, ACCESS_TOKEN_LIFETIME.as_secs() as i64);
-    let body = json!({ "access_token": access_token, "token_type": "Bearer", "expires_in": expires_in });
+    let body =
+        json!({ "access_token": access_token, "token_type": "Bearer", "expires_in": expires_in });
     (
         StatusCode::OK,
         [
@@ -452,7 +496,10 @@ async fn open_stream(
         );
     };
     let Ok(upgrade) = upgrade else {
-        return problem(StatusCode::BAD_REQUEST, "A stream opens with a WebSocket upgrade.");
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "A stream opens with a WebSocket upgrade.",
+        );
     };
     let query: Vec<(String, String)> = uri
         .query()

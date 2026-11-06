@@ -44,7 +44,10 @@ pub(crate) async fn answer(
             }
         };
         let fingerprint = state.fingerprint();
-        if cached.as_ref().is_none_or(|(known, _)| *known != fingerprint) {
+        if cached
+            .as_ref()
+            .is_none_or(|(known, _)| *known != fingerprint)
+        {
             let made = create_answer(&DiscoveryAnswer {
                 name: announcement.name.clone(),
                 port: announcement.port,

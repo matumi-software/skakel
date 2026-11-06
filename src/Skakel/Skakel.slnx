@@ -9,6 +9,7 @@
     <Project Path="src/Skakel.VirtualCamera/Skakel.VirtualCamera.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Skakel.Client.Interop/Skakel.Client.Interop.csproj" />
     <Project Path="tests/Skakel.Client.Tests/Skakel.Client.Tests.csproj" />
     <Project Path="tests/Skakel.Discovery.Interop/Skakel.Discovery.Interop.csproj" />
     <Project Path="tests/Skakel.Discovery.Tests/Skakel.Discovery.Tests.csproj" />

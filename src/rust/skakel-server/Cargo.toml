@@ -20,18 +20,26 @@ getrandom.workspace = true
 base64.workspace = true
 time.workspace = true
 unicode-general-category.workspace = true
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "signal", "fs"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "ws", "tokio", "query", "json"] }
+
+# The server stack. Every crate here, and what it pulls in, is MIT, Apache-2.0, BSD, ISC or Unicode-3.0
+# (checked with `cargo metadata`). rustls runs on ring rather than aws-lc-rs, which needs a C toolchain
+# with NASM on Windows. Kept in this crate, not in the workspace table, because only the server uses them.
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "fs"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "ws", "tokio", "json", "query"] }
+hyper = "1.12.0"
+hyper-util = { version = "0.1.21", features = ["server-auto", "tokio", "service"] }
+http-body-util = "0.1.5"
+tower-service = "0.3.3"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-hyper-util = { version = "0.1.21", features = ["server-auto", "tokio", "service"] }
-hyper = "1.12.0"
-tower-service = "0.3.3"
-futures-util = "0.3.34"
-http-body-util = "0.1.5"
-rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
+# Signs the access tokens (ECDSA P-256) and checks them.
 ring = "0.17.14"
+# The self-signed certificate.
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 serde_urlencoded = "0.7.1"
 
 [dev-dependencies]
-tokio = { version = "1.54.1", features = ["test-util"] }
+skakel-serial = { path = "../skakel-serial" }
+futures-util = "0.3.34"
+tokio = { version = "1.54.1", features = ["process", "test-util"] }
+tokio-tungstenite = "0.29"

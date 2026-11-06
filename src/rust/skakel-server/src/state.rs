@@ -348,7 +348,10 @@ impl ServerState {
         })
     }
 
-    pub(crate) async fn rotate_secret(&self, client_id: &str) -> Result<Option<String>, ServerError> {
+    pub(crate) async fn rotate_secret(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<String>, ServerError> {
         let secret = util::new_secret();
         let keep = self.keep_client_secrets;
         let hash = util::hash_secret(&secret);
@@ -461,7 +464,9 @@ impl ServerState {
         Ok(dropped)
     }
 
-    pub(crate) async fn switch_certificate(&self) -> Result<Option<CertificateSwitch>, ServerError> {
+    pub(crate) async fn switch_certificate(
+        &self,
+    ) -> Result<Option<CertificateSwitch>, ServerError> {
         let from = self.fingerprint();
         let mut switched: Option<(NextCertificateRecord, Vec<ClientRecord>)> = None;
         self.update(|state| {
@@ -571,9 +576,15 @@ mod tests {
     use crate::store::InMemoryStore;
 
     async fn state_with(store: Arc<InMemoryStore>) -> Arc<ServerState> {
-        ServerState::start(store, false, "pi-lab".into(), "test-app".into(), Events::new(vec![]))
-            .await
-            .unwrap()
+        ServerState::start(
+            store,
+            false,
+            "pi-lab".into(),
+            "test-app".into(),
+            Events::new(vec![]),
+        )
+        .await
+        .unwrap()
     }
 
     async fn state() -> Arc<ServerState> {
@@ -613,7 +624,10 @@ mod tests {
         let client = state.register_client("  lab\u{202E} pc ").await.unwrap();
 
         assert_eq!(client.name, "lab pc");
-        assert_eq!(state.validate(&client.client_id, &client.client_secret), Some(1));
+        assert_eq!(
+            state.validate(&client.client_id, &client.client_secret),
+            Some(1)
+        );
         assert_eq!(state.validate(&client.client_id, "wrong"), None);
         assert_eq!(state.validate("client-none", &client.client_secret), None);
         assert!(state.register_client("\u{0}").await.is_err());
@@ -626,9 +640,16 @@ mod tests {
         let (token, _) = state.issue_token(&client.client_id, 1).unwrap();
         assert!(state.authenticate(&token).is_some());
 
-        let secret = state.rotate_secret(&client.client_id).await.unwrap().unwrap();
+        let secret = state
+            .rotate_secret(&client.client_id)
+            .await
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(state.validate(&client.client_id, &client.client_secret), None);
+        assert_eq!(
+            state.validate(&client.client_id, &client.client_secret),
+            None
+        );
         assert_eq!(state.validate(&client.client_id, &secret), Some(2));
         assert!(state.authenticate(&token).is_none());
         assert_eq!(state.rotate_secret("client-none").await.unwrap(), None);

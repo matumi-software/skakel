@@ -54,7 +54,9 @@ pub(crate) fn create_certificate(
 
     let key = CertKey::generate().map_err(|e| error("making a certificate key", e))?;
     let mut params = CertificateParams::default();
-    params.distinguished_name.push(DnType::CommonName, host_name);
+    params
+        .distinguished_name
+        .push(DnType::CommonName, host_name);
     params
         .distinguished_name
         .push(DnType::OrganizationName, organization);
@@ -182,7 +184,10 @@ pub(crate) fn issue_token(
         .pair
         .sign(&SystemRandom::new(), signing_input.as_bytes())
         .map_err(|_| CryptoError("signing a token failed".into()))?;
-    Ok((format!("{signing_input}.{}", b64(signature.as_ref())), expires))
+    Ok((
+        format!("{signing_input}.{}", b64(signature.as_ref())),
+        expires,
+    ))
 }
 
 /// Checks a token's signature, issuer and lifetime. Whether its client still exists, at that
@@ -256,7 +261,10 @@ mod tests {
 
     fn keys() -> (Signer, Vec<Verifier>) {
         let record = create_signing_key(now()).unwrap();
-        (Signer::load(&record).unwrap(), vec![Verifier::load(&record).unwrap()])
+        (
+            Signer::load(&record).unwrap(),
+            vec![Verifier::load(&record).unwrap()],
+        )
     }
 
     #[test]
