@@ -28,6 +28,9 @@ All three are .NET 10 libraries on NuGet.org:
 dotnet add package Skakel.Client
 ```
 
+A Rust implementation with the same feature set is being written in `src/rust/`, one crate per
+part. Its first crate, `skakel-protocol`, holds only the protocol version so far.
+
 ## How it talks
 
 - **Finding a server:** a UDP probe on the local network. A server answers with its name, port,

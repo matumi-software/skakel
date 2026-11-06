@@ -28,3 +28,6 @@ desktop.ini
 .env
 .env.*
 !.env.example
+
+# Rust
+target/
