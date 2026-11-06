@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["skakel-protocol"]
+members = ["skakel-protocol", "skakel-vcam", "skakel-vcam-source"]
 
 [workspace.package]
 version = "0.2.0"
@@ -12,3 +12,8 @@ repository = "https://github.com/matumi-software/skakel"
 
 [workspace.dependencies]
 skakel-protocol = { path = "skakel-protocol", version = "0.2.0" }
+skakel-vcam = { path = "skakel-vcam", version = "0.2.0" }
+# Microsoft's Windows bindings (MIT OR Apache-2.0). `windows-core` is named directly because the
+# `#[implement]` macro expands to paths in it.
+windows = "0.62.2"
+windows-core = "0.62.2"
