@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A real Skakel server the Rust crate skakel-client runs its tests against, driven over stdin and
+       stdout. It serves what the .NET client's tests serve (a hub, an echo stream, a pretend serial
+       port) on Kestrel, loopback only. Not a test project: nothing in `dotnet test` runs it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Skakel.Server\Skakel.Server.csproj" />
+    <ProjectReference Include="..\..\src\Skakel.Serial\Skakel.Serial.csproj" />
+  </ItemGroup>
+
+</Project>
