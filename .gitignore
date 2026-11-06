@@ -1,4 +1,6 @@
 bin/
+# Cargo's binaries live in src/bin/, which the .NET line above would hide.
+!src/rust/*/src/bin/
 obj/
 *.user
 .vs/
