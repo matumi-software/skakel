@@ -40,8 +40,11 @@ part:
 
 | Crate | What |
 |---|---|
-| `skakel-protocol` | The protocol version, so far |
-| `skakel-discovery`, `skakel-pairing`, `skakel-serial`, `skakel-client`, `skakel-server` | Empty for now, the same parts as the packages above |
+| `skakel-protocol` | Wire constants and paths, the JSON contracts, certificate fingerprints, the hub's messages and the close codes |
+| `skakel-discovery` | The discovery packet (probe, answer, cleaning, limits) and a small `std` UDP helper for answering and probing |
+| `skakel-pairing` | The pairing code, nonces and commitments, and the JSON bodies of the pairing calls |
+| `skakel-serial` | The serial stream's line settings, modem lines and control messages |
+| `skakel-client`, `skakel-server` | Empty for now, the same parts as the packages above |
 | `skakel-vcam` | Feed the virtual camera from Rust, the same API as `Skakel.VirtualCamera`, and `skakel-vcam-install` to install its media source |
 | `skakel-vcam-source` | The virtual camera's media source: the COM DLL Windows' Frame Server loads |
 
