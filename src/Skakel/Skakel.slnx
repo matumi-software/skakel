@@ -16,6 +16,7 @@
     <Project Path="tests/Skakel.Pairing.Tests/Skakel.Pairing.Tests.csproj" />
     <Project Path="tests/Skakel.Protocol.Tests/Skakel.Protocol.Tests.csproj" />
     <Project Path="tests/Skakel.Serial.Tests/Skakel.Serial.Tests.csproj" />
+    <Project Path="tests/Skakel.Server.Interop/Skakel.Server.Interop.csproj" />
     <Project Path="tests/Skakel.Server.Tests/Skakel.Server.Tests.csproj" />
     <Project Path="tests/Skakel.VirtualCamera.Tests/Skakel.VirtualCamera.Tests.csproj" />
   </Folder>
