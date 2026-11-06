@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The producer side of the Windows virtual camera: create or remove the camera and feed it frames
+       through the shared memory docs/virtual-camera.md describes. Managed only; the media source the
+       camera runs on is the Rust DLL skakel-vcam-source, installed once per machine. -->
+  <PropertyGroup>
+    <Description>Feed a Windows 11 virtual camera that Teams, Zoom, browsers and the Camera app list by name: create or remove it, push NV12, RGBA or BGRA frames, set the frame it shows while the app is closed.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageTags>virtual-camera;webcam;media-foundation;windows</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Skakel.VirtualCamera.Tests" />
+  </ItemGroup>
+
+</Project>
