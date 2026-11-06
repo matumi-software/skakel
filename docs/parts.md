@@ -23,6 +23,8 @@ with everything they pull in under MIT, Apache-2.0, BSD, ISC, Unlicense or Unico
 only for UEFI targets, offers LGPL as one of three options and is used under its MIT one; checked with
 `cargo metadata`). The hub's SignalR subset is written here: the SignalR crates on crates.io are clients.
 
+The Rust client takes tokio, reqwest and rustls (with ring) for pinned HTTPS, tokio-tungstenite for WebSocket framing and if-addrs to find the networks to broadcast on. It has no SignalR dependency: no maintained Rust SignalR client lets the certificate check be pinned, so the hub's JSON protocol is written in the crate (see hub.rs). The other Rust crates take only small crates for JSON, hashing and randomness.
+
 The virtual camera's Rust side is two crates because Windows loads the media source as a DLL of its
 own: `skakel-vcam` is the producer and the installer (the counterpart of `Skakel.VirtualCamera`),
 `skakel-vcam-source` is the DLL. The names keep the short `vcam`.

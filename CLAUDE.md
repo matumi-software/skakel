@@ -15,8 +15,8 @@ folder per solution or workspace.
 | Folder | What |
 |---|---|
 | `docs/` | The protocol (`protocol.md`), the parts and what each depends on (`parts.md`), the virtual camera's contract (`virtual-camera.md`) and decisions |
-| `src/Skakel/` | The .NET libraries: `Skakel.Protocol`, `Skakel.Discovery`, `Skakel.Pairing`, `Skakel.Serial`, `Skakel.Client`, `Skakel.Server` and `Skakel.VirtualCamera`, cut as `docs/parts.md` says, each with its tests under `src/` and `tests/`, and samples under `samples/`. The client's tests run against a real `Skakel.Server` on Kestrel. `Skakel.Discovery.Interop` is a small program the Rust discovery tests run to check both languages find each other |
-| `src/rust/` | The Rust workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-protocol`, `skakel-discovery`, `skakel-pairing`, `skakel-serial`, `skakel-client` (still empty), `skakel-server`, `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
+| `src/Skakel/` | The .NET libraries: `Skakel.Protocol`, `Skakel.Discovery`, `Skakel.Pairing`, `Skakel.Serial`, `Skakel.Client`, `Skakel.Server` and `Skakel.VirtualCamera`, cut as `docs/parts.md` says, each with its tests under `src/` and `tests/`, and samples under `samples/`. The client's tests run against a real `Skakel.Server` on Kestrel. `Skakel.Discovery.Interop` is a small program the Rust discovery tests run to check both languages find each other, Skakel.Client.Interop drives the .NET client against the Rust server, and Skakel.Server.Interop is a real .NET server the Rust client's tests start and drive |
+| `src/rust/` | The Rust workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-protocol`, `skakel-discovery`, `skakel-pairing`, `skakel-serial`, `skakel-client`, `skakel-server`, `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
 
 Build and test each side from its own folder:
 

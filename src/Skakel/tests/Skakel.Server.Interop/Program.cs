@@ -7,7 +7,7 @@ using Skakel.Server;
 // per line on stdin and answers each with one line on stdout, "OK <json>" or "ERR <message>", and
 // exits when stdin closes. A Rust test starts it, drives it, and lets go of its stdin.
 //
-//   start <store> [tcp] [udp]     starts a server on a free TCP port unless one is given, answering
+//   start <store> [tcp] [udp]     starts a server on a free TCP port unless one is given (0 is none), answering
 //                                 discovery on that UDP port when one is given. Servers started with the
 //                                 same store name share a certificate and clients, as one server
 //                                 restarted. {"id","port","fingerprint"}
@@ -89,7 +89,7 @@ async Task<object> StartAsync(string[] words)
         stores[words[1]] = store = new InMemorySkakelStore();
     }
 
-    int? tcp = words.Length > 2 ? Number(words[2]) : null;
+    int? tcp = words.Length > 2 && Number(words[2]) != 0 ? Number(words[2]) : null;
     int? udp = words.Length > 3 ? Number(words[3]) : null;
     var bench = await Bench.StartAsync(store, tcp, udp);
     var id = ++nextId;

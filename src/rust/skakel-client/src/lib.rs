@@ -53,7 +53,7 @@ pub use link::{HandlerError, Link, LinkState, LinkStatus, Subscription};
 pub use options::ClientOptions;
 pub use pairing::{MAX_WAIT, PairingClient, PairingError};
 pub use pins::{Credentials, InvalidFingerprint, Pins};
-pub use reqwest::Url;
+pub use reqwest::{Method, RequestBuilder, Response, Url};
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
 pub use streams::{
     Frame, OpenResult, StreamClose, StreamCloseReason, StreamConnection, StreamRefusal,
