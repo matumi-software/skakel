@@ -195,6 +195,40 @@ async fn a_request_that_is_not_grpc_goes_to_https_and_an_unknown_service_is_unim
     assert_eq!(unknown.code(), Code::Unimplemented);
 }
 
+/// `request` with its messages said to be compressed with `encoding`. They are not, so a server
+/// that took the encoding would fail to read them, not refuse the call.
+fn encoded<T>(mut request: tonic::Request<T>, encoding: &'static str) -> tonic::Request<T> {
+    request
+        .metadata_mut()
+        .insert("grpc-encoding", encoding.parse().unwrap());
+    request
+}
+
+#[tokio::test]
+async fn a_compressed_call_is_unimplemented_and_identity_is_taken() {
+    let server = start().await;
+    let (_, token) = client_with_token(&server, "bench-1").await;
+    let connection = grpc(&server).await;
+
+    let hello_gzip = control(&connection)
+        .hello(encoded(with_token(hello(), &token), "gzip"))
+        .await
+        .unwrap_err();
+    let (frames, rx) = tokio::sync::mpsc::channel::<OpenRequest>(1);
+    let stream_zstd = streams(&connection)
+        .open(encoded(with_token(ReceiverStream::new(rx), &token), "zstd"))
+        .await
+        .unwrap_err();
+    drop(frames);
+    let hello_identity = control(&connection)
+        .hello(encoded(with_token(hello(), &token), "identity"))
+        .await;
+
+    assert_eq!(hello_gzip.code(), Code::Unimplemented);
+    assert_eq!(stream_zstd.code(), Code::Unimplemented);
+    assert!(hello_identity.is_ok(), "{hello_identity:?}");
+}
+
 #[tokio::test]
 async fn every_connection_shows_the_certificate_because_no_session_is_resumed() {
     let server = start().await;
@@ -1006,6 +1040,19 @@ async fn a_frame_over_16_mib_ends_the_stream_with_resource_exhausted() {
     let mut stream = open_stream(&server, &token, "echo", b"a").await.unwrap();
 
     stream.send_data(vec![7u8; 16 * 1024 * 1024 + 1]).await;
+
+    let end = stream
+        .next_within(Duration::from_secs(30))
+        .await
+        .unwrap_err();
+    assert_eq!(end.code(), Code::ResourceExhausted);
+}
+
+#[tokio::test]
+async fn a_frame_over_16_mib_from_the_server_ends_the_stream_with_resource_exhausted() {
+    let server = start().await;
+    let (_, token) = client_with_token(&server, "bench-1").await;
+    let mut stream = open_stream(&server, &token, "echo", b"huge").await.unwrap();
 
     let end = stream
         .next_within(Duration::from_secs(30))

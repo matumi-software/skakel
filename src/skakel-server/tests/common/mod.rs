@@ -51,7 +51,8 @@ pub const NAME: &str = "rust-bench";
 /// `busy` `IN_USE`, `vanish` opens and ends at once with `TARGET_GONE`, `abort` opens and ends with
 /// a reason of its own, `slow` opens and does not read for two seconds, `late` takes a second to
 /// open, `sink` counts the data it gets and, once the client ends its side, sends the count as a
-/// control frame (eight bytes, big-endian), and anything else echoes what it receives.
+/// control frame (eight bytes, big-endian), `huge` opens and sends one data frame over the 16 MiB
+/// limit, and anything else echoes what it receives.
 pub fn echo_stream() -> StreamHandler {
     Arc::new(|request: StreamRequest| -> BoxFuture<'static, Opening> {
         Box::pin(async move {
@@ -76,6 +77,10 @@ pub fn echo_stream() -> StreamHandler {
                     Opening::accept(echo)
                 }
                 "sink" => Opening::accept(sink),
+                "huge" => Opening::accept(|session: StreamSession| async move {
+                    let _ = session.send_data(vec![7u8; 16 * 1024 * 1024 + 1]).await;
+                    session.ended().await;
+                }),
                 _ => Opening::accept(echo),
             }
         })

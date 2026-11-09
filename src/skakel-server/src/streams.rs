@@ -21,7 +21,9 @@ use axum::extract::ConnectInfo;
 use prost::bytes::Bytes;
 use skakel_proto::v2::stream_service_server::StreamService;
 use skakel_proto::v2::{OpenRequest, OpenResponse, StreamOpened, open_request, open_response};
-use skakel_protocol::{OPEN_TIMEOUT, Reason, is_reason, is_stream_type, stream_type_domain};
+use skakel_protocol::{
+    OPEN_TIMEOUT, Reason, STREAM_MESSAGE_LIMIT, is_reason, is_stream_type, stream_type_domain,
+};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::Stream;
 use tonic::{Code, Request, Response, Status, Streaming};
@@ -473,6 +475,20 @@ fn response(message: StreamMessage) -> OpenResponse {
     }
 }
 
+/// The frame for the client, or the status that ends the stream when the frame is over the limit.
+/// tonic would end the call with `OUT_OF_RANGE`; the protocol says `RESOURCE_EXHAUSTED`, as gRPC's
+/// other implementations do, so the limit is checked here, before tonic sees the frame.
+fn to_client(message: StreamMessage) -> Result<OpenResponse, Status> {
+    let response = response(message);
+    let size = prost::Message::encoded_len(&response);
+    if size > STREAM_MESSAGE_LIMIT {
+        return Err(Status::resource_exhausted(format!(
+            "The server's frame of {size} bytes is over the limit of {STREAM_MESSAGE_LIMIT} bytes."
+        )));
+    }
+    Ok(response)
+}
+
 impl Pump {
     /// Ends the call at once with `status`, before anything still queued.
     fn end_now(&mut self, status: Status) {
@@ -500,7 +516,7 @@ impl Pump {
                 },
                 outgoing = self.from_handler.recv(), if for_client.is_none() => match outgoing {
                     Some(Outgoing::Message(message)) => {
-                        for_client = Some(Ok(response(message)));
+                        for_client = Some(to_client(message));
                         Step::Go
                     }
                     Some(Outgoing::End(end)) => match end.status(&self.stream_type) {
