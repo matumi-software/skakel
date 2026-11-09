@@ -275,11 +275,19 @@ Everything on TCP runs over one TLS listener on the app's port, with the pinned 
   its HTTPS routes. The paths never meet either: a gRPC path is `/<package>.<Service>/<Method>`,
   such as `/skakel.v2.StreamService/Open`, and Skakel's HTTPS paths start with `/skakel/`.
 - **No compression.** Messages go uncompressed (`grpc-encoding` is `identity` or left out). A
-  server need accept no other encoding. USB and serial data rarely compress, and a small server
-  would spend more on compressing than the network saves.
+  server need accept no other encoding; the Rust server refuses a call in any other with
+  `UNIMPLEMENTED`. USB and serial data rarely compress, and a small server would spend more on
+  compressing than the network saves.
 - **Message limits.** A message on the control service is at most 1 MiB, and a frame on the stream
   service at most 16 MiB, both counted as encoded. A larger one ends the call with
-  `RESOURCE_EXHAUSTED`, as gRPC does.
+  `RESOURCE_EXHAUSTED`, as gRPC does. An app's own services set their own limits, and on those the
+  Rust server leaves tonic's answer as it is: a message over the limit ends the call with
+  `OUT_OF_RANGE`. tonic gives the code `OUT_OF_RANGE` to a message over the limit, and a service
+  may answer the same code for reasons of its own, such as a page past the end of a list. Only the
+  words of tonic's message tell the two apart, so remapping an app's statuses would mean matching
+  on text tonic does not promise to keep, and could rewrite a status the app meant. Skakel's own
+  services never answer `OUT_OF_RANGE`, so for them the server checks the limit itself or remaps
+  the code.
 - **Keep-alive.** On every connection that carries gRPC, each end sends an HTTP/2 PING once it has
   heard nothing from the other for 15 seconds, and an end that has heard nothing from the other for
   30 seconds, no PING answer and no other frame, takes the connection for dead and closes it. A
@@ -319,8 +327,25 @@ without knowing the type.
 
 A status with no Skakel `ErrorInfo` is gRPC's own: `UNAVAILABLE` or `CANCELLED` from a connection
 that dropped or stopped answering pings is a lost connection, `UNIMPLEMENTED` is a call the server
-does not serve, and `RESOURCE_EXHAUSTED` is a message over the limit. An app's own services use
-their own domain, never `skakel`.
+does not serve, and `RESOURCE_EXHAUSTED` is a message over the limit (`OUT_OF_RANGE` on an app's
+own service, see "One port for HTTPS and gRPC"). An app's own services use their own domain, never
+`skakel`.
+
+**A call the client has stopped reading.** When the server ends a running call with `REVOKED`,
+`ROTATED` or `STOPPING`, the status goes out after the messages it already sent on that call. Those
+wait for the client's flow-control window, and HTTP/2 sends nothing after them on the call until
+they have gone, so a client that has stopped reading a call learns that it ended only when it reads
+again: the messages first, the status last. The server does not wait for that. It sends nothing
+more on the call, a stream's handler is told at once and nothing more of the stream is read, and a
+revoked or rotated client can start no new call with its old credentials. What stays is the data
+already on its way, until the client reads or the connection closes; when the server stops, its
+connections close a few seconds later anyway. The server does not reset
+the call or close the connection to tell the client sooner: both would lose the reason, so the
+client would see a lost connection instead of `REVOKED`, and closing would end every other call on
+the connection too. A client hears the reason at once on its control call, which it always reads.
+In some HTTP/2 implementations, the Rust one (`h2`) among them, unread messages hold the
+connection's window as well as the call's, which is one more reason streams run on connections of
+their own and a client reads or drops each call it makes on the control connection.
 
 ## Control channel
 
