@@ -9,9 +9,8 @@ be generated. This file says what the messages mean and how the two ends behave.
 
 Version 1 (Skakel 0.1.0) had a SignalR hub and WebSocket streams; version 2 keeps its discovery,
 info, pairing, tokens and certificate handover, and moves the hub and the streams to gRPC. The two
-do not talk to each other (see "Changes from version 1"). In this repository the server speaks
-version 2 and the client still speaks version 1 until it moves; version 1's text is this file at
-commit `aa0399b`.
+do not talk to each other (see "Changes from version 1"). The server and the client crates in this
+repository speak version 2; version 1's text is this file at commit `aa0399b`.
 
 ## Roles
 

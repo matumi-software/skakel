@@ -1,4 +1,5 @@
-//! The JSON bodies the protocol defines outside pairing: info, hello and a refusal's problem body.
+//! The JSON bodies the protocol defines outside pairing, info and a refusal's problem body, and what
+//! `ControlService.Hello` answers.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +23,8 @@ pub struct SkakelInfo {
     pub versions: Vec<i32>,
 }
 
-/// What `GET /skakel/v1/hello` answers to a token that works.
+/// What `ControlService.Hello` answers to a token that works: who the server is and whom the token
+/// belongs to. Written as JSON in camelCase for an app that passes it on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkakelHello {

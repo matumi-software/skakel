@@ -5,29 +5,16 @@
 //! Discovery, the pairing code and the serial messages are their own crates, and the code generated
 //! from the `.proto` files is `skakel-proto`; see `docs/parts.md`.
 //!
-//! The hub's messages, the close codes and the hello and streams paths are version 1's. The client
-//! still uses them until it moves to version 2 (issue #34), which removes them.
-//!
 //! # JSON
 //!
 //! Every body and message is UTF-8 JSON with camelCase names, written by serde, and read
 //! exactly as written. An absent optional field is written as `null`, and read either way.
 
-mod close_codes;
 mod contracts;
 pub mod fingerprints;
-mod hub;
 mod reasons;
 
-pub use close_codes::{
-    CLOSE_FIRST_TYPE_DEFINED, CLOSE_LAST_TYPE_DEFINED, CLOSE_NORMAL, CLOSE_REVOKED, CLOSE_ROTATED,
-    CLOSE_STOPPING, CLOSE_TARGET_GONE, close_code_for,
-};
 pub use contracts::{SkakelApp, SkakelHello, SkakelInfo, SkakelProblem};
-pub use hub::{
-    CLOSING_REVOKED, CLOSING_ROTATED, CLOSING_STOPPING, HUB_CERTIFICATES, HUB_CLOSING,
-    HUB_NEXT_CERTIFICATE_RECEIVED, HUB_PREFIX, SkakelCertificates, SkakelClosing,
-};
 pub use reasons::{
     ERROR_DOMAIN, MAX_REASON_LENGTH, Reason, STREAM_TYPE_CODE, STREAM_TYPE_DOMAIN_PREFIX,
     is_reason, stream_type_domain,
@@ -52,12 +39,6 @@ pub const PAIR_PATH: &str = "/skakel/v2/pair";
 
 /// OAuth 2.0 client credentials: `POST`.
 pub const TOKEN_PATH: &str = "/skakel/v2/token";
-
-/// Version 1's credentials check, `GET` with a token. Version 2 has `ControlService.Hello`.
-pub const HELLO_PATH: &str = "/skakel/v1/hello";
-
-/// Version 1's streams opened at `{STREAMS_PATH}/{type}`. Version 2 has `StreamService.Open`.
-pub const STREAMS_PATH: &str = "/skakel/v1/streams";
 
 /// The header that carries a pairing request's poll token.
 pub const PAIR_TOKEN_HEADER: &str = "X-Pair-Token";

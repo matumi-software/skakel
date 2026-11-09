@@ -1,15 +1,15 @@
-//! A link against a real server: connecting, the app's own hub messages, requests, and every
-//! way it fails.
+//! A link against a real server: connecting, the app's own gRPC calls over the control channel's
+//! connection, HTTPS requests, and every way it fails.
 
 mod common;
 
 use std::time::Duration;
 
+use common::greeter::{self, GreetRequest, WatchRequest};
 use common::{Recorder, free_tcp, within};
-use serde_json::json;
+use skakel_client::tonic::{Code, Request};
 use skakel_client::{
-    ClientOptions, Credentials, FailureKind, InvokeError, Link, LinkState, LinkStatus, Method,
-    Pins, Url,
+    ClientOptions, Credentials, FailureKind, Link, LinkState, LinkStatus, Method, Pins, Url,
 };
 
 pub fn record_status(link: &Link) -> Recorder<LinkStatus> {
@@ -38,8 +38,12 @@ async fn linked(bench: &mut common::Bench, server: &common::Server) -> (Link, Cr
     (link, credentials)
 }
 
+fn greeting(text: &str) -> Request<GreetRequest> {
+    Request::new(GreetRequest { text: text.into() })
+}
+
 #[tokio::test]
-async fn start_connects_the_hub() {
+async fn start_connects_the_control_channel() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, credentials) = linked(&mut bench, &server).await;
@@ -59,46 +63,31 @@ async fn start_connects_the_hub() {
 }
 
 #[tokio::test]
-async fn on_and_invoke_carry_the_apps_own_messages() {
+async fn the_apps_own_service_runs_over_the_links_channel_with_its_token() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, credentials) = linked(&mut bench, &server).await;
-    let greetings: Recorder<String> = Recorder::new();
-    let to = greetings.clone();
-    let _handling = link.on("Greeted", move |arguments| {
-        let to = to.clone();
-        async move { to.record(arguments[0].as_str().unwrap().to_owned()) }
-    });
     let statuses = record_status(&link);
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
 
-    assert_eq!(
-        link.invoke("Greet", vec![json!("hello")]).await.unwrap(),
-        json!(null)
-    );
+    let reply = greeter::greet(link.channel(), greeting("hello"))
+        .await
+        .unwrap();
+    let mut events = greeter::watch(link.channel(), Request::new(WatchRequest {}))
+        .await
+        .unwrap();
 
+    assert_eq!(reply.text, format!("{}: hello", credentials.client_id));
     assert_eq!(
-        greetings.wait(|_| true).await,
-        format!("{}: hello", credentials.client_id)
+        events.message().await.unwrap().unwrap().text,
+        format!("watching for {}", credentials.client_id)
     );
-    assert_eq!(
-        link.invoke("Echo", vec![json!("echo")]).await.unwrap(),
-        json!("echo")
-    );
-    assert_eq!(
-        link.invoke_as::<String>("Echo", vec![json!("typed")])
-            .await
-            .unwrap(),
-        "typed"
-    );
-    link.send("Greet", vec![json!("sent")]).await.unwrap();
-    greetings.wait(|g| g.ends_with(": sent")).await;
     link.stop().await;
 }
 
 #[tokio::test]
-async fn a_hub_method_that_does_not_exist_is_the_servers_error() {
+async fn an_app_call_the_server_does_not_serve_is_unimplemented() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, _) = linked(&mut bench, &server).await;
@@ -106,63 +95,61 @@ async fn a_hub_method_that_does_not_exist_is_the_servers_error() {
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
 
-    let error = link.invoke("NoSuchMethod", vec![]).await.unwrap_err();
+    let mut grpc = skakel_client::tonic::client::Grpc::new(link.channel());
+    grpc.ready().await.unwrap();
+    let error = grpc
+        .unary(
+            greeting("hello"),
+            skakel_client::tonic::codegen::http::uri::PathAndQuery::from_static(
+                "/test.app.v1.Greeter/NoSuchMethod",
+            ),
+            tonic_prost::ProstCodec::<GreetRequest, greeter::GreetReply>::default(),
+        )
+        .await
+        .unwrap_err();
 
-    assert!(
-        matches!(&error, InvokeError::Server(text) if text.contains("NoSuchMethod")),
-        "{error:?}"
-    );
+    assert_eq!(error.code(), Code::Unimplemented);
     link.stop().await;
 }
 
 #[tokio::test]
-async fn a_handler_that_is_dropped_stops_hearing_the_message() {
+async fn an_app_call_that_is_dropped_ends_on_the_server() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
-    let (link, _) = linked(&mut bench, &server).await;
-    let heard: Recorder<String> = Recorder::new();
-    let to = heard.clone();
-    let handling = link.on("Greeted", move |arguments| {
-        let to = to.clone();
-        async move { to.record(arguments[0].as_str().unwrap().to_owned()) }
-    });
+    let (link, credentials) = linked(&mut bench, &server).await;
     let statuses = record_status(&link);
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
-    link.invoke("Greet", vec![json!("one")]).await.unwrap();
-    heard.wait(|_| true).await;
+    let mut events = greeter::watch(link.channel(), Request::new(WatchRequest {}))
+        .await
+        .unwrap();
+    events.message().await.unwrap();
+    // The control call and the app's call.
+    assert_eq!(bench.open_sessions(&server, &credentials.client_id), 2);
 
-    drop(handling);
-    link.invoke("Greet", vec![json!("two")]).await.unwrap();
-    // The hub runs a connection's messages in order: a call after the greeting has been through.
-    link.invoke("Echo", vec![json!("x")]).await.unwrap();
+    drop(events);
 
-    assert_eq!(heard.seen().len(), 1);
+    within(Duration::from_secs(10), async {
+        while bench.open_sessions(&server, &credentials.client_id) != 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
     link.stop().await;
 }
 
 #[tokio::test]
-#[should_panic(expected = "Skakel's own")]
-async fn on_refuses_a_name_that_is_skakels_own() {
+async fn the_channel_is_unavailable_before_the_link_is_connected() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, _) = linked(&mut bench, &server).await;
 
-    let _ = link.on("SkakelSomething", |_| async {});
-}
+    let error = greeter::greet(link.channel(), greeting("x"))
+        .await
+        .unwrap_err();
 
-#[tokio::test]
-async fn invoke_says_not_connected_before_the_link_is() {
-    let mut bench = common::Bench::new();
-    let server = bench.server().await;
-    let (link, _) = linked(&mut bench, &server).await;
-
-    let error = link.invoke("Echo", vec![json!("x")]).await.unwrap_err();
-
-    assert!(
-        matches!(&error, InvokeError::Failed(e) if e.kind() == FailureKind::NotConnected),
-        "{error:?}"
-    );
+    assert_eq!(error.code(), Code::Unavailable);
+    assert_eq!(error.message(), "Not connected to the server.");
 }
 
 #[tokio::test]
@@ -241,7 +228,7 @@ async fn a_closed_port_is_unreachable() {
 
 #[tokio::test]
 async fn a_server_of_another_version_is_a_version_mismatch() {
-    let server = common::OtherVersion::start(&[2]).await;
+    let server = common::OtherVersion::start(&[1]).await;
     let link = Link::new(
         &server.address(),
         server.pins(),
@@ -261,21 +248,28 @@ async fn a_server_of_another_version_is_a_version_mismatch() {
     assert_eq!(failure.kind(), FailureKind::VersionMismatch);
     assert_eq!(
         failure.message(),
-        "This server speaks Skakel 2 and this app speaks Skakel 1. Update the app."
+        "This server speaks Skakel 1 and this app speaks Skakel 2. Update the server."
     );
     link.stop().await;
 }
 
 #[tokio::test]
-async fn revoking_the_client_closes_the_link_for_good() {
+async fn revoking_the_client_closes_the_link_for_good_and_ends_the_apps_calls() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, credentials) = linked(&mut bench, &server).await;
     let statuses = record_status(&link);
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
+    let mut events = greeter::watch(link.channel(), Request::new(WatchRequest {}))
+        .await
+        .unwrap();
+    events.message().await.unwrap();
 
     assert!(bench.revoke(&server, &credentials.client_id).await);
+
+    let ended = events.message().await.unwrap_err();
+    assert_eq!(ended.code(), Code::Unauthenticated);
 
     let closed = statuses.wait(|s| s.state == LinkState::Closed).await;
     let failure = closed.failure.unwrap();
@@ -311,9 +305,6 @@ async fn a_server_that_ends_every_connection_is_connected_to_again() {
     let statuses = record_status(&link);
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
-    // The server tracks the connection once its own handling of it started; a call that came back
-    // has been through that.
-    link.invoke("Echo", vec![json!("x")]).await.unwrap();
 
     bench.end_all(&server).await;
 
@@ -327,7 +318,7 @@ async fn a_server_that_ends_every_connection_is_connected_to_again() {
 }
 
 #[tokio::test]
-async fn stop_closes_the_hub_and_says_so() {
+async fn stop_closes_the_control_channel_and_says_so() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, _) = linked(&mut bench, &server).await;
@@ -339,9 +330,11 @@ async fn stop_closes_the_hub_and_says_so() {
 
     assert_eq!(link.status().state, LinkState::Stopped);
     assert_eq!(statuses.seen().last().unwrap().state, LinkState::Stopped);
-    // And the hub is not there for a call.
-    let error = link.invoke("Echo", vec![json!("x")]).await.unwrap_err();
-    assert!(matches!(&error, InvokeError::Failed(e) if e.kind() == FailureKind::NotConnected));
+    // And the connection is not there for a call.
+    let error = greeter::greet(link.channel(), greeting("x"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::Unavailable);
 }
 
 #[tokio::test]
@@ -362,11 +355,12 @@ async fn a_link_that_was_stopped_can_start_again() {
         }
     })
     .await;
-    assert_eq!(
-        link.invoke_as::<String>("Echo", vec![json!("again")])
+    assert!(
+        greeter::greet(link.channel(), greeting("again"))
             .await
-            .unwrap(),
-        "again"
+            .unwrap()
+            .text
+            .ends_with(": again")
     );
     link.stop().await;
 }
@@ -378,18 +372,12 @@ async fn request_sends_the_token_over_the_pinned_connection() {
     let (link, credentials) = linked(&mut bench, &server).await;
 
     let response = link
-        .request(Method::GET, "/skakel/v1/hello", |r| r)
+        .request(Method::GET, "/app/whoami", |r| r)
         .await
         .unwrap();
 
     assert!(response.status().is_success());
-    assert!(
-        response
-            .text()
-            .await
-            .unwrap()
-            .contains(&credentials.client_id)
-    );
+    assert_eq!(response.text().await.unwrap(), credentials.client_id);
 }
 
 #[tokio::test]

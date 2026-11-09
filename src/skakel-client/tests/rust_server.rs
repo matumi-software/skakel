@@ -1,6 +1,7 @@
 //! The Rust client against the Rust server (`skakel-server`, in this process, on loopback): the
-//! second criterion of issue #22. Discovery, info, pairing, the hub, streams, the serial stream, a
-//! revoke and a certificate handover, with the server's own API standing in for the app.
+//! second criterion of issue #22, on protocol version 2. Discovery, info, pairing, the control
+//! channel and the app's own gRPC service, streams, the serial stream, a revoke and a certificate
+//! handover, with the server's own API standing in for the app.
 
 mod common;
 
@@ -8,44 +9,24 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::greeter::{self, GreetRequest};
 use common::{Recorder, within};
-use serde_json::{Value, json};
+use skakel_client::tonic::{Code, Request};
 use skakel_client::{
-    Browser, BrowserOptions, ClientOptions, FailureKind, Frame, LineSettings, Link, LinkState,
-    LinkStatus, OpenResult, PairingClient, Pins, StreamCloseReason, Url, read_info,
+    Browser, BrowserOptions, Bytes, ClientOptions, FailureKind, Frame, LineSettings, Link,
+    LinkState, LinkStatus, OpenResult, PairingClient, Pins, StreamCloseReason, Url, read_info,
 };
 use skakel_server::{
-    BoxFuture, HubCall, HubError, HubHandler, InMemoryStore, SkakelServer, SkakelServerBuilder,
-    StreamHandler, StreamMessage, StreamOpen, StreamRequest, StreamSession,
+    BoxFuture, InMemoryStore, SkakelServer, SkakelServerBuilder, StreamHandler, StreamMessage,
+    StreamOpen, StreamRequest, StreamSession,
 };
-
-struct TestHub;
-
-impl HubHandler for TestHub {
-    fn invoke(&self, call: HubCall) -> BoxFuture<'_, Result<Option<Value>, HubError>> {
-        Box::pin(async move {
-            let text = call.arguments.first().and_then(Value::as_str).unwrap_or("");
-            match call.target.as_str() {
-                "Greet" => {
-                    call.connection.send(
-                        "Greeted",
-                        vec![json!(format!("{}: {}", call.connection.client_id, text))],
-                    )?;
-                    Ok(None)
-                }
-                "Echo" => Ok(Some(json!(text))),
-                _ => Err(HubError::new("Method does not exist.")),
-            }
-        })
-    }
-}
 
 fn echo() -> StreamHandler {
     Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
         Box::pin(async move {
-            match request.query_value("target").unwrap_or("") {
-                "" => StreamOpen::Invalid("Say which target, as ?target=<name>.".into()),
-                "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
+            match &request.target[..] {
+                b"" => StreamOpen::BadTarget("Say which target.".into()),
+                b"busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
                 _ => StreamOpen::accept(|mut session: StreamSession| async move {
                     while let Some(message) = session.recv().await {
                         if session.send(message).await.is_err() {
@@ -61,7 +42,7 @@ fn echo() -> StreamHandler {
 fn serial() -> StreamHandler {
     Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
         Box::pin(async move {
-            if request.query_value("port") != Some("COM1") {
+            if skakel_serial::port_of(&request.target).as_deref() != Some("COM1") {
                 return StreamOpen::NotFound("There is no such port.".into());
             }
             StreamOpen::accept(|mut session: StreamSession| async move {
@@ -81,23 +62,23 @@ fn serial() -> StreamHandler {
                         ri: false,
                     },
                 };
-                if session.send_text(opened.to_json()).await.is_err() {
+                if session.send_control(opened.encode()).await.is_err() {
                     return;
                 }
                 while let Some(message) = session.recv().await {
                     match message {
-                        StreamMessage::Binary(data) => {
-                            if session.send_binary(data).await.is_err() {
+                        StreamMessage::Data(data) => {
+                            if session.send_data(data).await.is_err() {
                                 return;
                             }
                         }
-                        StreamMessage::Text(text) => {
-                            if let Some(skakel_serial::ClientMessage::LineSettings(change)) =
-                                skakel_serial::ClientMessage::parse(&text)
+                        StreamMessage::Control(control) => {
+                            if let Ok(skakel_serial::ClientMessage::LineSettings(change)) =
+                                skakel_serial::ClientMessage::decode(&control)
                             {
                                 settings = change;
                                 let answer = skakel_serial::ServerMessage::LineSettings(settings);
-                                if session.send_text(answer.to_json()).await.is_err() {
+                                if session.send_control(answer.encode()).await.is_err() {
                                     return;
                                 }
                             }
@@ -115,7 +96,7 @@ async fn start() -> SkakelServer {
         .listen("127.0.0.1:0".parse().unwrap())
         .discovery_bind("127.0.0.1".parse().unwrap())
         .discovery_port(0)
-        .hub("hub", TestHub)
+        .grpc_service(greeter::Greeter)
         .stream("echo", echo())
         .stream("serial", serial())
         .start()
@@ -189,7 +170,7 @@ async fn the_browser_finds_the_server_and_info_reads_what_it_says() {
             info.app.id.as_str(),
             info.versions.as_slice()
         ),
-        ("rust-bench", "test-app", [1].as_slice())
+        ("rust-bench", "test-app", [2].as_slice())
     );
 }
 
@@ -230,30 +211,22 @@ async fn pairing_hands_over_credentials_the_server_accepts() {
 }
 
 #[tokio::test]
-async fn the_hub_carries_the_apps_messages_and_a_revoke_ends_the_link() {
+async fn the_control_channel_carries_the_apps_calls_and_a_revoke_ends_the_link() {
     let server = start().await;
     let (link, credentials) = linked(&server).await;
-    let greetings: Recorder<String> = Recorder::new();
-    let to = greetings.clone();
-    let _handling = link.on("Greeted", move |args| {
-        let to = to.clone();
-        async move { to.record(args[0].as_str().unwrap().to_owned()) }
-    });
     let statuses = record_status(&link);
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
 
-    link.invoke("Greet", vec![json!("hello")]).await.unwrap();
-    assert_eq!(
-        greetings.wait(|_| true).await,
-        format!("{}: hello", credentials.client_id)
-    );
-    assert_eq!(
-        link.invoke_as::<String>("Echo", vec![json!("echo")])
-            .await
-            .unwrap(),
-        "echo"
-    );
+    let reply = greeter::greet(
+        link.channel(),
+        Request::new(GreetRequest {
+            text: "hello".into(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply.text, format!("{}: hello", credentials.client_id));
 
     server
         .clients()
@@ -271,29 +244,29 @@ async fn streams_and_the_serial_stream_work() {
     let (link, _) = linked(&server).await;
 
     let stream = link
-        .open_stream("echo", &[("target", "a")])
+        .open_stream("echo", b"a")
         .await
         .unwrap()
         .stream()
         .unwrap();
-    stream.send_binary(b"ping".to_vec()).await.unwrap();
-    assert_eq!(stream.recv().await, Some(Frame::Binary(b"ping".to_vec())));
+    stream.send_data(&b"ping"[..]).await.unwrap();
+    assert_eq!(
+        stream.recv().await,
+        Some(Frame::Data(Bytes::from_static(b"ping")))
+    );
     stream.close().await;
     assert_eq!(
         stream.close_info().unwrap().reason,
         StreamCloseReason::Normal
     );
 
-    let busy = link
-        .open_stream("echo", &[("target", "busy")])
-        .await
-        .unwrap();
+    let busy = link.open_stream("echo", b"busy").await.unwrap();
     assert_eq!(
-        busy.refusal().map(|r| (r.status, r.message.as_str())),
-        Some((409, "bench-2 holds busy."))
+        busy.refusal().map(|r| (r.code, r.message.as_str())),
+        Some((Code::FailedPrecondition, "bench-2 holds busy."))
     );
     let refused = link.open_serial("COM9").await.unwrap();
-    assert!(matches!(refused, OpenResult::Refused(r) if r.status == 404));
+    assert!(matches!(refused, OpenResult::Refused(r) if r.code == Code::NotFound));
 
     let port = link.open_serial("COM1").await.unwrap().stream().unwrap();
     assert_eq!(port.line_settings().baud, 9600);
@@ -326,7 +299,6 @@ async fn a_certificate_handover_is_learned_and_a_new_connection_shows_the_new_ce
     let statuses = record_status(&link);
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
-    link.invoke("Echo", vec![json!("x")]).await.unwrap();
     let current = server.fingerprint();
 
     let next = server

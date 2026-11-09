@@ -1,8 +1,13 @@
 //! What the integration tests share: a bench of real Skakel servers (`skakel-server`, in this
-//! process, on loopback), wired the way an app wires one, with a test hub, a test stream type and
-//! a pretend serial port. Everything is on loopback.
+//! process, on loopback), wired the way an app wires one, with the app's own gRPC service and HTTPS
+//! route, a test stream type, one that never answers, and a pretend serial port. Everything is on
+//! loopback.
 
 #![allow(dead_code)]
+
+/// The app's own gRPC service, shared with the server's tests.
+#[path = "../../../skakel-server/tests/common/greeter.rs"]
+pub mod greeter;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -13,12 +18,12 @@ use std::time::{Duration, SystemTime};
 
 use axum::Router;
 use axum::routing::get;
-use serde_json::{Value, json};
+use serde_json::json;
 use skakel_client::{Clock, Credentials, Pins, Sleep, Url};
 use skakel_serial::{ClientMessage, ErrorCode, LineSettings, ModemStatus, ServerMessage};
 use skakel_server::{
-    Approval, BoxFuture, CertificateSwitch, HubCall, HubError, HubHandler, InMemoryStore,
-    SkakelServer, SkakelServerBuilder, StreamHandler, StreamMessage, StreamOpen, StreamRequest,
+    Approval, BoxFuture, CertificateSwitch, ClientPrincipal, InMemoryStore, SkakelServer,
+    SkakelServerBuilder, StreamEnd, StreamHandler, StreamMessage, StreamOpen, StreamRequest,
     StreamSession,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -69,6 +74,28 @@ impl Bench {
         self.server_in("state-0", None, None).await
     }
 
+    /// A server whose tokens last `lifetime`, so the control calls they open end soon.
+    pub async fn server_with_token_lifetime(&mut self, lifetime: Duration) -> Server {
+        let state = Arc::new(InMemoryStore::new());
+        self.stores.insert("short-tokens".to_owned(), state.clone());
+        let server = start_with(state, 0, None, Some(lifetime)).await;
+        self.next_id += 1;
+        let started = Server {
+            id: self.next_id,
+            port: server.local_addr().port(),
+            fingerprint: server.fingerprint(),
+        };
+        self.servers.insert(
+            started.id,
+            Running {
+                server,
+                store: "short-tokens".to_owned(),
+                udp: None,
+            },
+        );
+        started
+    }
+
     /// A server that answers discovery on the UDP port.
     pub async fn server_with_discovery(&mut self, udp: u16) -> Server {
         self.server_in("state-0", None, Some(udp)).await
@@ -114,8 +141,8 @@ impl Bench {
         }
     }
 
-    /// Ends every hub connection and stream as a stopping server does, and starts the server
-    /// again in the same state on the same port, so a link can connect again.
+    /// Ends every call as a stopping server does, and starts the server again in the same state on
+    /// the same port, so a link can connect again.
     pub async fn end_all(&mut self, server: &Server) {
         let running = self.servers.remove(&server.id).expect("the server runs");
         let state = self.stores[&running.store].clone();
@@ -209,6 +236,11 @@ impl Bench {
     }
 
     /// The server's clients, as (id, name, has a next certificate).
+    /// How many calls that stay open the client has running on the server.
+    pub fn open_sessions(&self, server: &Server, client: &str) -> usize {
+        self.running(server).open_sessions(client)
+    }
+
     pub async fn clients(&mut self, server: &Server) -> Vec<(String, String, bool)> {
         self.running(server)
             .clients()
@@ -220,18 +252,29 @@ impl Bench {
 }
 
 async fn start(store: Arc<InMemoryStore>, tcp: u16, udp: Option<u16>) -> SkakelServer {
+    start_with(store, tcp, udp, None).await
+}
+
+async fn start_with(
+    store: Arc<InMemoryStore>,
+    tcp: u16,
+    udp: Option<u16>,
+    token_lifetime: Option<Duration>,
+) -> SkakelServer {
     let mut builder = SkakelServerBuilder::new("test-app", "1.2.3", store)
         .name("bench")
         .listen(SocketAddr::from(([127, 0, 0, 1], tcp)))
         .discovery(udp.is_some())
-        .hub("hub", TestHub)
+        .grpc_service(greeter::Greeter)
         .stream("echo", echo())
         .stream("serial", pretend_serial())
-        // A stream type whose server never answers the upgrade.
-        .routes(Router::new().route(
-            &format!("{}/stall", skakel_protocol::STREAMS_PATH),
-            get(std::future::pending::<()>),
-        ));
+        // A stream type whose server never answers the open.
+        .stream("stall", Arc::new(|_| Box::pin(std::future::pending())))
+        // The app's own HTTPS endpoint, which takes the same token.
+        .routes(Router::new().route("/app/whoami", get(whoami)));
+    if let Some(lifetime) = token_lifetime {
+        builder = builder.token_lifetime(lifetime);
+    }
     if let Some(udp) = udp {
         builder = builder
             .discovery_bind("127.0.0.1".parse().unwrap())
@@ -240,42 +283,33 @@ async fn start(store: Arc<InMemoryStore>, tcp: u16, udp: Option<u16>) -> SkakelS
     builder.start().await.expect("the server starts")
 }
 
-/// An app's hub, as small as one gets.
-struct TestHub;
-
-impl HubHandler for TestHub {
-    fn invoke(&self, call: HubCall) -> BoxFuture<'_, Result<Option<Value>, HubError>> {
-        Box::pin(async move {
-            let text = call.arguments.first().and_then(Value::as_str).unwrap_or("");
-            match call.target.as_str() {
-                "Greet" => {
-                    call.connection.send(
-                        "Greeted",
-                        vec![json!(format!("{}: {}", call.connection.client_id, text))],
-                    )?;
-                    Ok(None)
-                }
-                "Echo" => Ok(Some(json!(text))),
-                "Connection" => Ok(Some(json!(call.connection.connection_id))),
-                other => Err(HubError::new(format!("There is no method {other}."))),
-            }
-        })
-    }
+/// The app's own HTTPS endpoint: who the token belongs to.
+async fn whoami(ClientPrincipal(principal): ClientPrincipal) -> String {
+    principal.client_id
 }
 
-/// The test stream type. The query names a target: none is 422, `missing` 404, `busy` 409,
-/// `vanish` opens and closes at once with 4004, anything else echoes what it receives.
+/// The test stream type. The target is text: none is `BAD_TARGET`, `missing` `NO_SUCH_TARGET`,
+/// `busy` `IN_USE`, `vanish` opens and ends at once with `TARGET_GONE`, `sink` counts the data it
+/// gets and, once the client ends its side, sends the count as a control frame (eight bytes,
+/// big-endian), anything else echoes what it receives.
 fn echo() -> StreamHandler {
     Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
         Box::pin(async move {
-            match request.query_value("target").unwrap_or("") {
-                "" => StreamOpen::Invalid("Say which target, as ?target=<name>.".into()),
+            match std::str::from_utf8(&request.target).unwrap_or("") {
+                "" => StreamOpen::BadTarget("Say which target.".into()),
                 "missing" => StreamOpen::NotFound("There is no target called missing.".into()),
                 "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
                 "vanish" => StreamOpen::accept(|session: StreamSession| async move {
-                    session
-                        .close(skakel_protocol::CLOSE_TARGET_GONE, "unplugged")
-                        .await;
+                    session.end(StreamEnd::target_gone("unplugged")).await;
+                }),
+                "sink" => StreamOpen::accept(|mut session: StreamSession| async move {
+                    let mut total = 0u64;
+                    while let Some(message) = session.recv().await {
+                        if let StreamMessage::Data(data) = message {
+                            total += data.len() as u64;
+                        }
+                    }
+                    let _ = session.send_control(total.to_be_bytes().to_vec()).await;
                 }),
                 _ => StreamOpen::accept(|mut session: StreamSession| async move {
                     while let Some(message) = session.recv().await {
@@ -290,21 +324,21 @@ fn echo() -> StreamHandler {
 }
 
 /// A rate the pretend port cannot do.
-pub const UNSUPPORTED_BAUD: i32 = 12_345;
+pub const UNSUPPORTED_BAUD: u32 = 12_345;
 /// A change to this rate is never answered.
-pub const SILENT_BAUD: i32 = 54_321;
+pub const SILENT_BAUD: u32 = 54_321;
 /// A change to this rate is answered after a second.
-pub const SLOW_BAUD: i32 = 4800;
+pub const SLOW_BAUD: u32 = 4800;
 
 /// A serial port as an app would serve it, with the port played by a loopback: bytes sent come
-/// back. `COM1` opens; `fault` opens and then reports a fault (4100); `busy` is 409; no port is
-/// 422; anything else 404. Setting DTR raises DSR and DCD.
+/// back. `COM1` opens; `fault` opens and then reports a fault (`PORT_FAULT`); `busy` is `IN_USE`;
+/// no port is `BAD_TARGET`; anything else `NO_SUCH_TARGET`. Setting DTR raises DSR and DCD.
 fn pretend_serial() -> StreamHandler {
     Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
         Box::pin(async move {
-            let port = request.query_value("port").unwrap_or("").to_owned();
+            let port = skakel_serial::port_of(&request.target).unwrap_or_default();
             match port.as_str() {
-                "" => StreamOpen::Invalid("Say which port, as ?port=<id>.".into()),
+                "" => StreamOpen::BadTarget("Say which port.".into()),
                 "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
                 "COM1" | "fault" => {
                     StreamOpen::accept(move |session| run_serial(session, port == "fault"))
@@ -332,27 +366,27 @@ async fn run_serial(mut session: StreamSession, fault: bool) {
             ri: false,
         },
     };
-    if session.send_text(opened.to_json()).await.is_err() {
+    if session.send_control(opened.encode()).await.is_err() {
         return;
     }
     if fault {
         session
-            .close(
-                skakel_serial::CLOSE_PORT_FAULT,
-                "The port reported a fault.",
+            .end(
+                StreamEnd::aborted(skakel_serial::PORT_FAULT, "The port reported a fault.")
+                    .unwrap(),
             )
             .await;
         return;
     }
     while let Some(message) = session.recv().await {
         let answer = match message {
-            StreamMessage::Binary(data) => {
-                if session.send_binary(data).await.is_err() {
+            StreamMessage::Data(data) => {
+                if session.send_data(data).await.is_err() {
                     return;
                 }
                 continue;
             }
-            StreamMessage::Text(text) => match ClientMessage::parse(&text) {
+            StreamMessage::Control(control) => match ClientMessage::decode(&control).ok() {
                 Some(ClientMessage::LineSettings(change)) if change.baud == UNSUPPORTED_BAUD => {
                     Some(ServerMessage::Error {
                         code: ErrorCode::Unsupported,
@@ -379,7 +413,7 @@ async fn run_serial(mut session: StreamSession, fault: bool) {
             },
         };
         if let Some(answer) = answer
-            && session.send_text(answer.to_json()).await.is_err()
+            && session.send_control(answer.encode()).await.is_err()
         {
             return;
         }
@@ -672,4 +706,49 @@ pub async fn within<T>(timeout: Duration, body: impl Future<Output = T>) -> T {
     tokio::time::timeout(timeout, body)
         .await
         .unwrap_or_else(|_| panic!("did not finish within {timeout:?}"))
+}
+
+/// A TCP proxy on loopback in front of a server, which counts the connections made through it.
+/// TLS passes through untouched, so the server's certificate is what the client sees.
+pub struct CountingProxy {
+    pub port: u16,
+    count: Arc<AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl CountingProxy {
+    pub async fn start(to: u16) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let count = Arc::new(AtomicUsize::new(0));
+        let counted = count.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let Ok(mut outbound) = tokio::net::TcpStream::connect(("127.0.0.1", to)).await
+                    else {
+                        return;
+                    };
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                });
+            }
+        });
+        Self { port, count, task }
+    }
+
+    pub fn address(&self) -> Url {
+        Url::parse(&format!("https://127.0.0.1:{}/", self.port)).unwrap()
+    }
+
+    /// How many connections were made through it so far.
+    pub fn connections(&self) -> usize {
+        self.count.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for CountingProxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }

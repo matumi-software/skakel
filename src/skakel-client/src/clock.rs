@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime};
 /// A future that finishes when a wait is over.
 pub type Sleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// What the client asks of time: what time it is, and a wait. Token lifetimes, the hub's renewal,
-/// the pause between attempts and the pairing poll all go through it.
+/// What the client asks of time: what time it is, and a wait. Token lifetimes, the control call's
+/// renewal, the pause between attempts and the pairing poll all go through it.
 pub trait Clock: Send + Sync + 'static {
     /// The time now.
     fn now(&self) -> SystemTime;

@@ -43,7 +43,7 @@ fn answer(port: u16, fingerprint: &str) -> DiscoveredServer {
             id: "test-app".into(),
             version: "1.2.3".into(),
         },
-        versions: vec![1],
+        versions: vec![2],
         other_endpoints: Vec::new(),
     }
 }

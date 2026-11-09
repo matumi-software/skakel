@@ -25,8 +25,8 @@ use crate::pins::Pins;
 /// How long opening a TCP connection may take.
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The most of any answer the library reads: info, pairing, tokens, hello and the hub's negotiation
-/// are all far smaller.
+/// The most of any plain HTTPS answer the library reads: info, pairing and tokens are all far
+/// smaller.
 pub(crate) const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 /// The pins to trust, read at each handshake.
@@ -102,21 +102,27 @@ impl ServerCertVerifier for PinnedVerifier {
     }
 }
 
-/// An HTTP client over the pins. `presented`, when given, is told the fingerprint of each
-/// certificate a handshake trusted.
-pub(crate) fn client(pins: PinsFn, presented: Option<Presented>) -> reqwest::Client {
+/// A TLS configuration that trusts the pins and nothing else. `presented`, when given, is told the
+/// fingerprint of each certificate a handshake trusted.
+pub(crate) fn tls_config(pins: PinsFn, presented: Option<Presented>) -> rustls::ClientConfig {
     let provider = Arc::new(ring::default_provider());
     let verifier = PinnedVerifier {
         pins,
         presented,
         algorithms: provider.signature_verification_algorithms,
     };
-    let config = rustls::ClientConfig::builder_with_provider(provider)
+    rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .expect("the ring provider speaks the default protocol versions")
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth();
+        .with_no_client_auth()
+}
+
+/// An HTTP client over the pins. `presented`, when given, is told the fingerprint of each
+/// certificate a handshake trusted.
+pub(crate) fn client(pins: PinsFn, presented: Option<Presented>) -> reqwest::Client {
+    let config = tls_config(pins, presented);
     reqwest::Client::builder()
         .tls_backend_preconfigured(config)
         .no_proxy()

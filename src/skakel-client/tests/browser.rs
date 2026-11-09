@@ -43,8 +43,8 @@ async fn the_browser_lists_a_server_by_what_it_answers() {
     assert_eq!(found.fingerprint, server.fingerprint);
     assert_eq!(found.app.id, "test-app");
     assert_eq!(found.app.version, "1.2.3");
-    assert_eq!(found.versions, [1]);
-    assert_eq!(found.version(), Some(1));
+    assert_eq!(found.versions, [2]);
+    assert_eq!(found.version(), Some(2));
     assert_eq!(found.url(), server.address());
     assert!(found.other_endpoints.is_empty());
     assert!(browser.is_browsing());

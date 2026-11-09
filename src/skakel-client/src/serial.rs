@@ -1,4 +1,4 @@
-//! A `serial` stream: one serial port on the server. Binary data goes both ways through
+//! A `serial` stream: one serial port on the server. Data goes both ways through
 //! [`send`](SerialConnection::send) and [`recv`](SerialConnection::recv); the port's settings and
 //! lines are changed with the control messages, and what the server says about the port comes back
 //! as properties and events. A change to the line settings counts as done only when the server
@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use prost::bytes::Bytes;
 use skakel_serial::{ClientMessage, ErrorCode, LineSettings, ModemStatus, ServerMessage};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -19,7 +20,7 @@ use tokio::task::JoinHandle;
 use crate::failure::{Error, FailureKind, bad_answer};
 use crate::streams::{Frame, StreamClose, StreamConnection};
 
-/// How long the server has to say the port is open after the upgrade.
+/// How long the server has to say the port is open after the stream opened.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long the server has to answer a change to the line settings, unless set otherwise.
@@ -115,12 +116,12 @@ impl SerialConnection {
                 None => {
                     log::info!(
                         "A serial stream closed with {:?} before the port opened",
-                        stream.close_info().and_then(|c| c.code)
+                        stream.close_info().map(|c| c.code)
                     );
                     Err(Error::of(FailureKind::ConnectionLost))
                 }
-                Some(Frame::Text(text)) if text.len() <= MAX_CONTROL_BYTES => {
-                    match ServerMessage::parse(&text) {
+                Some(Frame::Control(bytes)) if bytes.len() <= MAX_CONTROL_BYTES => {
+                    match ServerMessage::decode(&bytes) {
                         Some(ServerMessage::Opened {
                             line_settings,
                             modem_status,
@@ -179,15 +180,17 @@ impl SerialConnection {
         self.shared.events.subscribe()
     }
 
-    /// Completes when the stream ended, with how: [`CLOSE_PORT_FAULT`](skakel_serial::CLOSE_PORT_FAULT)
-    /// (4100) is a port that reported a fault.
+    /// Completes when the stream ended, with how: a [`StreamCloseReason::TypeDefined`] close whose
+    /// `type_reason` is [`PORT_FAULT`](skakel_serial::PORT_FAULT) is a port that reported a fault.
+    ///
+    /// [`StreamCloseReason::TypeDefined`]: crate::StreamCloseReason::TypeDefined
     pub async fn closed(&self) -> StreamClose {
         self.stream.closed().await
     }
 
     /// Sends bytes to the port.
-    pub async fn send(&self, data: impl Into<Vec<u8>>) -> Result<(), Error> {
-        self.stream.send_binary(data).await
+    pub async fn send(&self, data: impl Into<Bytes>) -> Result<(), Error> {
+        self.stream.send_data(data).await
     }
 
     /// The next bytes that came from the port, or `None` once the stream has ended and everything
@@ -288,30 +291,30 @@ impl SerialConnection {
             .await
     }
 
-    /// Closes the stream normally and waits briefly for the server's answer.
+    /// Ends the client's side of the stream and waits briefly for the server to end it.
     pub async fn close(&self) {
         self.stream.close().await;
     }
 
     /// One frame at a time, so a control message lands between the bytes sent before and after it.
     async fn send_control(&self, message: &ClientMessage) -> Result<(), Error> {
-        self.stream.send_text(message.to_json()).await
+        self.stream.send_control(message.encode()).await
     }
 }
 
 async fn receive(stream: Arc<StreamConnection>, shared: Arc<Shared>, data: mpsc::Sender<Vec<u8>>) {
     while let Some(frame) = stream.recv().await {
         match frame {
-            Frame::Binary(bytes) => {
-                if !bytes.is_empty() && data.send(bytes).await.is_err() {
+            Frame::Data(bytes) => {
+                if !bytes.is_empty() && data.send(Vec::from(bytes)).await.is_err() {
                     break;
                 }
             }
-            Frame::Text(text) => {
-                if text.len() > MAX_CONTROL_BYTES {
+            Frame::Control(bytes) => {
+                if bytes.len() > MAX_CONTROL_BYTES {
                     log::warn!("Dropped a control message on a serial stream: too long");
                 } else {
-                    handle(&shared, &text);
+                    handle(&shared, &bytes);
                 }
             }
         }
@@ -320,8 +323,8 @@ async fn receive(stream: Arc<StreamConnection>, shared: Arc<Shared>, data: mpsc:
     lock(&shared.answers).change = None;
 }
 
-fn handle(shared: &Shared, json: &str) {
-    let Some(message) = ServerMessage::parse(json) else {
+fn handle(shared: &Shared, bytes: &[u8]) {
+    let Some(message) = ServerMessage::decode(bytes) else {
         log::warn!("Dropped a control message on a serial stream: not a serial message");
         return;
     };
@@ -387,7 +390,7 @@ mod tests {
     use super::*;
     use skakel_serial::{FlowControl, Parity, StopBits};
 
-    fn settings(baud: i32) -> LineSettings {
+    fn settings(baud: u32) -> LineSettings {
         LineSettings {
             baud,
             data_bits: 8,
@@ -422,7 +425,7 @@ mod tests {
 
         handle(
             &shared,
-            &ServerMessage::LineSettings(settings(115_200)).to_json(),
+            &ServerMessage::LineSettings(settings(115_200)).encode(),
         );
 
         assert!(matches!(rx.try_recv(), Ok(Answer::Applied(s)) if s.baud == 115_200));
@@ -437,7 +440,7 @@ mod tests {
         // The slow change's echo, which is not what the pending change asked for.
         handle(
             &shared,
-            &ServerMessage::LineSettings(settings(4800)).to_json(),
+            &ServerMessage::LineSettings(settings(4800)).encode(),
         );
 
         assert!(rx.try_recv().is_err(), "still waiting");
@@ -451,7 +454,11 @@ mod tests {
         // Now the pending change's own refusal.
         handle(
             &shared,
-            r#"{"op":"error","code":"unsupported","detail":"no"}"#,
+            &ServerMessage::Error {
+                code: ErrorCode::Unsupported,
+                detail: Some("no".into()),
+            }
+            .encode(),
         );
 
         assert!(matches!(rx.try_recv(), Ok(Answer::Refused(Some(d))) if d == "no"));
@@ -464,7 +471,7 @@ mod tests {
 
         handle(
             &shared,
-            &ServerMessage::LineSettings(settings(1200)).to_json(),
+            &ServerMessage::LineSettings(settings(1200)).encode(),
         );
 
         assert!(matches!(rx.try_recv(), Ok(Answer::Applied(_))));
@@ -478,7 +485,11 @@ mod tests {
 
         handle(
             &shared,
-            r#"{"op":"error","code":"unsupported","detail":"x"}"#,
+            &ServerMessage::Error {
+                code: ErrorCode::Unsupported,
+                detail: Some("x".into()),
+            }
+            .encode(),
         );
 
         assert_eq!(
@@ -497,9 +508,22 @@ mod tests {
 
         handle(
             &shared,
-            r#"{"op":"modemStatus","cts":true,"dsr":true,"dcd":false,"ri":false}"#,
+            &ServerMessage::ModemStatus(ModemStatus {
+                cts: true,
+                dsr: true,
+                dcd: false,
+                ri: false,
+            })
+            .encode(),
         );
-        handle(&shared, r#"{"op":"error","code":"parity"}"#);
+        handle(
+            &shared,
+            &ServerMessage::Error {
+                code: ErrorCode::Parity,
+                detail: None,
+            }
+            .encode(),
+        );
 
         assert!(lock(&shared.modem_status).cts);
         assert!(matches!(events.try_recv().unwrap(), SerialEvent::ModemStatus(s) if s.dsr));
@@ -516,8 +540,8 @@ mod tests {
     fn a_message_that_is_not_a_serial_message_is_dropped() {
         let shared = shared(None, 0);
 
-        handle(&shared, r#"{"op":"reboot"}"#);
-        handle(&shared, "not json");
+        handle(&shared, &[0x2A, 0x00]);
+        handle(&shared, b"not protobuf");
 
         assert_eq!(lock(&shared.line_settings).baud, 9600);
     }

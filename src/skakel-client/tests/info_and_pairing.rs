@@ -25,8 +25,8 @@ async fn read_info_gives_the_servers_name_app_and_versions() {
     assert_eq!(info.name, "bench");
     assert_eq!(info.app.id, "test-app");
     assert_eq!(info.app.version, "1.2.3");
-    assert_eq!(info.versions, [1]);
-    assert_eq!(require_version(&info.versions).unwrap(), 1);
+    assert_eq!(info.versions, [2]);
+    assert_eq!(require_version(&info.versions).unwrap(), 2);
 }
 
 #[tokio::test]
@@ -61,18 +61,18 @@ async fn read_info_says_unreachable_for_a_port_nobody_listens_on() {
 
 #[tokio::test]
 async fn a_server_of_another_version_is_a_version_mismatch_with_both_sides_named() {
-    let server = common::OtherVersion::start(&[2]).await;
+    let server = common::OtherVersion::start(&[1]).await;
 
     let info = read_info(&server.address(), &server.pins(), &ClientOptions::default())
         .await
         .unwrap();
     let error = require_version(&info.versions).unwrap_err();
 
-    assert_eq!(info.versions, [2]);
+    assert_eq!(info.versions, [1]);
     assert_eq!(error.kind(), FailureKind::VersionMismatch);
     assert_eq!(
         error.to_string(),
-        "This server speaks Skakel 2 and this app speaks Skakel 1. Update the app."
+        "This server speaks Skakel 1 and this app speaks Skakel 2. Update the server."
     );
 }
 
@@ -232,7 +232,7 @@ async fn open_refuses_a_name_that_is_empty_or_too_long() {
 
 #[tokio::test]
 async fn open_refuses_a_server_that_speaks_no_common_version() {
-    let server = common::OtherVersion::start(&[2]).await;
+    let server = common::OtherVersion::start(&[1]).await;
 
     let error = PairingClient::open(
         &server.address(),

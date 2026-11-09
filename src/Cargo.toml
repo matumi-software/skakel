@@ -42,9 +42,6 @@ tokio-util = "0.7"
 # HTTP over a rustls config the client builds itself, so the certificate check is the pin.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "form"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-# The WebSocket framing only. The upgrade is written by hand over reqwest so a refusal keeps its body.
-tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
-futures-util = { version = "0.3.34", features = ["sink"] }
 # Which IPv4 networks to broadcast a probe on.
 if-addrs = "0.15.0"
 log = "0.4"

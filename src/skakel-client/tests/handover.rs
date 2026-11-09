@@ -1,12 +1,13 @@
-//! Tokens renewed before they run out, the hub renewed with them unseen, and the certificate
-//! handover, against a real server.
+//! Tokens renewed before they run out, the control call renewed with them on the same connection
+//! unseen, and the certificate handover, against a real server.
 
 mod common;
 
 use std::time::Duration;
 
+use common::greeter::{self, GreetRequest};
 use common::{ManualClock, Recorder, within};
-use serde_json::json;
+use skakel_client::tonic::Request;
 use skakel_client::{ClientOptions, Credentials, FailureKind, Link, LinkState, LinkStatus, Pins};
 
 fn record_status(link: &Link) -> Recorder<LinkStatus> {
@@ -35,9 +36,22 @@ fn record_pins(link: &Link) -> Recorder<Pins> {
 async fn connected(link: &Link, statuses: &Recorder<LinkStatus>) {
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
-    // The server handles the connection once its own setup is done; a call that came back has been
-    // through that.
-    link.invoke("Echo", vec![json!("x")]).await.unwrap();
+}
+
+/// The states the link went through.
+fn states(statuses: &Recorder<LinkStatus>) -> Vec<LinkState> {
+    statuses.seen().into_iter().map(|s| s.state).collect()
+}
+
+/// An app call through the link's channel, which goes over the control connection.
+async fn greet(link: &Link) -> String {
+    greeter::greet(
+        link.channel(),
+        Request::new(GreetRequest { text: "hi".into() }),
+    )
+    .await
+    .unwrap()
+    .text
 }
 
 async fn link_with(
@@ -84,48 +98,82 @@ async fn a_token_is_reused_until_a_minute_before_it_runs_out() {
 }
 
 #[tokio::test]
-async fn the_hub_connects_again_with_a_fresh_token_before_it_runs_out_without_saying_so() {
+async fn the_control_call_is_renewed_on_the_same_connection_before_its_token_runs_out_unseen() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let clock = ManualClock::new();
-    let (link, _) = link_with(
-        &mut bench,
-        &server,
+    let credentials = bench.register(&server).await;
+    let proxy = common::CountingProxy::start(server.port).await;
+    let link = Link::new(
+        &proxy.address(),
+        server.pins(),
+        credentials.clone(),
         ClientOptions {
             clock: clock.clone(),
             ..ClientOptions::default()
         },
     )
-    .await;
+    .unwrap();
     let statuses = record_status(&link);
     connected(&link, &statuses).await;
-    let connection: String = link.invoke_as("Connection", vec![]).await.unwrap();
     let token = link.access_token().await.unwrap();
     clock.when_sleeping(1).await;
+    let before = proxy.connections();
 
     clock.advance(Duration::from_secs(29 * 60 + 31));
 
     let renewed = within(Duration::from_secs(20), async {
         loop {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            let now: String = link.invoke_as("Connection", vec![]).await.unwrap();
-            if now != connection {
+            let now = link.access_token().await.unwrap();
+            if now != token {
                 return now;
             }
         }
     })
     .await;
-    assert_ne!(renewed, connection);
-    assert_ne!(
-        link.access_token().await.unwrap(),
-        token,
-        "the new connection took a fresh token"
-    );
-    let states: Vec<LinkState> = statuses.seen().into_iter().map(|s| s.state).collect();
+    // The old call is let go once the new one has said the certificates.
+    within(Duration::from_secs(20), async {
+        while bench.open_sessions(&server, &credentials.client_id) != 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert_ne!(renewed, token);
+    assert!(greet(&link).await.ends_with(": hi"));
     assert_eq!(
-        states,
+        proxy.connections() - before,
+        1,
+        "only the token request's HTTPS connection; the gRPC connection stayed"
+    );
+    assert_eq!(
+        states(&statuses),
         [LinkState::Connecting, LinkState::Connected],
         "a renewal is not a change anyone hears of"
+    );
+    link.stop().await;
+}
+
+#[tokio::test]
+async fn a_control_call_the_server_ends_at_its_tokens_end_is_renewed_on_the_same_connection() {
+    let mut bench = common::Bench::new();
+    // Tokens of three seconds: the client takes them to last two minutes, the least it believes,
+    // so the server ends each control call with TOKEN_EXPIRED before the client would renew it.
+    let server = bench
+        .server_with_token_lifetime(Duration::from_secs(3))
+        .await;
+    let (link, credentials) = link_with(&mut bench, &server, ClientOptions::default()).await;
+    let statuses = record_status(&link);
+    connected(&link, &statuses).await;
+
+    tokio::time::sleep(Duration::from_secs(7)).await;
+
+    assert_eq!(bench.open_sessions(&server, &credentials.client_id), 1);
+    assert!(greet(&link).await.ends_with(": hi"));
+    assert_eq!(
+        states(&statuses),
+        [LinkState::Connecting, LinkState::Connected],
+        "renewed twice, and nobody heard of it"
     );
     link.stop().await;
 }
@@ -148,7 +196,7 @@ async fn acknowledged(bench: &mut common::Bench, server: &common::Server, client
 }
 
 #[tokio::test]
-async fn a_handover_is_learned_over_the_hub_saved_by_the_app_and_acknowledged() {
+async fn a_handover_is_learned_on_the_control_channel_saved_by_the_app_and_acknowledged() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, credentials) = link_with(&mut bench, &server, ClientOptions::default()).await;
@@ -244,9 +292,8 @@ async fn a_handover_the_app_could_not_save_is_not_acknowledged() {
 
     bench.prepare(&server).await;
     tried.wait(|_| true).await;
-    // A call after the handler: the hub runs a connection's messages in order, so an
-    // acknowledgement would be in by now.
-    link.invoke("Echo", vec![json!("x")]).await.unwrap();
+    // Time for an acknowledgement to arrive, had one been sent.
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let clients = bench.clients(&server).await;
     assert!(
