@@ -8,7 +8,7 @@
 pub mod greeter;
 
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -31,12 +31,12 @@ use skakel_proto::v2::{
 };
 use skakel_server::{
     BoxFuture, InMemoryStore, SkakelServer, SkakelServerBuilder, StreamEnd, StreamHandler,
-    StreamMessage, StreamOpen as Opening, StreamRequest, StreamSession,
+    StreamMessage, StreamOpen as Opening, StreamRequest, StreamSession, connection_builder,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::mpsc;
-use tokio_rustls::TlsConnector;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::body::Body;
 use tonic::codegen::http;
@@ -230,6 +230,62 @@ pub async fn start() -> SkakelServer {
     bench_builder().start().await.expect("the server starts")
 }
 
+// ---- an app that serves Skakel on a listener of its own ----
+
+/// The page the app serves beside Skakel.
+pub const APP_PAGE: &str = "/app/page";
+
+/// Starts `builder` without a listener, mounted on an app's own server on loopback, the way the
+/// crate docs show: an axum router with a page of the app's own and Skakel's service as its
+/// fallback, a TLS acceptor from the server's settings, the caller's address put on every request,
+/// and Skakel's connection settings. The server's `local_addr` is the app's port, so the helpers
+/// below reach Skakel through the app.
+pub async fn start_mounted_with(builder: SkakelServerBuilder) -> SkakelServer {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = builder
+        .start_mounted(listener.local_addr().unwrap())
+        .await
+        .expect("the server starts");
+    let app = axum::Router::new()
+        .route(
+            APP_PAGE,
+            axum::routing::get(|| async { "the app's own page" }),
+        )
+        .fallback_service(server.service());
+    let acceptor = TlsAcceptor::from(server.tls_config());
+    tokio::spawn(async move {
+        loop {
+            let Ok((tcp, remote)) = listener.accept().await else {
+                continue;
+            };
+            let (acceptor, app) = (acceptor.clone(), app.clone());
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(tcp).await else {
+                    return;
+                };
+                let service = hyper::service::service_fn(
+                    move |mut request: hyper::Request<hyper::body::Incoming>| {
+                        request
+                            .extensions_mut()
+                            .insert(axum::extract::ConnectInfo(remote));
+                        let mut app = app.clone();
+                        async move { tower_service::Service::call(&mut app, request).await }
+                    },
+                );
+                let _ = connection_builder()
+                    .serve_connection_with_upgrades(TokioIo::new(tls), service)
+                    .await;
+            });
+        }
+    });
+    server
+}
+
+/// The bench server mounted on an app's own server.
+pub async fn start_mounted() -> SkakelServer {
+    start_mounted_with(bench_builder()).await
+}
+
 // ---- TLS that trusts anything, and records what the server presented ----
 
 #[derive(Debug)]
@@ -306,6 +362,24 @@ pub type Tls = tokio_rustls::client::TlsStream<TcpStream>;
 /// A TLS connection to `address` with `config`.
 pub async fn tls_with(address: SocketAddr, config: Arc<ClientConfig>) -> Tls {
     let tcp = TcpStream::connect(address).await.unwrap();
+    tls_over(tcp, config).await
+}
+
+/// A TLS connection to `address` from the local address `from`, such as 127.0.0.2, offering
+/// HTTP/1.1 only or HTTP/2 too.
+pub async fn tls_from(address: SocketAddr, from: IpAddr, http1_only: bool) -> Tls {
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.bind(SocketAddr::new(from, 0)).unwrap();
+    let tcp = socket.connect(address).await.unwrap();
+    let alpn: &[&[u8]] = if http1_only {
+        &[b"http/1.1"]
+    } else {
+        &[b"h2", b"http/1.1"]
+    };
+    tls_over(tcp, tls_config(alpn).0).await
+}
+
+async fn tls_over(tcp: TcpStream, config: Arc<ClientConfig>) -> Tls {
     tcp.set_nodelay(true).unwrap();
     TlsConnector::from(config)
         .connect(ServerName::try_from("localhost").unwrap(), tcp)
@@ -494,7 +568,18 @@ impl<'a> Request<'a> {
 
     /// Sends it over TLS to the server.
     pub async fn send(self, server: &SkakelServer) -> Reply {
-        let (stream, _) = tls(server.local_addr(), true).await;
+        self.send_to(server.local_addr()).await
+    }
+
+    /// Sends it over TLS to `address`.
+    pub async fn send_to(self, address: SocketAddr) -> Reply {
+        let (stream, _) = tls(address, true).await;
+        exchange(stream, self.bytes()).await
+    }
+
+    /// Sends it over TLS to the server from the local address `from`.
+    pub async fn send_from(self, server: &SkakelServer, from: &str) -> Reply {
+        let stream = tls_from(server.local_addr(), from.parse().unwrap(), true).await;
         exchange(stream, self.bytes()).await
     }
 
@@ -584,14 +669,14 @@ where
 
 /// A new HTTP/2 connection to the server.
 pub async fn grpc(server: &SkakelServer) -> Grpc {
-    let (stream, _) = tls(server.local_addr(), false).await;
+    grpc_to(server.local_addr()).await
+}
+
+/// A new HTTP/2 connection to `address`.
+pub async fn grpc_to(address: SocketAddr) -> Grpc {
+    let (stream, _) = tls(address, false).await;
     let alpn = stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
-    grpc_over(
-        stream,
-        format!("localhost:{}", server.local_addr().port()),
-        alpn,
-    )
-    .await
+    grpc_over(stream, format!("localhost:{}", address.port()), alpn).await
 }
 
 pub fn control(connection: &Grpc) -> ControlServiceClient<Grpc> {

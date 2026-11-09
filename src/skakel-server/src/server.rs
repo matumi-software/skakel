@@ -10,8 +10,7 @@ use std::convert::Infallible;
 use axum::Router;
 use axum::http::{Request, Response};
 use hyper::body::Incoming;
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use hyper_util::server::conn::auto;
+use hyper_util::rt::TokioIo;
 use rustls::ServerConfig;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
@@ -19,8 +18,8 @@ use skakel_discovery::MAX_APP_VERSION_LENGTH;
 use skakel_proto::v2::control_service_server::ControlServiceServer;
 use skakel_proto::v2::stream_service_server::StreamServiceServer;
 use skakel_protocol::{
-    CONTROL_MESSAGE_LIMIT, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, Reason, STREAM_MESSAGE_LIMIT,
-    SkakelApp, is_app_id, is_app_service_name, is_stream_type,
+    CONTROL_MESSAGE_LIMIT, Reason, STREAM_MESSAGE_LIMIT, SkakelApp, is_app_id, is_app_service_name,
+    is_stream_type,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -36,10 +35,11 @@ use crate::control::Control;
 use crate::discovery::{self, Announcement};
 use crate::error::ServerError;
 use crate::events::{Events, ServerEvent};
-use crate::grpc::{Guarded, is_grpc};
+use crate::grpc::Guarded;
 use crate::http::{self, looks_like_tls, plain_http_answer};
 use crate::limits::Limits;
 use crate::pairing::{Pairing, PairingOverview};
+use crate::service::{Routers, SkakelService, connection_builder};
 use crate::sessions::Sessions;
 use crate::state::{CertificateSwitch, ClientView, KeysView, NewClient, ServerState};
 use crate::store::SkakelStore;
@@ -47,8 +47,6 @@ use crate::streams::{StreamHandler, Streams};
 
 /// How long a client has to start a TLS handshake, and to finish one.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a client has to send the headers of a request.
-const HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long connections get to finish after the server stops.
 const STOP_GRACE: Duration = Duration::from_secs(3);
 /// How often the replaced signing keys that ran out are dropped.
@@ -308,13 +306,49 @@ impl SkakelServerBuilder {
         problems
     }
 
-    /// Starts the server: loads or makes its keys, binds the port, starts answering discovery
-    /// and serving.
+    /// Starts the server: binds the port, loads or makes its keys, starts answering discovery
+    /// and serving on a listener of its own.
     pub async fn start(self) -> Result<SkakelServer, ServerError> {
         let problems = self.problems();
         if !problems.is_empty() {
             return Err(ServerError::Options(problems));
         }
+        let listener = TcpListener::bind(self.listen)
+            .await
+            .map_err(ServerError::Bind)?;
+        let local_addr = listener.local_addr().map_err(ServerError::Bind)?;
+        self.launch(Some(listener), local_addr).await
+    }
+
+    /// Starts the server without a listener, for an app that serves Skakel on its own, beside
+    /// its own pages: loads or makes its keys and starts answering discovery. `app_addr` is the
+    /// address the app's listener is bound to, with the port it actually bound; discovery
+    /// announces that port and answers on it (or on [`discovery_port`](Self::discovery_port)), and
+    /// [`SkakelServer::local_addr`] gives it back. [`listen`](Self::listen) is not used.
+    ///
+    /// The app then serves [`SkakelServer::service`] on its server, presents the certificate with
+    /// a TLS acceptor built from [`SkakelServer::tls_config`], and sets up its connections as
+    /// [`connection_builder`](crate::connection_builder) does. See the crate docs.
+    pub async fn start_mounted(self, app_addr: SocketAddr) -> Result<SkakelServer, ServerError> {
+        let mut problems = self.problems();
+        if self.discovery && self.discovery_port.is_none() && app_addr.port() == 0 {
+            problems.push(
+                "Give the address the app's listener is bound to, with the port it bound, for discovery to announce."
+                    .to_owned(),
+            );
+        }
+        if !problems.is_empty() {
+            return Err(ServerError::Options(problems));
+        }
+        self.launch(None, app_addr).await
+    }
+
+    /// Starts everything but the listener, and the accept loop when there is a listener.
+    async fn launch(
+        self,
+        listener: Option<TcpListener>,
+        local_addr: SocketAddr,
+    ) -> Result<SkakelServer, ServerError> {
         let events = Events::new(self.callbacks);
         let state = ServerState::start(
             self.store,
@@ -355,12 +389,10 @@ impl SkakelServerBuilder {
         }
         let https = http::guard(router, shared.clone());
         let grpc = grpc_router(&shared, self.services);
+        let tls_config = tls_config(&state)?;
 
-        let listener = TcpListener::bind(self.listen)
-            .await
-            .map_err(ServerError::Bind)?;
-        let local_addr = listener.local_addr().map_err(ServerError::Bind)?;
         let (stop, stopped) = watch::channel(false);
+        let service = SkakelService::new(Routers { https, grpc }, stopped.clone());
         let mut tasks = vec![];
 
         let mut discovery_addr = None;
@@ -383,16 +415,19 @@ impl SkakelServerBuilder {
             }
         }
 
-        let acceptor = tls_acceptor(&state)?;
-        tasks.push(tokio::spawn(accept_loop(
-            listener,
-            acceptor,
-            Routers { https, grpc },
-            stopped.clone(),
-        )));
+        if let Some(listener) = listener {
+            tasks.push(tokio::spawn(accept_loop(
+                listener,
+                TlsAcceptor::from(tls_config.clone()),
+                service.clone(),
+                stopped.clone(),
+            )));
+        }
 
         Ok(SkakelServer {
             shared,
+            service,
+            tls_config,
             local_addr,
             discovery_addr,
             stop,
@@ -437,6 +472,8 @@ fn spawn_pruner(state: &Arc<ServerState>) {
 /// A running Skakel server.
 pub struct SkakelServer {
     shared: Arc<Shared>,
+    service: SkakelService,
+    tls_config: Arc<ServerConfig>,
     local_addr: SocketAddr,
     discovery_addr: Option<SocketAddr>,
     stop: watch::Sender<bool>,
@@ -444,9 +481,34 @@ pub struct SkakelServer {
 }
 
 impl SkakelServer {
-    /// The address HTTPS is served on, with the port actually bound.
+    /// The address HTTPS is served on, with the port actually bound. For a server started with
+    /// [`start_mounted`](SkakelServerBuilder::start_mounted), the app's address it was given.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    /// Skakel's HTTPS endpoints and gRPC services as one tower service, for an app that serves
+    /// Skakel on its own listener (see [`SkakelServerBuilder::start_mounted`]). Every request it
+    /// takes must carry the caller's address; see [`SkakelService`].
+    pub fn service(&self) -> SkakelService {
+        self.service.clone()
+    }
+
+    /// The TLS settings Skakel's own listener uses, for an app's TLS acceptor: the server's
+    /// certificate, ALPN `h2` and `http/1.1`, and no session resumption.
+    ///
+    /// Every handshake asks the server for its current certificate, so the acceptor presents a
+    /// switched certificate from the next connection on, as the protocol's handover needs, and
+    /// never the prepared one before the switch. Session resumption stays off because a resumed
+    /// session shows the client no certificate, and a client that follows a handover proves the
+    /// new certificate by the one a new connection presents. An app that changes the settings
+    /// (a clone of the config is a plain `rustls::ServerConfig`) keeps `cert_resolver`,
+    /// `session_storage` and `send_tls13_tickets` as they are.
+    ///
+    /// The settings belong to this server: an app that starts a new server builds its acceptor
+    /// again from the new server's settings.
+    pub fn tls_config(&self) -> Arc<ServerConfig> {
+        self.tls_config.clone()
     }
 
     /// The UDP address discovery answers on, when it is running.
@@ -618,7 +680,7 @@ impl ResolvesServerCert for Resolver {
     }
 }
 
-fn tls_acceptor(state: &Arc<ServerState>) -> Result<TlsAcceptor, ServerError> {
+fn tls_config(state: &Arc<ServerState>) -> Result<Arc<ServerConfig>, ServerError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -632,20 +694,13 @@ fn tls_acceptor(state: &Arc<ServerState>) -> Result<TlsAcceptor, ServerError> {
     // switch. A full handshake on a P-256 certificate costs next to nothing.
     config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     config.send_tls13_tickets = 0;
-    Ok(TlsAcceptor::from(Arc::new(config)))
-}
-
-/// The HTTPS routes and the gRPC services, which share the port and its connections.
-#[derive(Clone)]
-struct Routers {
-    https: Router,
-    grpc: Router,
+    Ok(Arc::new(config))
 }
 
 async fn accept_loop(
     listener: TcpListener,
     acceptor: TlsAcceptor,
-    routers: Routers,
+    service: SkakelService,
     mut stopped: watch::Receiver<bool>,
 ) {
     let mut connections = tokio::task::JoinSet::new();
@@ -658,7 +713,7 @@ async fn accept_loop(
                         stream,
                         remote,
                         acceptor.clone(),
-                        routers.clone(),
+                        service.clone(),
                         stopped.clone(),
                     ));
                 }
@@ -680,7 +735,7 @@ async fn serve_connection(
     mut stream: TcpStream,
     remote: SocketAddr,
     acceptor: TlsAcceptor,
-    routers: Routers,
+    service: SkakelService,
     mut stopped: watch::Receiver<bool>,
 ) {
     let _ = stream.set_nodelay(true);
@@ -702,29 +757,10 @@ async fn serve_connection(
         request
             .extensions_mut()
             .insert(axum::extract::ConnectInfo(remote));
-        // The content type tells a gRPC call; everything else is an HTTPS request.
-        let mut router = if is_grpc(request.headers()) {
-            routers.grpc.clone()
-        } else {
-            routers.https.clone()
-        };
-        async move { router.call(request).await }
+        let mut service = service.clone();
+        async move { service.call(request).await }
     });
-    let mut builder = auto::Builder::new(TokioExecutor::new());
-    builder
-        .http1()
-        .timer(TokioTimer::new())
-        .header_read_timeout(HEADER_TIMEOUT);
-    // A PING after 15 seconds without a frame from the client, and the connection is dead when that
-    // PING has no answer 15 seconds later: 30 seconds of silence in all. Pings from the client are
-    // answered at any rate. Adaptive windows let a stream's flow-control window grow with the link,
-    // beyond HTTP/2's 64 KiB start, which would hold a stream to 64 KiB per round trip.
-    builder
-        .http2()
-        .timer(TokioTimer::new())
-        .keep_alive_interval(KEEP_ALIVE_INTERVAL)
-        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT - KEEP_ALIVE_INTERVAL)
-        .adaptive_window(true);
+    let builder = connection_builder();
     let connection = builder.serve_connection_with_upgrades(TokioIo::new(tls), service);
     tokio::pin!(connection);
     tokio::select! {
