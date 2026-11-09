@@ -27,6 +27,12 @@ no maintained Rust SignalR client lets the certificate check be pinned, so the h
 is written in the crate (see hub.rs). The other crates take only small crates for JSON, hashing and
 randomness.
 
+That is protocol version 1, which the server and the client speak today. Version 2 replaces the hub
+and the WebSocket streams with gRPC: its wire format is the `.proto` files in `src/proto/skakel/v2/`,
+which `skakel-protocol` compiles in a test with `protox` (a dev-dependency, so no `protoc` is
+needed). When the server and the client move to it they take `tonic` and `prost`, generated from
+those files with `protox`, and the SignalR and WebSocket code goes.
+
 The virtual camera is two crates because Windows loads the media source as a DLL of its own:
 `skakel-vcam` is the producer and the installer, `skakel-vcam-source` is the DLL. The names keep the
 short `vcam`.
@@ -36,12 +42,14 @@ short `vcam`.
 - **Protocol:** what every other part builds on. The protocol version, the paths and header names,
   the token lifetime and stream keep-alive times, the JSON contracts (info, hello, problem),
   certificate fingerprints (normalising and comparing them), the hub's method names and messages
-  (certificate handover, closing), and the WebSocket close codes.
+  (certificate handover, closing), and the WebSocket close codes. For version 2, the `.proto` files
+  of the control and stream services and a test that compiles them.
 - **Discovery:** the UDP packet. The probe, the answer, building and reading them, the limits a
   client applies to an answer, and the cleaning of the name and app version a server announces.
 - **Pairing:** what both ends compute and send. The nonce, the commitment, the six-digit code, and
   the JSON bodies of the pairing calls (open, reveal, poll) with their states.
-- **Serial:** the serial stream type's wire format. The stream type and its port query, line
+- **Serial:** the serial stream type's wire format (for version 2, its messages are in
+  `src/proto/skakel/v2/serial.proto`). The stream type and its port query, line
   settings, modem lines, errors, and the control messages in both directions. Wire format only: the
   code that opens a real port stays in the app (see `CLAUDE.md`).
 - **Client:** what an app uses to reach servers. The browser that sends probes and keeps the list of

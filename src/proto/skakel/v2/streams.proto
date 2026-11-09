@@ -1,0 +1,52 @@
+// Skakel protocol version 2: the stream service. docs/protocol.md at the repository root is the
+// contract; this file is its wire format for data streams.
+
+syntax = "proto3";
+
+package skakel.v2;
+
+// Data streams. A stream carries one thing: a USB device, a serial port, or whatever an app
+// defines as a stream type. Every call carries the bearer token as `authorization: Bearer
+// <token>` metadata, and should run on a connection of its own.
+service StreamService {
+  // Opens a stream. The client's first frame is `open`. The server answers with `opened`, or
+  // refuses by ending the call with an error status before it. After `opened`, data and control
+  // frames go both ways, in order, and the call's final status says why the stream ended.
+  rpc Open(stream OpenRequest) returns (stream OpenResponse);
+}
+
+// A frame from the client.
+message OpenRequest {
+  oneof frame {
+    // The first frame, and only the first: what to open.
+    StreamOpen open = 1;
+    // The stream's data, bytes the stream type defines.
+    bytes data = 2;
+    // One control message, encoded as the stream type defines.
+    bytes control = 3;
+  }
+}
+
+// A frame from the server.
+message OpenResponse {
+  oneof frame {
+    // The first frame, and only the first: the stream is open.
+    StreamOpened opened = 1;
+    // The stream's data, bytes the stream type defines.
+    bytes data = 2;
+    // One control message, encoded as the stream type defines.
+    bytes control = 3;
+  }
+}
+
+// What a client asks to open.
+message StreamOpen {
+  // The stream type: one or more of `a-z`, `0-9` and `-`, such as `serial`.
+  string stream_type = 1;
+  // What the stream is for, a message the stream type defines, encoded. For `serial` it is a
+  // `SerialTarget`. Empty for a type that needs nothing.
+  bytes target = 2;
+}
+
+// The server accepted the stream.
+message StreamOpened {}
