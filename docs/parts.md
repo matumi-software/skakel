@@ -9,6 +9,7 @@ and a part depends only on the parts it cannot work without. The wire format is 
 | Part | Crate | Depends on |
 |---|---|---|
 | Protocol | `skakel-protocol` | nothing |
+| Proto | `skakel-proto` | nothing |
 | Discovery | `skakel-discovery` | protocol |
 | Pairing | `skakel-pairing` | nothing |
 | Serial | `skakel-serial` | nothing |
@@ -28,10 +29,17 @@ is written in the crate (see hub.rs). The other crates take only small crates fo
 randomness.
 
 That is protocol version 1, which the server and the client speak today. Version 2 replaces the hub
-and the WebSocket streams with gRPC: its wire format is the `.proto` files in `src/proto/skakel/v2/`,
-which `skakel-protocol` compiles in a test with `protox` (a dev-dependency, so no `protoc` is
-needed). When the server and the client move to it they take `tonic` and `prost`, generated from
-those files with `protox`, and the SignalR and WebSocket code goes.
+and the WebSocket streams with gRPC: its wire format is the `.proto` files in `src/proto/skakel/v2/`.
+`skakel-proto` generates the Rust code for them at build time, with `protox` compiling them in Rust
+(so no `protoc` is needed), `prost` writing the messages and `tonic` the services. When the server
+and the client move to version 2 they take their messages and services from it, and the SignalR and
+WebSocket code goes.
+
+The generated code is a part of its own rather than a module of `skakel-protocol` because
+Discovery depends on Protocol, and an app that only finds servers should not build prost and tonic.
+`skakel-proto` takes prost alone by default; its `client` and `server` features add tonic's
+generated clients and servers, without tonic's own transport, which Skakel does not use: its
+connections are pinned to a certificate fingerprint.
 
 The virtual camera is two crates because Windows loads the media source as a DLL of its own:
 `skakel-vcam` is the producer and the installer, `skakel-vcam-source` is the DLL. The names keep the
@@ -42,8 +50,11 @@ short `vcam`.
 - **Protocol:** what every other part builds on. The protocol version, the paths and header names,
   the token lifetime and stream keep-alive times, the JSON contracts (info, hello, problem),
   certificate fingerprints (normalising and comparing them), the hub's method names and messages
-  (certificate handover, closing), and the WebSocket close codes. For version 2, the `.proto` files
-  of the control and stream services and a test that compiles them.
+  (certificate handover, closing), and the WebSocket close codes.
+- **Proto:** the Rust code generated from the `.proto` files in `src/proto` (protocol version 2's
+  control and stream services and the serial stream type's messages), and the tests that pin their
+  field numbers and wire bytes. Messages always; the tonic clients with the `client` feature and the
+  tonic servers with `server`.
 - **Discovery:** the UDP packet. The probe, the answer, building and reading them, the limits a
   client applies to an answer, and the cleaning of the name and app version a server announces.
 - **Pairing:** what both ends compute and send. The nonce, the commitment, the six-digit code, and

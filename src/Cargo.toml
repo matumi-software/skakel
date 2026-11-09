@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["skakel-client", "skakel-discovery", "skakel-pairing", "skakel-protocol", "skakel-serial", "skakel-server", "skakel-vcam", "skakel-vcam-source"]
+members = ["skakel-client", "skakel-discovery", "skakel-pairing", "skakel-proto", "skakel-protocol", "skakel-serial", "skakel-server", "skakel-vcam", "skakel-vcam-source"]
 
 [workspace.package]
 version = "0.2.0"
@@ -12,6 +12,7 @@ repository = "https://github.com/matumi-software/skakel"
 
 [workspace.dependencies]
 skakel-protocol = { path = "skakel-protocol", version = "0.2.0" }
+skakel-proto = { path = "skakel-proto", version = "0.2.0" }
 skakel-discovery = { path = "skakel-discovery", version = "0.2.0" }
 skakel-vcam = { path = "skakel-vcam", version = "0.2.0" }
 # Microsoft's Windows bindings (MIT OR Apache-2.0). `windows-core` is named directly because the
@@ -49,6 +50,15 @@ if-addrs = "0.15.0"
 log = "0.4"
 url = "2.5.8"
 
-# Compiles the .proto files of protocol version 2 in a test, in Rust, so no protoc is needed
-# (MIT OR Apache-2.0, as is everything it pulls in, checked with `cargo metadata`).
+# Protocol version 2's gRPC code, generated from the .proto files in `proto/` by skakel-proto's
+# build script. prost (Apache-2.0) writes and reads the messages, tonic (MIT) the services, and
+# protox (MIT OR Apache-2.0) compiles the .proto files in Rust, so no protoc is needed. Everything
+# they pull in is MIT, Apache-2.0, Unlicense or Unicode-3.0, checked with `cargo metadata`, except
+# foldhash (Zlib), which prost-build uses while it generates the code and is not built into
+# anything Skakel ships. tonic takes no default features: Skakel brings its own pinned connections
+# and listener, so tonic's transport and router are left out unless a crate asks for them.
+prost = "0.14.4"
+tonic = { version = "0.14.9", default-features = false }
+tonic-prost = "0.14.9"
+tonic-prost-build = "0.14.9"
 protox = "0.10.0"

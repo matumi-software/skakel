@@ -1,0 +1,27 @@
+[package]
+name = "skakel-proto"
+description = "The Rust code generated from Skakel's .proto files: messages, and gRPC clients and servers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# The tonic client of each service, for a Skakel client.
+client = ["dep:tonic", "dep:tonic-prost"]
+# The tonic server trait and service of each service, for a Skakel server.
+server = ["dep:tonic", "dep:tonic-prost"]
+
+[dependencies]
+prost.workspace = true
+tonic = { workspace = true, optional = true, features = ["codegen"] }
+tonic-prost = { workspace = true, optional = true }
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[dev-dependencies]
+protox.workspace = true
