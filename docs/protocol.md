@@ -9,8 +9,8 @@ be generated. This file says what the messages mean and how the two ends behave.
 
 Version 1 (Skakel 0.1.0) had a SignalR hub and WebSocket streams; version 2 keeps its discovery,
 info, pairing, tokens and certificate handover, and moves the hub and the streams to gRPC. The two
-do not talk to each other (see "Changes from version 1"). The crates in this repository still speak
-version 1 until the server and the client move to version 2; version 1's text is this file at
+do not talk to each other (see "Changes from version 1"). In this repository the server speaks
+version 2 and the client still speaks version 1 until it moves; version 1's text is this file at
 commit `aa0399b`.
 
 ## Roles
@@ -281,10 +281,10 @@ Everything on TCP runs over one TLS listener on the app's port, with the pinned 
 - **Message limits.** A message on the control service is at most 1 MiB, and a frame on the stream
   service at most 16 MiB, both counted as encoded. A larger one ends the call with
   `RESOURCE_EXHAUSTED`, as gRPC does.
-- **Keep-alive.** On every connection that carries gRPC, both ends send an HTTP/2 PING every 15
-  seconds, and an end that has heard nothing from the other for 30 seconds, no PING answer and no
-  other frame, takes the connection for dead and closes it. A server takes pings at this rate from
-  a client, with calls running or not. (Some gRPC servers answer pings more often than every five
+- **Keep-alive.** On every connection that carries gRPC, each end sends an HTTP/2 PING once it has
+  heard nothing from the other for 15 seconds, and an end that has heard nothing from the other for
+  30 seconds, no PING answer and no other frame, takes the connection for dead and closes it. A
+  server takes pings at this rate from a client, with calls running or not. (Some gRPC servers answer pings more often than every five
   minutes with a `GOAWAY` of `ENHANCE_YOUR_CALM` unless told otherwise.)
 - **The token is call metadata.** Every gRPC call carries `authorization: Bearer <token>`. The
   token is checked when a call starts. A connection is not signed in; its calls are.

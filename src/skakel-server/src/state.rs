@@ -258,10 +258,21 @@ impl ServerState {
         Some(client.generation)
     }
 
+    #[cfg(test)]
     pub(crate) fn issue_token(
         &self,
         client_id: &str,
         generation: u32,
+    ) -> Result<(String, OffsetDateTime), ServerError> {
+        self.issue_token_for(client_id, generation, ACCESS_TOKEN_LIFETIME)
+    }
+
+    /// A token that lasts `lifetime`, which is never more than the protocol's 30 minutes.
+    pub(crate) fn issue_token_for(
+        &self,
+        client_id: &str,
+        generation: u32,
+        lifetime: std::time::Duration,
     ) -> Result<(String, OffsetDateTime), ServerError> {
         let loaded = self.loaded();
         Ok(crypto::issue_token(
@@ -269,7 +280,7 @@ impl ServerState {
             client_id,
             generation,
             OffsetDateTime::now_utc(),
-            ACCESS_TOKEN_LIFETIME,
+            lifetime.min(ACCESS_TOKEN_LIFETIME),
         )?)
     }
 

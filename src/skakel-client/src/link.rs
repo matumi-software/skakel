@@ -1223,8 +1223,8 @@ mod tests {
 
     #[test]
     fn hub_path_is_under_the_base_path() {
-        assert_eq!(hub_path("hub"), "/skakel/v1/hub");
-        assert_eq!(hub_path("/app/hub/"), "/skakel/v1/app/hub");
+        assert_eq!(hub_path("hub"), "/skakel/v2/hub");
+        assert_eq!(hub_path("/app/hub/"), "/skakel/v2/app/hub");
     }
 
     #[test]

@@ -1,8 +1,12 @@
-//! What Skakel clients and servers share: the numbers, paths and names of protocol version 1, the
-//! JSON contracts, certificate fingerprints, the hub's messages and the stream close codes. See
+//! What Skakel clients and servers share: the numbers, paths and names of protocol version 2, the
+//! JSON contracts, certificate fingerprints, and the reasons a gRPC call is refused or ended. See
 //! `docs/protocol.md` at the repository root.
 //!
-//! Discovery, the pairing code and the serial messages are their own crates, see `docs/parts.md`.
+//! Discovery, the pairing code and the serial messages are their own crates, and the code generated
+//! from the `.proto` files is `skakel-proto`; see `docs/parts.md`.
+//!
+//! The hub's messages, the close codes and the hello and streams paths are version 1's. The client
+//! still uses them until it moves to version 2 (issue #34), which removes them.
 //!
 //! # JSON
 //!
@@ -13,6 +17,7 @@ mod close_codes;
 mod contracts;
 pub mod fingerprints;
 mod hub;
+mod reasons;
 
 pub use close_codes::{
     CLOSE_FIRST_TYPE_DEFINED, CLOSE_LAST_TYPE_DEFINED, CLOSE_NORMAL, CLOSE_REVOKED, CLOSE_ROTATED,
@@ -23,11 +28,15 @@ pub use hub::{
     CLOSING_REVOKED, CLOSING_ROTATED, CLOSING_STOPPING, HUB_CERTIFICATES, HUB_CLOSING,
     HUB_NEXT_CERTIFICATE_RECEIVED, HUB_PREFIX, SkakelCertificates, SkakelClosing,
 };
+pub use reasons::{
+    ERROR_DOMAIN, MAX_REASON_LENGTH, Reason, STREAM_TYPE_CODE, STREAM_TYPE_DOMAIN_PREFIX,
+    is_reason, stream_type_domain,
+};
 
 use std::time::Duration;
 
 /// The protocol version this crate speaks.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The protocol versions this crate speaks, as a server lists them.
 pub const VERSIONS: &[u32] = &[VERSION];
@@ -36,18 +45,18 @@ pub const VERSIONS: &[u32] = &[VERSION];
 pub const INFO_PATH: &str = "/skakel/info";
 
 /// Every versioned path starts with this.
-pub const BASE_PATH: &str = "/skakel/v1";
+pub const BASE_PATH: &str = "/skakel/v2";
 
 /// Opens a pairing request: `POST`. Reveal, poll and withdraw are under `{PAIR_PATH}/{requestId}`.
-pub const PAIR_PATH: &str = "/skakel/v1/pair";
+pub const PAIR_PATH: &str = "/skakel/v2/pair";
 
 /// OAuth 2.0 client credentials: `POST`.
-pub const TOKEN_PATH: &str = "/skakel/v1/token";
+pub const TOKEN_PATH: &str = "/skakel/v2/token";
 
-/// Checks credentials: `GET` with a token.
+/// Version 1's credentials check, `GET` with a token. Version 2 has `ControlService.Hello`.
 pub const HELLO_PATH: &str = "/skakel/v1/hello";
 
-/// Streams open at `{STREAMS_PATH}/{type}`.
+/// Version 1's streams opened at `{STREAMS_PATH}/{type}`. Version 2 has `StreamService.Open`.
 pub const STREAMS_PATH: &str = "/skakel/v1/streams";
 
 /// The header that carries a pairing request's poll token.
@@ -59,11 +68,42 @@ pub const GENERATION_CLAIM: &str = "skakel_generation";
 /// How long an access token lasts: 30 minutes.
 pub const ACCESS_TOKEN_LIFETIME: Duration = Duration::from_secs(30 * 60);
 
-/// How often both ends of a stream ping.
-pub const STREAM_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
+/// How often both ends of a connection that carries gRPC send an HTTP/2 PING.
+pub const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
-/// How long an end of a stream waits for an answer to its ping before it gives up.
-pub const STREAM_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long an end that has heard nothing from the other, no PING answer and no other frame, waits
+/// before it takes the connection for dead.
+pub const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The largest message on the control service, counted as encoded: 1 MiB.
+pub const CONTROL_MESSAGE_LIMIT: usize = 1024 * 1024;
+
+/// The largest frame on the stream service, counted as encoded: 16 MiB.
+pub const STREAM_MESSAGE_LIMIT: usize = 16 * 1024 * 1024;
+
+/// How long a server waits for a stream's `open` frame.
+pub const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The content type of a gRPC call. A request whose content type is this, or starts with
+/// `application/grpc+`, is a gRPC call.
+pub const GRPC_CONTENT_TYPE: &str = "application/grpc";
+
+/// True for a content type that makes a request a gRPC call: `application/grpc`, or one that
+/// starts with `application/grpc+`, with or without parameters.
+pub fn is_grpc_content_type(content_type: &str) -> bool {
+    let media = content_type.split(';').next().unwrap_or("").trim();
+    media.eq_ignore_ascii_case(GRPC_CONTENT_TYPE)
+        || media
+            .get(..GRPC_CONTENT_TYPE.len() + 1)
+            .is_some_and(|start| start.eq_ignore_ascii_case("application/grpc+"))
+}
+
+/// True for the name of an app's own gRPC service, `<package>.<Service>`: its package must not be
+/// `skakel` or start with `skakel.`.
+pub fn is_app_service_name(name: &str) -> bool {
+    let package = name.rsplit_once('.').map_or("", |(package, _)| package);
+    !package.is_empty() && package != "skakel" && !package.starts_with("skakel.")
+}
 
 /// The media type of a refusal's body.
 pub const PROBLEM_CONTENT_TYPE: &str = "application/problem+json";
@@ -96,20 +136,46 @@ mod tests {
 
     #[test]
     fn paths_sit_under_the_base_path() {
-        for path in [PAIR_PATH, TOKEN_PATH, HELLO_PATH, STREAMS_PATH] {
+        for path in [PAIR_PATH, TOKEN_PATH] {
             assert!(path.starts_with(&format!("{BASE_PATH}/")));
         }
-        assert_eq!(PAIR_PATH, "/skakel/v1/pair");
-        assert_eq!(TOKEN_PATH, "/skakel/v1/token");
-        assert_eq!(HELLO_PATH, "/skakel/v1/hello");
-        assert_eq!(STREAMS_PATH, "/skakel/v1/streams");
+        assert_eq!(BASE_PATH, "/skakel/v2");
+        assert_eq!(PAIR_PATH, "/skakel/v2/pair");
+        assert_eq!(TOKEN_PATH, "/skakel/v2/token");
     }
 
     #[test]
     fn lifetimes_are_the_ones_in_the_protocol() {
         assert_eq!(ACCESS_TOKEN_LIFETIME, Duration::from_secs(1800));
-        assert_eq!(STREAM_KEEP_ALIVE_INTERVAL, Duration::from_secs(15));
-        assert_eq!(STREAM_KEEP_ALIVE_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(KEEP_ALIVE_INTERVAL, Duration::from_secs(15));
+        assert_eq!(KEEP_ALIVE_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(OPEN_TIMEOUT, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn message_limits_are_the_ones_in_the_protocol() {
+        assert_eq!(CONTROL_MESSAGE_LIMIT, 1 << 20);
+        assert_eq!(STREAM_MESSAGE_LIMIT, 16 << 20);
+    }
+
+    #[test]
+    fn a_grpc_call_is_told_by_its_content_type() {
+        assert!(is_grpc_content_type("application/grpc"));
+        assert!(is_grpc_content_type("application/grpc+proto"));
+        assert!(is_grpc_content_type("Application/GRPC; charset=utf-8"));
+        assert!(!is_grpc_content_type("application/grpc-web"));
+        assert!(!is_grpc_content_type("application/grpcx"));
+        assert!(!is_grpc_content_type("application/json"));
+        assert!(!is_grpc_content_type(""));
+    }
+
+    #[test]
+    fn an_apps_service_is_in_a_package_of_its_own() {
+        assert!(is_app_service_name("koppel.v1.Devices"));
+        assert!(is_app_service_name("skakelish.Things"));
+        assert!(!is_app_service_name("skakel.v2.ControlService"));
+        assert!(!is_app_service_name("skakel.Things"));
+        assert!(!is_app_service_name("Things"));
     }
 
     #[test]
