@@ -227,6 +227,48 @@ async fn a_request_without_the_callers_address_is_refused_rather_than_counted_wi
 }
 
 #[tokio::test]
+async fn a_route_that_takes_the_client_but_sits_on_the_apps_router_is_refused_not_a_panic() {
+    async fn mine(
+        skakel_server::ClientPrincipal(principal): skakel_server::ClientPrincipal,
+    ) -> String {
+        principal.client_id
+    }
+    let server = bench_builder()
+        .discovery(false)
+        .start_mounted("127.0.0.1:5240".parse().unwrap())
+        .await
+        .unwrap();
+    // The route is on the app's own router instead of given to the builder's `routes`, so
+    // Skakel's state is not on its requests.
+    let mut app = axum::Router::new()
+        .route("/app/mine", axum::routing::get(mine))
+        .fallback_service(server.service());
+    let mut request = axum::http::Request::get("/app/mine")
+        .header("authorization", "Bearer any")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(std::net::SocketAddr::from((
+            [10, 0, 0, 1],
+            50000,
+        ))));
+
+    let answer = app.call(request).await.unwrap();
+
+    assert_eq!(answer.status(), 500);
+    assert_eq!(answer.headers()["content-type"], "application/problem+json");
+    let body = axum::body::to_bytes(answer.into_body(), 4096)
+        .await
+        .unwrap();
+    let problem: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        problem["detail"].as_str().unwrap().contains("routes"),
+        "{problem}"
+    );
+}
+
+#[tokio::test]
 async fn the_apps_acceptor_presents_the_certificate_and_a_handover_changes_it_only_at_the_switch() {
     let server = start_mounted().await;
     let current = server.fingerprint();

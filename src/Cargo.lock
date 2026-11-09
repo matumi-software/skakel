@@ -1631,6 +1631,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "log",
  "prost",
  "rcgen",
  "ring",

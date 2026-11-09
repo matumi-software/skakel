@@ -57,6 +57,10 @@
 //! The app's middleware must hand Skakel's answers on as they are (gRPC answers end in trailers),
 //! so no compression or body rewriting in front of the service.
 //!
+//! The app's routes that take [`ClientPrincipal`] must still go to the server through
+//! [`SkakelServerBuilder::routes`], which puts them in [`SkakelServer::service`]. On the app's own
+//! router they never reach Skakel's state, so the extractor cannot check the token and answers 500.
+//!
 //! ```no_run
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! use axum::extract::ConnectInfo;
@@ -92,7 +96,9 @@
 //! # }
 //! ```
 //!
-//! The server logs nothing: what happens is told to the app as [`ServerEvent`]s.
+//! The server logs nothing: what happens is told to the app as [`ServerEvent`]s. The one exception
+//! is a route that takes [`ClientPrincipal`] but is not served by Skakel, where there is no server
+//! to tell; the first such request logs an error through the `log` crate.
 
 mod control;
 mod crypto;
