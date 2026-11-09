@@ -48,3 +48,7 @@ futures-util = { version = "0.3.34", features = ["sink"] }
 if-addrs = "0.15.0"
 log = "0.4"
 url = "2.5.8"
+
+# Compiles the .proto files of protocol version 2 in a test, in Rust, so no protoc is needed
+# (MIT OR Apache-2.0, as is everything it pulls in, checked with `cargo metadata`).
+protox = "0.10.0"

@@ -1,0 +1,76 @@
+// Skakel protocol version 2: the control service. docs/protocol.md at the repository root is the
+// contract; this file is its wire format for the control channel.
+
+syntax = "proto3";
+
+package skakel.v2;
+
+// Skakel's own control calls. Every call carries the bearer token as `authorization: Bearer
+// <token>` metadata. An app's own calls are services of its own beside this one, never messages
+// in it.
+service ControlService {
+  // The control channel: one call per client, open while the client wants the server's state.
+  // The server sends `certificates` first, then whenever either certificate changes, and
+  // `closing` just before it ends the client's calls. The server ends this call when the token it
+  // was opened with expires, so the client opens the next one, with a fresh token, before that.
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+
+  // Checks credentials: answers who the server is and who the token says the client is. An app's
+  // Test button uses it.
+  rpc Hello(HelloRequest) returns (HelloResponse);
+}
+
+// A message from the client on the control channel.
+message ConnectRequest {
+  oneof message {
+    NextCertificateReceived next_certificate_received = 1;
+  }
+}
+
+// A message from the server on the control channel.
+message ConnectResponse {
+  oneof message {
+    Certificates certificates = 1;
+    Closing closing = 2;
+  }
+}
+
+// The server's certificate and, while a handover is prepared, the next one.
+message Certificates {
+  // The certificate the server presents now: 32 hex pairs separated by colons.
+  string fingerprint = 1;
+  // The certificate it will present after the switch, written the same way, or empty when none is
+  // prepared.
+  string next_fingerprint = 2;
+}
+
+// The client stored the next certificate, so the server can show who has it.
+message NextCertificateReceived {
+  // The next certificate's fingerprint, as `Certificates.next_fingerprint` gave it.
+  string fingerprint = 1;
+}
+
+// Sent just before the server ends every call of this client.
+message Closing {
+  ClosingReason reason = 1;
+}
+
+// Why the server ends a client's calls.
+enum ClosingReason {
+  CLOSING_REASON_UNSPECIFIED = 0;
+  // The client was revoked. Its credentials are gone.
+  CLOSING_REASON_REVOKED = 1;
+  // The client's secret was rotated. Tokens from before no longer work.
+  CLOSING_REASON_ROTATED = 2;
+  // The server is stopping, or no longer serves what the call was for.
+  CLOSING_REASON_STOPPING = 3;
+}
+
+message HelloRequest {}
+
+message HelloResponse {
+  // The server's name, as `/skakel/info` gives it.
+  string server = 1;
+  // The client the token belongs to.
+  string client_id = 2;
+}

@@ -1,0 +1,129 @@
+// Skakel protocol version 2: the `serial` stream type, one serial port on the server used by one
+// client at a time. docs/protocol.md at the repository root ("The serial stream type") is the
+// contract.
+//
+// Data frames carry the port's bytes with no framing of their own. Control frames carry one
+// `SerialClientMessage` (client to server) or `SerialServerMessage` (server to client), encoded.
+
+syntax = "proto3";
+
+package skakel.v2;
+
+// The target of a `serial` stream, in `StreamOpen.target`.
+message SerialTarget {
+  // The port's id from the app's own list of ports.
+  string port = 1;
+}
+
+// A control message from the client.
+message SerialClientMessage {
+  oneof message {
+    // Change the port's settings. Every field is required.
+    LineSettings line_settings = 1;
+    // Set the output lines.
+    ModemLines modem_lines = 2;
+    // Start or end a break.
+    BreakSignal break_signal = 3;
+    // Throw away what is buffered on the server.
+    Purge purge = 4;
+  }
+}
+
+// A control message from the server.
+message SerialServerMessage {
+  oneof message {
+    // The first control message on the stream: the port as it is now.
+    SerialOpened opened = 1;
+    // The settings now on the port, after a change was applied.
+    LineSettings line_settings = 2;
+    // An input line changed.
+    ModemStatus modem_status = 3;
+    // A change the port refused, or errors the port reported.
+    SerialError error = 4;
+  }
+}
+
+message LineSettings {
+  // Bits per second, 1 or more.
+  uint32 baud = 1;
+  // 5 to 8.
+  uint32 data_bits = 2;
+  Parity parity = 3;
+  StopBits stop_bits = 4;
+  FlowControl flow_control = 5;
+}
+
+enum Parity {
+  PARITY_UNSPECIFIED = 0;
+  PARITY_NONE = 1;
+  PARITY_ODD = 2;
+  PARITY_EVEN = 3;
+  PARITY_MARK = 4;
+  PARITY_SPACE = 5;
+}
+
+enum StopBits {
+  STOP_BITS_UNSPECIFIED = 0;
+  STOP_BITS_ONE = 1;
+  STOP_BITS_ONE_POINT_FIVE = 2;
+  STOP_BITS_TWO = 3;
+}
+
+enum FlowControl {
+  FLOW_CONTROL_UNSPECIFIED = 0;
+  FLOW_CONTROL_NONE = 1;
+  FLOW_CONTROL_RTS_CTS = 2;
+  FLOW_CONTROL_XON_XOFF = 3;
+}
+
+// The output lines. A line left out stays as it is.
+message ModemLines {
+  // Data terminal ready.
+  optional bool dtr = 1;
+  // Request to send. Ignored while flow control is RTS/CTS.
+  optional bool rts = 2;
+}
+
+message BreakSignal {
+  // True to start the break, false to end it.
+  bool on = 1;
+}
+
+message Purge {
+  // The bytes read from the port and not sent yet.
+  bool input = 1;
+  // The bytes waiting to be written to the port.
+  bool output = 2;
+}
+
+message SerialOpened {
+  LineSettings line_settings = 1;
+  ModemStatus modem_status = 2;
+}
+
+// The input lines.
+message ModemStatus {
+  // Clear to send.
+  bool cts = 1;
+  // Data set ready.
+  bool dsr = 2;
+  // Data carrier detect.
+  bool dcd = 3;
+  // Ring indicator.
+  bool ri = 4;
+}
+
+message SerialError {
+  SerialErrorCode code = 1;
+  // What happened, for a person. May be empty.
+  string detail = 2;
+}
+
+enum SerialErrorCode {
+  SERIAL_ERROR_CODE_UNSPECIFIED = 0;
+  // A change the port cannot make. The settings stay as they were.
+  SERIAL_ERROR_CODE_UNSUPPORTED = 1;
+  SERIAL_ERROR_CODE_FRAMING = 2;
+  SERIAL_ERROR_CODE_PARITY = 3;
+  SERIAL_ERROR_CODE_OVERRUN = 4;
+}

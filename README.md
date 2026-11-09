@@ -11,9 +11,11 @@ the network, is the first app built on it.
 
 ## Status
 
-Version 0.2.0, Rust only. Protocol version 1 is settled in
-[docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), and the
-client and server crates are tested against each other.
+Version 0.2.0, Rust only. Protocol version 2 is specified in
+[docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), with its
+wire format in `.proto` files under `src/proto/skakel/v2/`. The client and server crates still speak
+version 1, with a SignalR hub and WebSocket streams, and are tested against each other; they move to
+version 2 next.
 
 Up to 0.1.0 Skakel was a set of .NET packages. They stay on NuGet.org but are no longer developed,
 and their source is at the tag `v0.1.0`.
@@ -64,8 +66,11 @@ has how it works, the shared memory contract, installing and upgrading, and sign
 - **Pairing:** a six-digit code that a person compares on both machines, so no secret is ever
   typed or copied.
 - **Signing in:** OAuth 2.0 client credentials. The client pins the server's certificate.
-- **Control:** REST for commands, SignalR's JSON hub protocol for state the server pushes.
-- **Data:** a binary WebSocket for each stream.
+- **Control:** gRPC over HTTP/2 on the same port. Skakel's control service carries the certificate
+  handover and closing; an app adds gRPC services of its own beside it for its commands and the
+  state it pushes, signed in with the same token.
+- **Data:** a gRPC stream for each USB device, serial port or app's own stream type, each on a
+  connection of its own, with data and control messages in order.
 
 ## License
 
