@@ -1,14 +1,13 @@
 # Skakel virtual camera
 
 Layout version 1. This is the contract between the apps that feed the camera (producers) and the
-media source that Windows runs it on. Both producers, `skakel-vcam` (Rust) and `Skakel.VirtualCamera`
-(.NET), and the media source, `skakel-vcam-source`, follow it. A change to anything below changes
-this file in the same pull request, and a test that pins bytes on one side has its counterpart on
-the other.
+media source that Windows runs it on. The producer, `skakel-vcam`, and the media source,
+`skakel-vcam-source`, follow it, and so must any other producer. A change to anything below changes
+this file in the same pull request.
 
 Windows 11 only (build 22000 or later): the camera is made with `MFCreateVirtualCamera`, which
-Windows 10 does not have. There, both producers report the camera as unsupported
-(`Error::Unsupported`, `PlatformNotSupportedException`) instead of failing.
+Windows 10 does not have. There, the producer reports the camera as unsupported
+(`Error::Unsupported`) instead of failing.
 
 ## The parts
 
@@ -89,7 +88,7 @@ user gets read and write. Without a valid producer SID attribute, `IU` (interact
 place.
 
 **The producer opens it** with read and write access. Until an app opens the camera it does not
-exist, and the producer drops frames (`push_frame` and `PushFrame` return false) and looks for it again
+exist, and the producer drops frames (`push_frame` returns false) and looks for it again
 at most every 250 ms. Once the producer holds it open, it stays alive even when the media source lets
 go, and the next media source opens the same one; the producer never needs to reconnect.
 
@@ -284,7 +283,7 @@ signtool sign /fd SHA256 /tr <timestamp URL> /td SHA256 /f <certificate> target\
 ```
 
 The installer copies the file as it is, so the signature carries over to the versioned copy. The
-DLL links the C runtime statically (`src/rust/.cargo/config.toml`), so it needs no Visual C++
+DLL links the C runtime statically (`src/.cargo/config.toml`), so it needs no Visual C++
 redistributable on the machine.
 
 ## Debugging
