@@ -1,0 +1,37 @@
+[package]
+name = "skakel-client"
+description = "Reach Skakel servers: discovery, pairing, tokens, the control hub and streams"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+skakel-protocol.workspace = true
+skakel-discovery.workspace = true
+skakel-pairing.workspace = true
+skakel-serial.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+if-addrs.workspace = true
+log.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+skakel-server = { path = "../skakel-server", version = "0.2.0" }
+tokio = { workspace = true, features = ["io-util"] }
+# The test bench: a stream route that never answers, and a self-signed server of another version.
+axum = { version = "0.8.9", default-features = false }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }

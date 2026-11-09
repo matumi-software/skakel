@@ -6,37 +6,5 @@ insert_final_newline = true
 indent_style = space
 indent_size = 4
 
-[*.{json,yml,yaml,csproj,props,slnx}]
+[*.{json,yml,yaml}]
 indent_size = 2
-
-[*.cs]
-# using directives: System.* first, file-scoped namespaces
-dotnet_sort_system_directives_first = true
-dotnet_separate_import_directive_groups = false
-csharp_using_directive_placement = outside_namespace:warning
-csharp_style_namespace_declarations = file_scoped:error
-
-# language and style
-dotnet_style_qualification_for_field = false:warning
-dotnet_style_qualification_for_property = false:warning
-dotnet_style_qualification_for_method = false:warning
-dotnet_style_qualification_for_event = false:warning
-dotnet_style_predefined_type_for_locals_parameters_members = true:warning
-dotnet_style_predefined_type_for_member_access = true:warning
-csharp_prefer_braces = true:silent
-csharp_style_var_for_built_in_types = false:silent
-csharp_style_var_when_type_is_apparent = true:suggestion
-csharp_style_expression_bodied_methods = false:silent
-dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
-dotnet_style_readonly_field = true:warning
-csharp_prefer_simple_using_statement = true:suggestion
-csharp_style_prefer_index_operator = true:suggestion
-csharp_style_prefer_range_operator = true:suggestion
-dotnet_style_object_initializer = true:suggestion
-dotnet_style_collection_initializer = true:suggestion
-dotnet_style_null_propagation = true:warning
-dotnet_style_coalesce_expression = true:warning
-
-[**/tests/**.cs]
-# Tests use the xUnit convention `Method_does_thing()`, as in Koppel.
-dotnet_diagnostic.CA1707.severity = silent

@@ -183,9 +183,10 @@ A client paired with several servers holds one client ID and secret for each.
   `{ "access_token", "token_type": "Bearer", "expires_in" }`. Any other grant is `unsupported_grant_type`
   (400), a body that is not a form is `invalid_request` (400).
 - Access tokens last 30 minutes and are JWTs signed with a key whose id is in the token's `kid`
-  header. Clients do not read what is inside a token, so the algorithm is the server's own: the .NET
-  server signs with RSA (`RS256`), the Rust server with ECDSA P-256 (`ES256`). A server also takes
-  tokens signed by the keys it replaced, until the tokens they signed would have expired.
+  header. Clients do not read what is inside a token, so the algorithm is the server's own. Skakel's
+  server signs with ECDSA P-256 (`ES256`); the .NET server of Skakel 0.1 signed with RSA (`RS256`).
+  A server also takes tokens signed by the keys it replaced, until the tokens they signed would have
+  expired.
 - A client takes a token to last what `expires_in` says, held to between 2 and 30 minutes.
 - Every token carries the issuer `https://skakel.invalid/`, whatever address or name the client
   used, so a token issued at one of a server's addresses works at all of them. The server publishes

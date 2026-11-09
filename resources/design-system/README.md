@@ -16,8 +16,8 @@ same time.
 - `assets/Logos/skakel-mark-on-dark.svg`: canopy `#549572`, for dark grounds.
 - `assets/Logos/skakel-app-icon.svg`: the mark in paper `#FBF9F4` on a canopy `#2A6B4E` tile with a
   14/64 corner radius, the same tile as Koppel's app icon.
-- `skakel-app-icon-128.png` is the NuGet package icon. `skakel-app-icon-512.png` and the
-  `skakel-mark*-512.png` files are for anywhere an image is needed.
+- `skakel-app-icon-128.png`, `skakel-app-icon-512.png` and the `skakel-mark*-512.png` files are
+  for anywhere an image is needed.
 - Stroke width is 10 on a 64 grid with butt caps. Keep the slit open: never round the caps or close
   the gap.
 - Clear space is half the mark's width on every side. Do not draw it below 16px.

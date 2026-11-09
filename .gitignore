@@ -1,26 +1,18 @@
-bin/
-# Cargo's binaries live in src/bin/, which the .NET line above would hide.
-!src/rust/*/src/bin/
-obj/
-*.user
-.vs/
-.vscode/
-TestResults/
-*.binlog
-coverage/
-artifacts/
-*.log
-*.nupkg
-*.snupkg
+# Rust
+target/
 
 # Editors and OS
+.vs/
+.vscode/
 .idea/
-*.suo
-*.DotSettings.user
 *.swp
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Logs and coverage
+*.log
+coverage/
 
 # Keys, certificates and environment files
 *.pfx
@@ -30,6 +22,3 @@ desktop.ini
 .env
 .env.*
 !.env.example
-
-# Rust
-target/
