@@ -27,6 +27,7 @@ One crate per part, in the Cargo workspace in `src/`:
 | Crate | What |
 |---|---|
 | `skakel-protocol` | Wire constants and paths, the JSON contracts, certificate fingerprints, the hub's messages and the close codes |
+| `skakel-proto` | The Rust code generated from the `.proto` files of protocol version 2: the messages, and with the `client` and `server` features the tonic clients and servers |
 | `skakel-discovery` | The discovery packet (probe, answer, cleaning, limits) and a small `std` UDP helper for answering and probing |
 | `skakel-pairing` | The pairing code, nonces and commitments, and the JSON bodies of the pairing calls |
 | `skakel-serial` | The serial stream's line settings, modem lines and control messages |
