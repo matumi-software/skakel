@@ -13,8 +13,10 @@ the network, is the first app built on it.
 
 Version 0.2.0, Rust only. Protocol version 2 is specified in
 [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), with its
-wire format in `.proto` files under `src/proto/skakel/v2/`. The server speaks version 2; the client
-still speaks version 1, with a SignalR hub and WebSocket streams, and moves to version 2 next.
+wire format in `.proto` files under `src/proto/skakel/v2/`. The server and the client speak it:
+gRPC for the control channel, the app's own calls and the data streams, beside HTTPS for info,
+pairing and tokens, all on one TLS port pinned to the server's certificate. They are tested against
+each other. Version 1 (a SignalR hub and WebSocket streams) is at the tag `v0.1.0`.
 
 Up to 0.1.0 Skakel was a set of .NET packages. They stay on NuGet.org but are no longer developed,
 and their source is at the tag `v0.1.0`.
@@ -25,13 +27,13 @@ One crate per part, in the Cargo workspace in `src/`:
 
 | Crate | What |
 |---|---|
-| `skakel-protocol` | Wire constants and paths, the JSON contracts, certificate fingerprints, the hub's messages and the close codes |
+| `skakel-protocol` | Wire constants and paths, the JSON contracts, certificate fingerprints, and the reasons a gRPC call is refused or ended |
 | `skakel-proto` | The Rust code generated from the `.proto` files of protocol version 2: the messages, and with the `client` and `server` features the tonic clients and servers |
 | `skakel-discovery` | The discovery packet (probe, answer, cleaning, limits) and a small `std` UDP helper for answering and probing |
 | `skakel-pairing` | The pairing code, nonces and commitments, and the JSON bodies of the pairing calls |
-| `skakel-serial` | The serial stream's line settings, modem lines and control messages |
+| `skakel-serial` | The serial stream's target, line settings, modem lines and control messages, encoded as `serial.proto` says |
 | `skakel-server` | Serve clients, protocol version 2: discovery answers, pairing approval, OAuth tokens, revoking clients, the control and stream services over gRPC, the app's own gRPC services behind Skakel's token check, the per-address limits and the self-signed certificate with its handover, all on one TLS port. tokio, hyper, axum, tonic and rustls; the app supplies a store, its gRPC services, stream types and the pairing screen |
-| `skakel-client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub and open data streams, on tokio; the hub is a small SignalR client written for what Skakel's hub uses |
+| `skakel-client` | Find servers, pair, get tokens, pin the server's certificate, keep the control channel up (renewing it before its token runs out, following a certificate handover and a server that moved), call the app's own gRPC services over it, and open data streams, each on a connection of its own; on tokio, with tonic's generated clients over pinned HTTP/2 connections |
 | `skakel-vcam` | Feed the virtual camera, and `skakel-vcam-install` to install its media source |
 | `skakel-vcam-source` | The virtual camera's media source: the COM DLL Windows' Frame Server loads |
 

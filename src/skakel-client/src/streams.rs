@@ -1,93 +1,121 @@
-//! Data streams: one WebSocket that carries one thing. Binary frames carry its data and text frames
-//! its control messages, one JSON object each. Both ends ping every 15 seconds and give up after 30
-//! without an answer.
+//! Data streams: one `StreamService.Open` call that carries one thing, on a connection of its own.
+//! Data frames carry the stream's bytes and control frames its control messages, one each, in one
+//! order. HTTP/2 flow control is the back pressure: an app that stops reading stops the reads, and
+//! the server slows down instead of the client losing data.
 
+use std::sync::Mutex;
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
-use reqwest::Url;
-use skakel_protocol::{
-    CLOSE_FIRST_TYPE_DEFINED, CLOSE_LAST_TYPE_DEFINED, CLOSE_NORMAL, CLOSE_REVOKED, CLOSE_ROTATED,
-    CLOSE_STOPPING, CLOSE_TARGET_GONE, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, STREAMS_PATH,
-};
-use tokio::sync::{Mutex, mpsc, watch};
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use prost::bytes::Bytes;
+use skakel_proto::v2::stream_service_client::StreamServiceClient;
+use skakel_proto::v2::{OpenRequest, OpenResponse, StreamOpen, open_request, open_response};
+use skakel_protocol::{Reason, STREAM_MESSAGE_LIMIT, STREAM_TYPE_DOMAIN_PREFIX};
+use tokio::sync::{mpsc, watch};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Code, Status, Streaming};
 
-use crate::failure::{Error, Failure, FailureKind};
-use crate::ws::{self, Opened, Socket};
+use crate::failure::{Error, Failure, FailureKind, bad_answer};
+use crate::grpc::{Connection, call_failed, error_info_of, reason_of};
 
-/// How long a close may wait for the server's answer.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a close waits for the server to end the call.
+const CLOSE_TIMEOUT: Duration = Duration::from_millis(2500);
 
-/// The most one stream message may be.
-const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
-
-/// How many frames wait for the app to read them. When the app stops reading, the connection stops
-/// reading the socket, and the server slows down instead of the client losing data.
-const INCOMING_FRAMES: usize = 16;
+/// How many frames wait to go out, and how many wait for the app to read them.
+const FRAMES: usize = 16;
 
 /// A frame of an open stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
     /// Data, the stream's own bytes.
-    Binary(Vec<u8>),
-    /// A control message, one JSON object.
-    Text(String),
+    Data(Bytes),
+    /// One control message, encoded as the stream type defines.
+    Control(Bytes),
 }
 
-/// Why a stream ended, by its close code.
+/// Why a stream ended, by the status the call ended with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamCloseReason {
-    /// 1000: closed normally.
+    /// `OK`: closed normally.
     Normal,
-    /// 4001: the client was revoked.
+    /// `REVOKED`: the client was revoked.
     Revoked,
-    /// 4002: the client's secret was rotated.
+    /// `ROTATED`: the client's secret was rotated.
     Rotated,
-    /// 4003: the server is stopping, or no longer serves this type.
+    /// `STOPPING`: the server is stopping, or no longer serves this type.
     ServerStopping,
-    /// 4004: the target went away, such as a device that was unplugged.
+    /// `TARGET_GONE`: the target went away, such as a device that was unplugged.
     TargetGone,
-    /// 4100 to 4999: a code the stream type defines. [`StreamClose::code`] says which.
+    /// `ABORTED` for a reason the stream type defines. [`StreamClose::type_reason`] says which.
     TypeDefined,
-    /// The connection ended without a close frame, or a peer stopped answering pings.
+    /// The connection dropped or stopped answering pings: a status with no Skakel reason.
     ConnectionLost,
-    /// Any other code.
+    /// Any other status.
     Other,
 }
 
 /// How a stream ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamClose {
-    /// The close code as a reason a client acts on.
+    /// The status as a reason a client acts on.
     pub reason: StreamCloseReason,
-    /// The close code, or `None` when there was no close frame.
-    pub code: Option<u16>,
-    /// The server's reason text, for the log only.
+    /// The status code the call ended with.
+    pub code: Code,
+    /// For [`StreamCloseReason::TypeDefined`], the reason the stream type gave, such as
+    /// `PORT_FAULT`.
+    pub type_reason: Option<String>,
+    /// The server's words, for the log only.
     pub description: Option<String>,
 }
 
 impl StreamClose {
-    /// The close for a code, or for none when the connection just ended.
-    pub fn from_code(code: Option<u16>, description: Option<String>) -> Self {
-        let reason = match code {
-            None | Some(1006) => StreamCloseReason::ConnectionLost,
-            Some(CLOSE_NORMAL) => StreamCloseReason::Normal,
-            Some(CLOSE_REVOKED) => StreamCloseReason::Revoked,
-            Some(CLOSE_ROTATED) => StreamCloseReason::Rotated,
-            Some(CLOSE_STOPPING) => StreamCloseReason::ServerStopping,
-            Some(CLOSE_TARGET_GONE) => StreamCloseReason::TargetGone,
-            Some(CLOSE_FIRST_TYPE_DEFINED..=CLOSE_LAST_TYPE_DEFINED) => {
+    /// A stream that ended with `OK`.
+    pub fn normal() -> Self {
+        Self {
+            reason: StreamCloseReason::Normal,
+            code: Code::Ok,
+            type_reason: None,
+            description: None,
+        }
+    }
+
+    /// A stream whose connection was lost.
+    pub fn connection_lost() -> Self {
+        Self {
+            reason: StreamCloseReason::ConnectionLost,
+            code: Code::Unavailable,
+            type_reason: None,
+            description: None,
+        }
+    }
+
+    /// The close for the status a stream ended with.
+    pub fn from_status(status: &Status) -> Self {
+        let info = error_info_of(status);
+        let mut type_reason = None;
+        let reason = match (status.code(), reason_of(status)) {
+            (Code::Ok, _) => StreamCloseReason::Normal,
+            (_, Some(Reason::Revoked)) => StreamCloseReason::Revoked,
+            (_, Some(Reason::Rotated)) => StreamCloseReason::Rotated,
+            (_, Some(Reason::Stopping)) => StreamCloseReason::ServerStopping,
+            (_, Some(Reason::TargetGone)) => StreamCloseReason::TargetGone,
+            (Code::Aborted, None)
+                if info
+                    .as_ref()
+                    .is_some_and(|(domain, _)| domain.starts_with(STREAM_TYPE_DOMAIN_PREFIX)) =>
+            {
+                type_reason = info.map(|(_, reason)| reason);
                 StreamCloseReason::TypeDefined
             }
-            Some(_) => StreamCloseReason::Other,
+            (Code::Unavailable | Code::Cancelled | Code::Unknown, None) if info.is_none() => {
+                StreamCloseReason::ConnectionLost
+            }
+            _ => StreamCloseReason::Other,
         };
         Self {
             reason,
-            code,
-            description,
+            code: status.code(),
+            type_reason,
+            description: Some(status.message().to_owned()).filter(|m| !m.is_empty()),
         }
     }
 
@@ -106,73 +134,79 @@ impl StreamClose {
             StreamCloseReason::ConnectionLost => Failure::of(FailureKind::ConnectionLost)
                 .message()
                 .to_owned(),
-            StreamCloseReason::TypeDefined | StreamCloseReason::Other => format!(
-                "The server closed the stream with code {}.",
-                self.code.unwrap_or_default()
+            StreamCloseReason::TypeDefined => format!(
+                "The server ended the stream: {}.",
+                self.type_reason.as_deref().unwrap_or("?")
             ),
+            StreamCloseReason::Other => {
+                format!("The server ended the stream with {:?}.", self.code)
+            }
         }
     }
 }
 
-/// Why the server refused to open a stream, by the HTTP status it answered before the upgrade.
+/// Why the server refused to open a stream, by the reason it gave.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamRefusalReason {
-    /// 400: the request was not a WebSocket upgrade.
-    NotAnUpgrade,
-    /// 401: no token, an expired one, or one from an older generation.
+    /// `TOKEN_REFUSED`: no token, an expired one, or one from an older generation.
     Unauthorized,
-    /// 404: the server has no such type, or no such target.
-    NotFound,
-    /// 409: the target is in use. [`StreamRefusal::message`] names who holds it, when the app
+    /// `NO_SUCH_TYPE`: the server does not offer this stream type.
+    NoSuchType,
+    /// `NO_SUCH_TARGET`: the server has no such target; it may come back later.
+    NoSuchTarget,
+    /// `IN_USE`: the target is in use. [`StreamRefusal::message`] names who holds it, when the app
     /// allows that.
     InUse,
-    /// 422: the query string is not what the type expects.
-    InvalidQuery,
-    /// Any other status.
+    /// `BAD_TARGET`: the target is not what the type expects.
+    BadTarget,
+    /// `BAD_OPEN` or `BAD_FRAME`: the client opened the stream wrong, which is a bug.
+    BadOpen,
+    /// Any other reason.
     Other,
 }
 
 /// The server refused to open a stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamRefusal {
-    /// The HTTP status.
-    pub status: u16,
-    /// The status as a reason.
+    /// The status code.
+    pub code: Code,
+    /// The reason.
     pub reason: StreamRefusalReason,
-    /// The problem's `detail`, which the server wrote for a person, or fixed wording when it sent
-    /// none.
+    /// The server's words for a person, or fixed wording when it sent none.
     pub message: String,
 }
 
 impl StreamRefusal {
-    /// The refusal for a status and the problem's detail, when there was one.
-    pub fn from_status(status: u16, detail: Option<&str>) -> Self {
-        let reason = match status {
-            400 => StreamRefusalReason::NotAnUpgrade,
-            401 => StreamRefusalReason::Unauthorized,
-            404 => StreamRefusalReason::NotFound,
-            409 => StreamRefusalReason::InUse,
-            422 => StreamRefusalReason::InvalidQuery,
+    /// The refusal for the status the call ended with before `opened`.
+    pub fn from_status(status: &Status) -> Self {
+        let reason = match reason_of(status) {
+            Some(Reason::TokenRefused) => StreamRefusalReason::Unauthorized,
+            Some(Reason::NoSuchType) => StreamRefusalReason::NoSuchType,
+            Some(Reason::NoSuchTarget) => StreamRefusalReason::NoSuchTarget,
+            Some(Reason::InUse) => StreamRefusalReason::InUse,
+            Some(Reason::BadTarget) => StreamRefusalReason::BadTarget,
+            Some(Reason::BadOpen | Reason::BadFrame) => StreamRefusalReason::BadOpen,
             _ => StreamRefusalReason::Other,
         };
-        let message = match detail.map(str::trim).filter(|d| !d.is_empty()) {
-            Some(detail) => detail.to_owned(),
-            None => match reason {
+        let message = match status.message().trim() {
+            "" => match reason {
                 StreamRefusalReason::Unauthorized => {
                     Failure::of(FailureKind::ClientUnknown).message().to_owned()
                 }
-                StreamRefusalReason::NotFound => {
-                    "The server has no such stream or target.".to_owned()
+                StreamRefusalReason::NoSuchType => {
+                    "The server does not offer this kind of stream.".to_owned()
                 }
+                StreamRefusalReason::NoSuchTarget => "The server has no such target.".to_owned(),
                 StreamRefusalReason::InUse => "Someone else is using it.".to_owned(),
-                StreamRefusalReason::InvalidQuery => {
+                StreamRefusalReason::BadTarget => {
                     "The server did not understand what the stream was asked for.".to_owned()
                 }
-                _ => format!("The server refused the stream ({status})."),
+                _ => format!("The server refused the stream ({:?}).", status.code()),
             },
+            words => words.to_owned(),
         };
         Self {
-            status,
+            code: status.code(),
             reason,
             message,
         }
@@ -184,7 +218,7 @@ impl StreamRefusal {
 pub enum OpenResult<T> {
     /// The stream opened.
     Opened(T),
-    /// The server refused, with its status and its words for it.
+    /// The server refused, with its reason and its words for it.
     Refused(StreamRefusal),
 }
 
@@ -211,20 +245,23 @@ impl<T> OpenResult<T> {
     }
 }
 
-enum Command {
-    Send(Message),
-    Close,
-}
-
-/// An open stream. Dropping it ends the connection without a close frame; use
-/// [`close`](Self::close) to end it properly.
-#[derive(Debug)]
+/// An open stream, on a connection of its own. Dropping it cancels the call and closes the
+/// connection; use [`close`](Self::close) to end it properly.
 pub struct StreamConnection {
     stream_type: String,
-    commands: mpsc::Sender<Command>,
-    incoming: Mutex<mpsc::Receiver<Frame>>,
+    frames: Mutex<Option<mpsc::Sender<OpenRequest>>>,
+    incoming: tokio::sync::Mutex<mpsc::Receiver<Frame>>,
     closed: watch::Receiver<Option<StreamClose>>,
     task: tokio::task::AbortHandle,
+    _connection: Connection,
+}
+
+impl std::fmt::Debug for StreamConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamConnection")
+            .field("stream_type", &self.stream_type)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for StreamConnection {
@@ -233,18 +270,27 @@ impl Drop for StreamConnection {
     }
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl StreamConnection {
-    fn start(stream_type: &str, socket: Socket) -> Self {
-        let (commands, commands_rx) = mpsc::channel(INCOMING_FRAMES);
-        let (incoming_tx, incoming) = mpsc::channel(INCOMING_FRAMES);
+    fn start(
+        stream_type: &str,
+        connection: Connection,
+        frames: mpsc::Sender<OpenRequest>,
+        answers: Streaming<OpenResponse>,
+    ) -> Self {
+        let (incoming_tx, incoming) = mpsc::channel(FRAMES);
         let (closed_tx, closed) = watch::channel(None);
-        let task = tokio::spawn(run(socket, commands_rx, incoming_tx, closed_tx));
+        let task = tokio::spawn(read(answers, incoming_tx, closed_tx));
         Self {
             stream_type: stream_type.to_owned(),
-            commands,
-            incoming: Mutex::new(incoming),
+            frames: Mutex::new(Some(frames)),
+            incoming: tokio::sync::Mutex::new(incoming),
             closed,
             task: task.abort_handle(),
+            _connection: connection,
         }
     }
 
@@ -255,18 +301,24 @@ impl StreamConnection {
 
     /// Sends data. Frames go out in the order they were sent, control messages among them, so a
     /// control message takes effect between the bytes sent before it and the bytes sent after it.
-    pub async fn send_binary(&self, data: impl Into<Vec<u8>>) -> Result<(), Error> {
-        self.send(Message::binary(data.into())).await
+    /// It waits while the server takes the frames sent before.
+    pub async fn send_data(&self, data: impl Into<Bytes>) -> Result<(), Error> {
+        self.send(open_request::Frame::Data(data.into())).await
     }
 
-    /// Sends a control message, one JSON object.
-    pub async fn send_text(&self, text: impl Into<String>) -> Result<(), Error> {
-        self.send(Message::text(text.into())).await
+    /// Sends one control message, encoded as the stream type defines.
+    pub async fn send_control(&self, message: impl Into<Bytes>) -> Result<(), Error> {
+        self.send(open_request::Frame::Control(message.into()))
+            .await
     }
 
-    async fn send(&self, message: Message) -> Result<(), Error> {
-        self.commands
-            .send(Command::Send(message))
+    async fn send(&self, frame: open_request::Frame) -> Result<(), Error> {
+        let frames = lock(&self.frames).clone();
+        let Some(frames) = frames else {
+            return Err(Error::of(FailureKind::ConnectionLost));
+        };
+        frames
+            .send(OpenRequest { frame: Some(frame) })
             .await
             .map_err(|_| Error::of(FailureKind::ConnectionLost))
     }
@@ -277,8 +329,7 @@ impl StreamConnection {
         self.incoming.lock().await.recv().await
     }
 
-    /// Why the stream ended, once it has: the server's close code as a reason. `None` while it is
-    /// open.
+    /// Why the stream ended, once it has. `None` while it is open.
     pub fn close_info(&self) -> Option<StreamClose> {
         self.closed.borrow().clone()
     }
@@ -287,241 +338,227 @@ impl StreamConnection {
     pub async fn closed(&self) -> StreamClose {
         let mut closed = self.closed.clone();
         match closed.wait_for(Option::is_some).await {
-            Ok(close) => close
-                .clone()
-                .unwrap_or_else(|| StreamClose::from_code(None, None)),
-            Err(_) => StreamClose::from_code(None, None),
+            Ok(close) => close.clone().unwrap_or_else(StreamClose::connection_lost),
+            Err(_) => StreamClose::connection_lost(),
         }
     }
 
-    /// Closes the stream normally and waits briefly for the server to answer. Never fails for a
-    /// stream that is already gone.
+    /// Ends the client's side of the stream and waits briefly for the server to send what it still
+    /// has and end the call. Never fails for a stream that is already gone.
     pub async fn close(&self) {
-        let _ = self.commands.send(Command::Close).await;
-        let _ =
-            tokio::time::timeout(CLOSE_TIMEOUT + Duration::from_millis(500), self.closed()).await;
+        lock(&self.frames).take();
+        let _ = tokio::time::timeout(CLOSE_TIMEOUT, self.closed()).await;
     }
 }
 
-/// Owns the socket until the stream ends, then says how.
-async fn run(
-    mut socket: Socket,
-    mut commands: mpsc::Receiver<Command>,
+/// Reads the server's frames until the call ends, then says how. A frame is read only when the app
+/// has room for it.
+async fn read(
+    mut answers: Streaming<OpenResponse>,
     incoming: mpsc::Sender<Frame>,
     closed: watch::Sender<Option<StreamClose>>,
 ) {
-    let mut ping = tokio::time::interval(KEEP_ALIVE_INTERVAL);
-    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ping.reset();
-    let silent = tokio::time::sleep(KEEP_ALIVE_TIMEOUT);
-    tokio::pin!(silent);
-    let mut permit = None;
-    let mut we_closed = false;
-    let mut received: Option<StreamClose> = None;
-    loop {
-        tokio::select! {
-            room = incoming.reserve(), if permit.is_none() => {
-                match room {
-                    Ok(room) => permit = Some(room),
-                    // Nobody reads any more.
-                    Err(_) => break,
-                }
+    let close = loop {
+        let Ok(room) = incoming.reserve().await else {
+            // Nobody reads any more; the stream is dropped with its connection.
+            return;
+        };
+        match answers.message().await {
+            Ok(Some(OpenResponse {
+                frame: Some(open_response::Frame::Data(data)),
+            })) => room.send(Frame::Data(data)),
+            Ok(Some(OpenResponse {
+                frame: Some(open_response::Frame::Control(control)),
+            })) => room.send(Frame::Control(control)),
+            // A second `opened`, or a kind this end does not know.
+            Ok(Some(_)) => {}
+            Ok(None) => break StreamClose::normal(),
+            // tonic reports a frame over the limit as OUT_OF_RANGE; the protocol says
+            // RESOURCE_EXHAUSTED.
+            Err(status) if status.code() == Code::OutOfRange => {
+                break StreamClose::from_status(&Status::resource_exhausted(status.message()));
             }
-            message = socket.next(), if permit.is_some() => {
-                silent.as_mut().reset(tokio::time::Instant::now() + KEEP_ALIVE_TIMEOUT);
-                match message {
-                    Some(Ok(Message::Binary(data))) => {
-                        if let Some(room) = permit.take() {
-                            room.send(Frame::Binary(data.to_vec()));
-                        }
-                    }
-                    Some(Ok(Message::Text(text))) => {
-                        if let Some(room) = permit.take() {
-                            room.send(Frame::Text(text.as_str().to_owned()));
-                        }
-                    }
-                    Some(Ok(Message::Close(frame))) => {
-                        received = Some(StreamClose::from_code(
-                            Some(frame.as_ref().map_or(1005, |f| u16::from(f.code))),
-                            frame.map(|f| f.reason.as_str().to_owned()).filter(|r| !r.is_empty()),
-                        ));
-                        // Answer it, so the close completes on both ends.
-                        let _ = tokio::time::timeout(CLOSE_TIMEOUT, socket.close(None)).await;
-                        break;
-                    }
-                    // Pings are answered by the library, and pongs only show the peer is there.
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) | None => break,
-                }
-            }
-            command = commands.recv() => match command {
-                Some(Command::Send(message)) => {
-                    if socket.send(message).await.is_err() {
-                        break;
-                    }
-                }
-                Some(Command::Close) => {
-                    if we_closed {
-                        continue;
-                    }
-                    we_closed = true;
-                    let frame = CloseFrame { code: CloseCode::Normal, reason: "".into() };
-                    if socket.send(Message::Close(Some(frame))).await.is_err() {
-                        break;
-                    }
-                    // The server's close frame ends the loop; do not wait long for it.
-                    silent.as_mut().reset(tokio::time::Instant::now() + CLOSE_TIMEOUT);
-                }
-                // Dropped: nobody sends or closes any more, but frames may still arrive.
-                None => {
-                    if !we_closed {
-                        we_closed = true;
-                        let _ = socket.close(None).await;
-                    }
-                }
-            },
-            _ = ping.tick(), if !we_closed => {
-                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
-                    break;
-                }
-            }
-            () = &mut silent => {
-                // A peer that stopped answering pings, or one that did not answer our close.
-                if we_closed && received.is_none() {
-                    received = Some(StreamClose::from_code(Some(CLOSE_NORMAL), None));
-                }
-                break;
-            }
+            Err(status) => break StreamClose::from_status(&status),
         }
-    }
-    let close = received.unwrap_or_else(|| {
-        if we_closed {
-            StreamClose::from_code(Some(CLOSE_NORMAL), None)
-        } else {
-            StreamClose::from_code(None, None)
-        }
-    });
+    };
     let _ = closed.send(Some(close));
 }
 
-/// Opens a stream at `/skakel/v1/streams/{type}` with the token. What the stream is for goes in
-/// `query`, as the type defines it. A refusal before the upgrade comes back in the result.
+/// A request that carries `token` as its bearer token.
+pub(crate) fn with_token<T>(message: T, token: &str) -> tonic::Request<T> {
+    let mut request = tonic::Request::new(message);
+    if let Ok(value) = format!("Bearer {token}").parse() {
+        request.metadata_mut().insert("authorization", value);
+    }
+    request
+}
+
+/// Opens a stream of `stream_type` for `target` on `connection` with `token`, and waits up to
+/// `timeout` for `opened`. A refusal before it comes back in the result.
 pub(crate) async fn open(
-    client: &reqwest::Client,
-    server: &Url,
+    connection: Connection,
     stream_type: &str,
-    query: &[(&str, &str)],
+    target: &[u8],
     token: &str,
     timeout: Duration,
 ) -> Result<OpenResult<StreamConnection>, Error> {
-    let url = stream_url(server, stream_type, query)?;
-    Ok(
-        match ws::open(client, url, token, timeout, MAX_MESSAGE_BYTES).await? {
-            Opened::Open(socket) => {
-                OpenResult::Opened(StreamConnection::start(stream_type, socket))
-            }
-            Opened::Refused { status, detail } => {
-                OpenResult::Refused(StreamRefusal::from_status(status, detail.as_deref()))
-            }
-        },
-    )
-}
-
-fn stream_url(server: &Url, stream_type: &str, query: &[(&str, &str)]) -> Result<Url, Error> {
-    let mut url = server
-        .join(&format!("{STREAMS_PATH}/{stream_type}"))
-        .map_err(Error::from_cause)?;
-    if !query.is_empty() {
-        url.query_pairs_mut().extend_pairs(query);
+    let (frames, frames_rx) = mpsc::channel(FRAMES);
+    frames
+        .try_send(OpenRequest {
+            frame: Some(open_request::Frame::Open(StreamOpen {
+                stream_type: stream_type.to_owned(),
+                target: Bytes::copy_from_slice(target),
+            })),
+        })
+        .expect("a new channel has room");
+    let mut client = StreamServiceClient::new(connection.service())
+        .max_decoding_message_size(STREAM_MESSAGE_LIMIT)
+        .max_encoding_message_size(STREAM_MESSAGE_LIMIT);
+    let request = with_token(ReceiverStream::new(frames_rx), token);
+    let opening = async {
+        let mut answers = client.open(request).await?.into_inner();
+        match answers.message().await? {
+            Some(OpenResponse {
+                frame: Some(open_response::Frame::Opened(_)),
+            }) => Ok(Ok(answers)),
+            _ => Ok(Err(())),
+        }
+    };
+    let opened: Result<Result<Streaming<OpenResponse>, ()>, Status> =
+        tokio::time::timeout(timeout, opening)
+            .await
+            .map_err(Error::from_cause)?;
+    match opened {
+        Ok(Ok(answers)) => Ok(OpenResult::Opened(StreamConnection::start(
+            stream_type,
+            connection,
+            frames,
+            answers,
+        ))),
+        Ok(Err(())) => Err(bad_answer("The stream's first frame was not opened.")),
+        Err(status) if reason_of(&status).is_some() => {
+            Ok(OpenResult::Refused(StreamRefusal::from_status(&status)))
+        }
+        Err(status) => Err(call_failed(status)),
     }
-    Ok(url)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use tonic_types::{ErrorDetails, StatusExt};
+
     use super::*;
 
+    fn with(code: Code, reason: &str, domain: &str, message: &str) -> Status {
+        Status::with_error_details(
+            code,
+            message,
+            ErrorDetails::with_error_info(reason, domain, HashMap::new()),
+        )
+    }
+
     #[test]
-    fn close_codes_become_reasons() {
+    fn statuses_become_close_reasons() {
         let cases = [
-            (None, StreamCloseReason::ConnectionLost),
-            (Some(1006), StreamCloseReason::ConnectionLost),
-            (Some(1000), StreamCloseReason::Normal),
-            (Some(4001), StreamCloseReason::Revoked),
-            (Some(4002), StreamCloseReason::Rotated),
-            (Some(4003), StreamCloseReason::ServerStopping),
-            (Some(4004), StreamCloseReason::TargetGone),
-            (Some(4100), StreamCloseReason::TypeDefined),
-            (Some(4999), StreamCloseReason::TypeDefined),
-            (Some(1011), StreamCloseReason::Other),
-            (Some(5000), StreamCloseReason::Other),
+            (Status::ok(""), StreamCloseReason::Normal),
+            (
+                with(Code::Unauthenticated, "REVOKED", "skakel", ""),
+                StreamCloseReason::Revoked,
+            ),
+            (
+                with(Code::Unauthenticated, "ROTATED", "skakel", ""),
+                StreamCloseReason::Rotated,
+            ),
+            (
+                with(Code::Unavailable, "STOPPING", "skakel", ""),
+                StreamCloseReason::ServerStopping,
+            ),
+            (
+                with(Code::NotFound, "TARGET_GONE", "skakel", ""),
+                StreamCloseReason::TargetGone,
+            ),
+            (
+                with(Code::Aborted, "PORT_FAULT", "skakel.streams.serial", ""),
+                StreamCloseReason::TypeDefined,
+            ),
+            (
+                Status::unavailable("gone"),
+                StreamCloseReason::ConnectionLost,
+            ),
+            (Status::cancelled(""), StreamCloseReason::ConnectionLost),
+            (
+                with(Code::Aborted, "X", "someone.else", ""),
+                StreamCloseReason::Other,
+            ),
+            (Status::internal(""), StreamCloseReason::Other),
         ];
 
-        for (code, reason) in cases {
+        for (status, reason) in cases {
             assert_eq!(
-                StreamClose::from_code(code, None).reason,
+                StreamClose::from_status(&status).reason,
                 reason,
-                "{code:?}"
+                "{status:?}"
             );
         }
     }
 
     #[test]
-    fn a_close_has_fixed_wording() {
+    fn a_close_has_fixed_wording_and_keeps_the_types_reason() {
+        let fault = StreamClose::from_status(&with(
+            Code::Aborted,
+            "PORT_FAULT",
+            "skakel.streams.serial",
+            "The port reported a fault.",
+        ));
+
+        assert_eq!(fault.type_reason.as_deref(), Some("PORT_FAULT"));
+        assert_eq!(fault.message(), "The server ended the stream: PORT_FAULT.");
         assert_eq!(
-            StreamClose::from_code(Some(4001), Some("x".into())).message(),
+            fault.description.as_deref(),
+            Some("The port reported a fault.")
+        );
+        assert_eq!(
+            StreamClose::from_status(&with(Code::Unauthenticated, "REVOKED", "skakel", "x"))
+                .message(),
             "The server revoked this client. Pair with the server again."
         );
         assert_eq!(
-            StreamClose::from_code(Some(4100), None).message(),
-            "The server closed the stream with code 4100."
-        );
-        assert_eq!(
-            StreamClose::from_code(None, None).message(),
+            StreamClose::connection_lost().message(),
             "The connection to the server was lost."
         );
     }
 
     #[test]
     fn a_refusal_uses_the_servers_words_or_fixed_ones() {
-        let with_detail = StreamRefusal::from_status(409, Some("  bench-2 holds busy. "));
-        let without = StreamRefusal::from_status(409, None);
+        let with_words = StreamRefusal::from_status(&with(
+            Code::FailedPrecondition,
+            "IN_USE",
+            "skakel",
+            "  bench-2 holds busy. ",
+        ));
+        let without =
+            StreamRefusal::from_status(&with(Code::FailedPrecondition, "IN_USE", "skakel", ""));
 
-        assert_eq!(with_detail.reason, StreamRefusalReason::InUse);
-        assert_eq!(with_detail.message, "bench-2 holds busy.");
+        assert_eq!(with_words.reason, StreamRefusalReason::InUse);
+        assert_eq!(with_words.code, Code::FailedPrecondition);
+        assert_eq!(with_words.message, "bench-2 holds busy.");
         assert_eq!(without.message, "Someone else is using it.");
-        assert_eq!(
-            StreamRefusal::from_status(500, Some(" ")).message,
-            "The server refused the stream (500)."
-        );
-        assert_eq!(
-            StreamRefusal::from_status(401, None).reason,
-            StreamRefusalReason::Unauthorized
-        );
-        assert_eq!(
-            StreamRefusal::from_status(400, None).reason,
-            StreamRefusalReason::NotAnUpgrade
-        );
-        assert_eq!(
-            StreamRefusal::from_status(404, None).reason,
-            StreamRefusalReason::NotFound
-        );
-        assert_eq!(
-            StreamRefusal::from_status(422, None).reason,
-            StreamRefusalReason::InvalidQuery
-        );
-    }
-
-    #[test]
-    fn the_stream_url_carries_the_type_and_the_escaped_query() {
-        let server = Url::parse("https://10.0.0.5:5240/").unwrap();
-
-        let url = stream_url(&server, "echo", &[("target", "a b&c")]).unwrap();
-
-        assert_eq!(
-            url.as_str(),
-            "https://10.0.0.5:5240/skakel/v1/streams/echo?target=a+b%26c"
-        );
-        assert_eq!(stream_url(&server, "echo", &[]).unwrap().query(), None);
+        for (reason, expected) in [
+            ("TOKEN_REFUSED", StreamRefusalReason::Unauthorized),
+            ("NO_SUCH_TYPE", StreamRefusalReason::NoSuchType),
+            ("NO_SUCH_TARGET", StreamRefusalReason::NoSuchTarget),
+            ("BAD_TARGET", StreamRefusalReason::BadTarget),
+            ("BAD_OPEN", StreamRefusalReason::BadOpen),
+            ("BAD_FRAME", StreamRefusalReason::BadOpen),
+            ("STOPPING", StreamRefusalReason::Other),
+        ] {
+            assert_eq!(
+                StreamRefusal::from_status(&with(Code::NotFound, reason, "skakel", "")).reason,
+                expected,
+                "{reason}"
+            );
+        }
     }
 }

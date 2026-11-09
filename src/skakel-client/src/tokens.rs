@@ -1,5 +1,5 @@
 //! Gets client-credentials access tokens from one server and reuses each until shortly before it
-//! expires. One per link, shared by the hub, the streams and the app's own requests.
+//! expires. One per link, shared by the control channel, the streams and the app's own calls.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

@@ -6,7 +6,8 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::io;
 
-use skakel_protocol::VERSIONS;
+use skakel_protocol::{Reason, VERSIONS};
+use tonic::{Code, Status};
 
 /// What went wrong. An app shows [`Failure::message`] and acts on the kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -284,6 +285,46 @@ impl fmt::Display for StatusError {
 
 impl StdError for StatusError {}
 
+/// A gRPC call that failed, with the status it ended with.
+#[derive(Debug)]
+pub(crate) struct GrpcStatus(pub Status);
+
+impl fmt::Display for GrpcStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "The call ended with {:?}: {}",
+            self.0.code(),
+            self.0.message()
+        )
+    }
+}
+
+impl StdError for GrpcStatus {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// The failure a gRPC status means: the Skakel reason it carries, or for one with no reason, a lost
+/// connection or an answer the client cannot use.
+fn failure_of_status(status: &Status) -> FailureKind {
+    match crate::grpc::reason_of(status) {
+        Some(Reason::TokenRefused) => FailureKind::ClientUnknown,
+        Some(Reason::Revoked) => FailureKind::Revoked,
+        Some(Reason::Rotated) => FailureKind::Rotated,
+        Some(Reason::Stopping) => FailureKind::ServerStopping,
+        Some(Reason::TokenExpired) => FailureKind::ConnectionLost,
+        Some(_) => FailureKind::UnexpectedAnswer,
+        None => match status.code() {
+            Code::Unavailable | Code::Cancelled | Code::Unknown | Code::DeadlineExceeded => {
+                FailureKind::ConnectionLost
+            }
+            _ => FailureKind::UnexpectedAnswer,
+        },
+    }
+}
+
 /// An answer the client cannot use: broken JSON, missing fields, values outside the limits, or more
 /// than it reads.
 #[derive(Debug)]
@@ -336,6 +377,9 @@ fn classify(error: &(dyn StdError + 'static)) -> Failure {
         return Failure::of(FailureKind::CertificateMismatch);
     }
     for e in &causes {
+        if let Some(GrpcStatus(status)) = e.downcast_ref::<GrpcStatus>() {
+            return Failure::of(failure_of_status(status));
+        }
         if let Some(token) = e.downcast_ref::<TokenRequestError>() {
             return Failure::of(match (token.error.as_str(), token.status) {
                 ("invalid_client", _) => FailureKind::RejectedCredentials,
@@ -496,6 +540,49 @@ mod tests {
 
         assert!(is_unreachable(&error));
         assert!(!is_unreachable(&Error::from_cause(StatusError(500))));
+    }
+
+    #[test]
+    fn a_grpc_status_is_the_failure_its_reason_says() {
+        use std::collections::HashMap;
+        use tonic_types::{ErrorDetails, StatusExt};
+        let with = |code, reason: &str, domain: &str| {
+            Status::with_error_details(
+                code,
+                "words",
+                ErrorDetails::with_error_info(reason, domain, HashMap::new()),
+            )
+        };
+        let cases = [
+            (
+                with(Code::Unauthenticated, "TOKEN_REFUSED", "skakel"),
+                FailureKind::ClientUnknown,
+            ),
+            (
+                with(Code::Unauthenticated, "REVOKED", "skakel"),
+                FailureKind::Revoked,
+            ),
+            (
+                with(Code::Unauthenticated, "ROTATED", "skakel"),
+                FailureKind::Rotated,
+            ),
+            (
+                with(Code::Unavailable, "STOPPING", "skakel"),
+                FailureKind::ServerStopping,
+            ),
+            (
+                with(Code::Unavailable, "STOPPING", "someone.else"),
+                FailureKind::ConnectionLost,
+            ),
+            (Status::unavailable("gone"), FailureKind::ConnectionLost),
+            (Status::cancelled("gone"), FailureKind::ConnectionLost),
+            (Status::unimplemented(""), FailureKind::UnexpectedAnswer),
+        ];
+
+        for (status, kind) in cases {
+            let text = format!("{status:?}");
+            assert_eq!(Error::from_cause(GrpcStatus(status)).kind(), kind, "{text}");
+        }
     }
 
     #[test]

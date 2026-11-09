@@ -1,7 +1,7 @@
 # Skakel
 
-The transport between apps on a local network: discovery, pairing, tokens, a control hub and data
-streams, plus the shared platform pieces those apps need, such as a Windows virtual camera. Read
+The transport between apps on a local network: discovery, pairing, tokens, a control channel and
+data streams over gRPC, plus the shared platform pieces those apps need, such as a Windows virtual camera. Read
 `docs/protocol.md` first. Koppel (`matumi-software/koppel`) and Tweeling use it.
 
 Skakel is Rust only from 0.2.0. It is split into small parts, one crate each, so an app takes only
