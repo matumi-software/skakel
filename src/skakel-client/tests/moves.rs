@@ -212,9 +212,9 @@ async fn a_link_that_is_refused_by_the_server_does_not_go_looking_for_another() 
 
     link.start();
 
-    let failed = statuses.wait(|s| s.state == LinkState::Failed).await;
+    let closed = statuses.wait(|s| s.state == LinkState::Closed).await;
     assert_eq!(
-        failed.failure.unwrap().kind(),
+        closed.failure.unwrap().kind(),
         FailureKind::RejectedCredentials
     );
     tokio::time::sleep(Duration::from_millis(500)).await;
