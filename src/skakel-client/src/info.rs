@@ -20,8 +20,8 @@ pub fn pick_version(server_versions: &[i32]) -> Option<u32> {
         .max()
 }
 
-/// The version to speak. A [`FailureKind::VersionMismatch`] that names both sides' versions when
-/// there is none.
+/// The version to speak. A [`FailureKind::VersionMismatch`](crate::FailureKind::VersionMismatch)
+/// that names both sides' versions when there is none.
 pub fn require_version(server_versions: &[i32]) -> Result<u32> {
     pick_version(server_versions)
         .ok_or_else(|| Error::new(Failure::version_mismatch(server_versions)))
