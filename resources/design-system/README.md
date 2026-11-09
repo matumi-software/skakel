@@ -12,14 +12,17 @@ The mark is a vertical chain link drawn as a figure eight. It is one stroke with
 strand passes under itself, which makes it read as an S, an infinity sign and a chain link at the
 same time.
 
-- `assets/Logos/skakel-mark.svg`: canopy `#2A6B4E`, for light grounds.
-- `assets/Logos/skakel-mark-on-dark.svg`: canopy `#549572`, for dark grounds.
-- `assets/Logos/skakel-app-icon.svg`: the mark in paper `#FBF9F4` on a canopy `#2A6B4E` tile with a
-  14/64 corner radius, the same tile as Koppel's app icon.
+- `assets/Logos/skakel-mark.svg`: the loops in ink `#1C1B18` and the crossing stroke in canopy
+  `#2A6B4E`, for light grounds.
+- `assets/Logos/skakel-mark-on-dark.svg`: the loops in stone `#EDEAE0` and the crossing stroke in
+  canopy `#549572`, for dark grounds.
+- `assets/Logos/skakel-app-icon.svg`: the whole mark in paper `#FBF9F4` on a canopy `#2A6B4E` tile
+  with a 14/64 corner radius, the same tile as Koppel's app icon.
 - `skakel-app-icon-128.png`, `skakel-app-icon-512.png` and the `skakel-mark*-512.png` files are
-  for anywhere an image is needed.
-- Stroke width is 10 on a 64 grid with butt caps. Keep the slit open: never round the caps or close
-  the gap.
+  for anywhere an image is needed. They are rendered from the SVGs; do not edit them by hand.
+- Stroke width is 5 on a 64 grid with round caps, the stroke every Matumi family mark shares since
+  the 2026 rebrand. The crossing stroke, the switch itself, is the mark's one canopy element. Keep
+  the gaps where it meets the loops open.
 - Clear space is half the mark's width on every side. Do not draw it below 16px.
 
 ## Wordmark
@@ -31,7 +34,7 @@ height plus ascender. There is no outlined wordmark file; set it in type.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| canopy | `#2A6B4E` | `#549572` | The mark and the one accent |
+| canopy | `#2A6B4E` | `#549572` | The mark's crossing stroke and the one accent |
 | river | `#2F6F74` | `#5FA0A6` | Skakel's lead colour in graphics, where Koppel leads with canopy |
 | page | `#FBF9F4` | `#161512` | Backgrounds, never blue-black |
 | ink | `#1C1B18` | `#EDEAE0` | Text |
