@@ -392,16 +392,16 @@ mod tests {
     #[test]
     fn version_mismatch_names_both_sides_and_which_to_update() {
         assert_eq!(
-            Failure::version_mismatch(&[2]).message(),
-            "This server speaks Skakel 2 and this app speaks Skakel 1. Update the app."
+            Failure::version_mismatch(&[3]).message(),
+            "This server speaks Skakel 3 and this app speaks Skakel 2. Update the app."
         );
         assert_eq!(
-            Failure::version_mismatch(&[0]).message(),
-            "This server speaks Skakel 0 and this app speaks Skakel 1. Update the server."
+            Failure::version_mismatch(&[1]).message(),
+            "This server speaks Skakel 1 and this app speaks Skakel 2. Update the server."
         );
         assert_eq!(
-            Failure::version_mismatch(&[3, 2, 4, 2]).message(),
-            "This server speaks Skakel 2, 3 and 4 and this app speaks Skakel 1. Update the app."
+            Failure::version_mismatch(&[4, 3, 5, 3]).message(),
+            "This server speaks Skakel 3, 4 and 5 and this app speaks Skakel 2. Update the app."
         );
         assert_eq!(
             Failure::version_mismatch(&[]).kind(),

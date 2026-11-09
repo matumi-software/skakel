@@ -1,5 +1,6 @@
-//! The HTTP side: info, pairing, tokens, hello, stream upgrades, and the gate that limits the
-//! token and pairing paths before anything else reads the request.
+//! The HTTPS side: info, pairing and tokens, the extractor an app's own endpoints take the bearer
+//! token with, and the gate that limits the token and pairing paths before anything else reads the
+//! request. Hello and the streams are gRPC in version 2.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -7,14 +8,13 @@ use std::sync::Arc;
 use axum::Json;
 use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
-use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, FromRequestParts, Path, Request, State};
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, PRAGMA};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{get, post};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use http_body_util::Limited;
@@ -23,15 +23,14 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use skakel_pairing::{PairOpenRequest, PairRevealRequest};
 use skakel_protocol::{
-    ACCESS_TOKEN_LIFETIME, BASE_PATH, HELLO_PATH, INFO_PATH, PAIR_PATH, PAIR_TOKEN_HEADER,
-    PROBLEM_CONTENT_TYPE, SkakelHello, SkakelInfo, TOKEN_PATH, VERSIONS,
+    ACCESS_TOKEN_LIFETIME, INFO_PATH, PAIR_PATH, PAIR_TOKEN_HEADER, PROBLEM_CONTENT_TYPE,
+    SkakelInfo, TOKEN_PATH, VERSIONS,
 };
 use time::OffsetDateTime;
 
 use crate::crypto::Principal;
 use crate::pairing::Reveal;
 use crate::server::Shared;
-use crate::streams::{self, StreamOpen, StreamRequest};
 use crate::util::{MAX_CLIENT_NAME_LENGTH, clean_client_name, utf16_len};
 
 /// The largest body the token and pairing paths read.
@@ -88,39 +87,24 @@ fn unauthorized(detail: &str) -> Response {
     response
 }
 
-/// The principal of the bearer token on a request: from the `Authorization` header, and, where
-/// `allow_query` says so (the hub, as SignalR does), from `access_token` in the query string.
-pub(crate) fn authenticate_request(
-    shared: &Shared,
-    headers: &HeaderMap,
-    uri: &Uri,
-    allow_query: bool,
-) -> Option<Principal> {
-    let from_header = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| {
-            let (scheme, token) = value.split_once(' ')?;
-            scheme
-                .eq_ignore_ascii_case("bearer")
-                .then(|| token.trim().to_owned())
-        });
-    let token = from_header.or_else(|| {
-        if !allow_query {
-            return None;
-        }
-        let query: Vec<(String, String)> = serde_urlencoded::from_str(uri.query()?).ok()?;
-        query
-            .into_iter()
-            .find(|(key, _)| key == "access_token")
-            .map(|(_, value)| value)
-    })?;
-    shared.state.authenticate(&token)
+/// The principal of the bearer token in a request's `Authorization` header.
+pub(crate) fn authenticate_request(shared: &Shared, headers: &HeaderMap) -> Option<Principal> {
+    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    shared.state.authenticate(token.trim())
 }
 
-/// An axum extractor for an app's own endpoints: the client behind the request's bearer token,
-/// or a 401. The token is checked as the server's own endpoints check it, so one from a revoked
-/// client or an older generation is refused.
+/// The client behind a call's bearer token.
+///
+/// On an app's own HTTPS endpoints it is an axum extractor: the client, or a 401. On an app's own
+/// gRPC services the server puts it in each call's extensions, after the token check, so a handler
+/// reads it with `request.extensions().get::<ClientPrincipal>()`. Either way the token is checked
+/// as the server's own calls check it, so one from a revoked client or an older generation is
+/// refused.
+#[derive(Debug, Clone)]
 pub struct ClientPrincipal(pub Principal);
 
 impl<S: Send + Sync> FromRequestParts<S> for ClientPrincipal {
@@ -132,7 +116,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientPrincipal {
             .get::<Arc<Shared>>()
             .expect("the Skakel server's layer puts its state on every request")
             .clone();
-        authenticate_request(&shared, &parts.headers, &parts.uri, false)
+        authenticate_request(&shared, &parts.headers)
             .map(Self)
             .ok_or_else(|| unauthorized("Send a current bearer token. This one is missing or has expired, or the client was revoked or its secret rotated since it was issued."))
     }
@@ -149,8 +133,6 @@ pub(crate) fn router(shared: Arc<Shared>) -> Router {
             get(pair_poll).delete(pair_withdraw),
         )
         .route(TOKEN_PATH, post(token))
-        .route(HELLO_PATH, get(hello))
-        .route(&format!("{BASE_PATH}/streams/{{type}}"), any(open_stream))
         .with_state(shared)
 }
 
@@ -211,21 +193,6 @@ async fn info(State(shared): State<Arc<Shared>>) -> Json<SkakelInfo> {
         app: shared.app.clone(),
         versions: VERSIONS.iter().map(|v| *v as i32).collect(),
     })
-}
-
-async fn hello(State(shared): State<Arc<Shared>>, headers: HeaderMap, uri: Uri) -> Response {
-    match authenticate_request(&shared, &headers, &uri, false) {
-        Some(principal) => Json(SkakelHello {
-            server: shared.name.clone(),
-            client_id: principal.client_id,
-        })
-        .into_response(),
-        None => (
-            StatusCode::UNAUTHORIZED,
-            [("www-authenticate", "Bearer error=\"invalid_token\"")],
-        )
-            .into_response(),
-    }
 }
 
 fn has_json_content_type(headers: &HeaderMap) -> bool {
@@ -451,7 +418,11 @@ async fn token(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Body
         shared.limits.count_failure(&client_id);
         return invalid_client();
     };
-    let Ok((access_token, expires_at)) = shared.state.issue_token(&client_id, generation) else {
+    let Ok((access_token, expires_at)) =
+        shared
+            .state
+            .issue_token_for(&client_id, generation, shared.token_lifetime)
+    else {
         return oauth_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "server_error",
@@ -473,60 +444,6 @@ async fn token(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Body
         body.to_string(),
     )
         .into_response()
-}
-
-async fn open_stream(
-    State(shared): State<Arc<Shared>>,
-    Path(stream_type): Path<String>,
-    ConnectInfo(remote): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    uri: Uri,
-    upgrade: Result<WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
-) -> Response {
-    // The token is checked first, so nobody learns which types there are without one.
-    let Some(principal) = authenticate_request(&shared, &headers, &uri, false) else {
-        return unauthorized(
-            "Open streams over HTTPS with a current token. This one is missing or has expired, or the client was revoked or its secret rotated since it was issued.",
-        );
-    };
-    let Some(handler) = shared.streams.get(&stream_type).cloned() else {
-        return problem(
-            StatusCode::NOT_FOUND,
-            &format!("This server has no stream type '{stream_type}'."),
-        );
-    };
-    let Ok(upgrade) = upgrade else {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "A stream opens with a WebSocket upgrade.",
-        );
-    };
-    let query: Vec<(String, String)> = uri
-        .query()
-        .and_then(|query| serde_urlencoded::from_str(query).ok())
-        .unwrap_or_default();
-    let client_name = shared
-        .state
-        .find(&principal.client_id)
-        .map_or_else(|| principal.client_id.clone(), |client| client.name);
-    let request = StreamRequest {
-        stream_type,
-        client_id: principal.client_id.clone(),
-        client_name,
-        remote: remote.ip(),
-        query,
-    };
-    match handler(request.clone()).await {
-        StreamOpen::NotFound(detail) => problem(StatusCode::NOT_FOUND, &detail),
-        StreamOpen::InUse(detail) => problem(StatusCode::CONFLICT, &detail),
-        StreamOpen::Invalid(detail) => problem(StatusCode::UNPROCESSABLE_ENTITY, &detail),
-        StreamOpen::Accept(run) => {
-            let sessions = shared.sessions.clone();
-            upgrade.on_upgrade(move |socket| {
-                streams::serve(socket, sessions, request, principal.generation, run)
-            })
-        }
-    }
 }
 
 /// Whether bytes are what a client would send to start a TLS handshake.

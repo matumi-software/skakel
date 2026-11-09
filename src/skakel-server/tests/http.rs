@@ -1,6 +1,6 @@
-//! The server over TLS on loopback, as a client sees it: info, pairing, tokens, hello, the limits,
-//! the hub's protocol, streams, discovery and the certificate handover. The Rust client's
-//! side is in `skakel-client`'s own tests.
+//! The server over TLS on loopback, as a client sees it over HTTPS: info, pairing, tokens, the
+//! limits, the app's own routes, discovery, the certificate it presents and the state it keeps. The
+//! gRPC side is in `grpc.rs`, and the Rust client's side in `skakel-client`'s own tests.
 
 mod common;
 
@@ -9,13 +9,11 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use common::*;
-use futures_util::SinkExt;
 use serde_json::{Value, json};
 use skakel_pairing::{commit, compute, new_nonce};
 use skakel_protocol::fingerprints;
 use skakel_server::{Approval, ClientPrincipal, InMemoryStore, ServerEvent, SkakelServerBuilder};
 use tokio::net::UdpSocket;
-use tokio_tungstenite::tungstenite::Message;
 
 fn part(token: &str, index: usize) -> Value {
     serde_json::from_slice(
@@ -37,7 +35,7 @@ async fn info_is_served_without_a_token_in_the_shape_the_protocol_shows() {
     assert_eq!(reply.status, 200);
     assert_eq!(
         reply.text(),
-        r#"{"name":"rust-bench","app":{"id":"test-app","version":"1.2.3"},"versions":[1]}"#
+        r#"{"name":"rust-bench","app":{"id":"test-app","version":"1.2.3"},"versions":[2]}"#
     );
 }
 
@@ -45,7 +43,9 @@ async fn info_is_served_without_a_token_in_the_shape_the_protocol_shows() {
 async fn a_server_with_bad_options_does_not_start_and_says_what_is_wrong() {
     let error = match SkakelServerBuilder::new("Bad App", " ", InMemoryStore::new())
         .token_requests_per_minute(0)
-        .hub("/hub/", TestHub)
+        .grpc_service(greeter::Impostor)
+        .grpc_service(greeter::Greeter)
+        .grpc_service(greeter::Greeter)
         .stream("Echo", echo_stream())
         .start()
         .await
@@ -57,7 +57,8 @@ async fn a_server_with_bad_options_does_not_start_and_says_what_is_wrong() {
     assert!(error.contains("app id"), "{error}");
     assert!(error.contains("app version"), "{error}");
     assert!(error.contains("rate limits"), "{error}");
-    assert!(error.contains("hub path"), "{error}");
+    assert!(error.contains("'skakel.v2.Impostor'"), "{error}");
+    assert!(error.contains("added twice"), "{error}");
     assert!(error.contains("stream type"), "{error}");
 }
 
@@ -65,7 +66,7 @@ async fn a_server_with_bad_options_does_not_start_and_says_what_is_wrong() {
 async fn a_plain_http_request_to_the_port_is_told_to_use_https() {
     let server = start().await;
 
-    let reply = Request::new("POST", "/skakel/v1/pair")
+    let reply = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": "a", "commitment": "A".repeat(64) }))
         .send_plain(&server)
         .await;
@@ -94,7 +95,7 @@ async fn discovery_answers_a_probe_with_the_servers_fingerprint_and_port_and_not
     assert_eq!(answer.name, "rust-bench");
     assert_eq!(answer.port, server.local_addr().port());
     assert_eq!(answer.app.id, "test-app");
-    assert_eq!(answer.versions, [1]);
+    assert_eq!(answer.versions, [2]);
     assert!(fingerprints::are_equal(
         &answer.fingerprint,
         &server.fingerprint()
@@ -142,7 +143,7 @@ async fn discovery_announces_the_new_fingerprint_after_a_certificate_switch() {
 
 async fn open_pairing(server: &skakel_server::SkakelServer, name: &str) -> (Value, String) {
     let nonce = new_nonce();
-    let opened = Request::new("POST", "/skakel/v1/pair")
+    let opened = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": name, "commitment": commit(&nonce) }))
         .send(server)
         .await;
@@ -154,7 +155,7 @@ async fn reveal(server: &skakel_server::SkakelServer, opened: &Value, nonce: &st
     Request::new(
         "POST",
         &format!(
-            "/skakel/v1/pair/{}/reveal",
+            "/skakel/v2/pair/{}/reveal",
             opened["requestId"].as_str().unwrap()
         ),
     )
@@ -165,7 +166,7 @@ async fn reveal(server: &skakel_server::SkakelServer, opened: &Value, nonce: &st
 
 async fn poll(server: &skakel_server::SkakelServer, opened: &Value) -> Reply {
     Request::get(&format!(
-        "/skakel/v1/pair/{}",
+        "/skakel/v2/pair/{}",
         opened["requestId"].as_str().unwrap()
     ))
     .header("X-Pair-Token", opened["pollToken"].as_str().unwrap())
@@ -213,13 +214,14 @@ async fn pairing_runs_open_reveal_approve_poll_and_the_credentials_sign_in() {
         "the credentials are handed over once"
     );
     let token = token_for(&server, id, secret).await;
-    let hello = Request::get("/skakel/v1/hello")
-        .bearer(&token)
-        .send(&server)
-        .await;
+    let hello = control(&grpc(&server).await)
+        .hello(with_token(skakel_proto::v2::HelloRequest {}, &token))
+        .await
+        .unwrap()
+        .into_inner();
     assert_eq!(
-        hello.json(),
-        json!({ "server": "rust-bench", "clientId": id })
+        (hello.server.as_str(), hello.client_id.as_str()),
+        ("rust-bench", id)
     );
     assert_eq!(server.clients().name_of(id).as_deref(), Some("lab pc"));
 }
@@ -284,40 +286,40 @@ async fn pairing_refuses_what_the_protocol_says_is_a_bad_request() {
     let good = commit(&new_nonce());
     let cases: Vec<(Request, &str)> = vec![
         (
-            Request::new("POST", "/skakel/v1/pair").form("clientName=a"),
+            Request::new("POST", "/skakel/v2/pair").form("clientName=a"),
             "no JSON content type",
         ),
         (
-            Request::new("POST", "/skakel/v1/pair")
+            Request::new("POST", "/skakel/v2/pair")
                 .json(&json!({ "clientName": "", "commitment": good })),
             "empty name",
         ),
         (
-            Request::new("POST", "/skakel/v1/pair")
+            Request::new("POST", "/skakel/v2/pair")
                 .json(&json!({ "clientName": "\u{200b}\n", "commitment": good })),
             "name of format characters",
         ),
         (
-            Request::new("POST", "/skakel/v1/pair")
+            Request::new("POST", "/skakel/v2/pair")
                 .json(&json!({ "clientName": "a".repeat(81), "commitment": good })),
             "name over 80",
         ),
         (
-            Request::new("POST", "/skakel/v1/pair")
+            Request::new("POST", "/skakel/v2/pair")
                 .json(&json!({ "clientName": "a", "commitment": "abc" })),
             "short commitment",
         ),
         (
-            Request::new("POST", "/skakel/v1/pair")
+            Request::new("POST", "/skakel/v2/pair")
                 .json(&json!({ "clientName": "a", "commitment": "Z".repeat(64) })),
             "commitment not hex",
         ),
         (
-            Request::new("POST", "/skakel/v1/pair").json(&json!({ "clientName": "a" })),
+            Request::new("POST", "/skakel/v2/pair").json(&json!({ "clientName": "a" })),
             "no commitment",
         ),
         (
-            Request::new("POST", "/skakel/v1/pair").header("Content-Type", "application/json"),
+            Request::new("POST", "/skakel/v2/pair").header("Content-Type", "application/json"),
             "no body",
         ),
     ];
@@ -331,7 +333,7 @@ async fn pairing_refuses_what_the_protocol_says_is_a_bad_request() {
         );
     }
 
-    let eighty = Request::new("POST", "/skakel/v1/pair")
+    let eighty = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": "a".repeat(80), "commitment": good }))
         .send(&server)
         .await;
@@ -344,23 +346,23 @@ async fn an_unknown_request_a_wrong_token_and_a_wrong_nonce_are_all_404() {
     let (opened, nonce) = open_pairing(&server, "lab pc").await;
     let id = opened["requestId"].as_str().unwrap();
 
-    let unknown = Request::get("/skakel/v1/pair/nobody")
+    let unknown = Request::get("/skakel/v2/pair/nobody")
         .header("X-Pair-Token", "x")
         .send(&server)
         .await;
-    let wrong_token = Request::get(&format!("/skakel/v1/pair/{id}"))
+    let wrong_token = Request::get(&format!("/skakel/v2/pair/{id}"))
         .header("X-Pair-Token", "x")
         .send(&server)
         .await;
-    let no_token = Request::get(&format!("/skakel/v1/pair/{id}"))
+    let no_token = Request::get(&format!("/skakel/v2/pair/{id}"))
         .send(&server)
         .await;
     let wrong_nonce = reveal(&server, &opened, "not-the-nonce").await;
-    let no_nonce = Request::new("POST", &format!("/skakel/v1/pair/{id}/reveal"))
+    let no_nonce = Request::new("POST", &format!("/skakel/v2/pair/{id}/reveal"))
         .json(&json!({}))
         .send(&server)
         .await;
-    let delete_wrong = Request::new("DELETE", &format!("/skakel/v1/pair/{id}"))
+    let delete_wrong = Request::new("DELETE", &format!("/skakel/v2/pair/{id}"))
         .header("X-Pair-Token", "x")
         .send(&server)
         .await;
@@ -390,7 +392,7 @@ async fn a_waiting_request_can_be_withdrawn_with_its_token() {
 
     let withdrawn = Request::new(
         "DELETE",
-        &format!("/skakel/v1/pair/{}", opened["requestId"].as_str().unwrap()),
+        &format!("/skakel/v2/pair/{}", opened["requestId"].as_str().unwrap()),
     )
     .header("X-Pair-Token", opened["pollToken"].as_str().unwrap())
     .send(&server)
@@ -408,7 +410,7 @@ async fn an_address_opens_five_requests_and_the_sixth_is_429_with_a_problem() {
         open_pairing(&server, "lab pc").await;
     }
 
-    let fourth = Request::new("POST", "/skakel/v1/pair")
+    let fourth = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": "a", "commitment": commit(&new_nonce()) }))
         .send(&server)
         .await;
@@ -433,14 +435,14 @@ async fn all_pairing_calls_are_limited_per_address_before_the_body_is_read() {
 
     for _ in 0..3 {
         assert_eq!(
-            Request::get("/skakel/v1/pair/nobody")
+            Request::get("/skakel/v2/pair/nobody")
                 .send(&server)
                 .await
                 .status,
             404
         );
     }
-    let over = Request::new("POST", "/skakel/v1/pair")
+    let over = Request::new("POST", "/skakel/v2/pair")
         .form("not even json")
         .send(&server)
         .await;
@@ -457,11 +459,11 @@ async fn a_body_over_four_kib_is_413_when_declared_and_400_when_found_out_while_
     let server = start().await;
     let big = "x".repeat(5000);
 
-    let mut declared = Request::new("POST", "/skakel/v1/pair")
+    let mut declared = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": big, "commitment": "A" }));
     declared.declared_length = None;
     let declared = declared.send(&server).await;
-    let mut token = Request::new("POST", "/skakel/v1/token").form(&format!(
+    let mut token = Request::new("POST", "/skakel/v2/token").form(&format!(
         "grant_type=client_credentials&client_id=a&client_secret={big}"
     ));
     token.declared_length = None;
@@ -476,7 +478,7 @@ async fn a_body_over_four_kib_is_413_when_declared_and_400_when_found_out_while_
 
     // A body sent in chunks has no length to check, so the cap cuts it off while it is read.
     let (stream, _) = tls(server.local_addr(), true).await;
-    let mut raw = b"POST /skakel/v1/token HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    let mut raw = b"POST /skakel/v2/token HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
     for _ in 0..3 {
         raw.extend_from_slice(format!("{:x}\r\n{}\r\n", 2000, "a".repeat(2000)).as_bytes());
     }
@@ -539,20 +541,20 @@ async fn the_token_endpoint_takes_http_basic_credentials_and_refuses_other_grant
     let basic = base64::engine::general_purpose::STANDARD
         .encode(format!("{}:{}", client.client_id, client.client_secret));
 
-    let with_basic = Request::new("POST", "/skakel/v1/token")
+    let with_basic = Request::new("POST", "/skakel/v2/token")
         .header("Authorization", format!("Basic {basic}"))
         .form("grant_type=client_credentials")
         .send(&server)
         .await;
-    let password = Request::new("POST", "/skakel/v1/token")
+    let password = Request::new("POST", "/skakel/v2/token")
         .form("grant_type=password&username=a&password=b")
         .send(&server)
         .await;
-    let not_a_form = Request::new("POST", "/skakel/v1/token")
+    let not_a_form = Request::new("POST", "/skakel/v2/token")
         .json(&json!({}))
         .send(&server)
         .await;
-    let no_secret = Request::new("POST", "/skakel/v1/token")
+    let no_secret = Request::new("POST", "/skakel/v2/token")
         .form(&format!(
             "grant_type=client_credentials&client_id={}",
             client.client_id
@@ -647,134 +649,13 @@ async fn the_token_endpoint_takes_a_limited_number_of_requests_a_minute_from_one
 }
 
 #[tokio::test]
-async fn hello_wants_a_current_token_and_a_revoked_or_rotated_client_loses_its_tokens_at_once() {
-    let server = start().await;
-    let (client, token) = client_with_token(&server, "bench-1").await;
-    assert_eq!(
-        Request::get("/skakel/v1/hello")
-            .bearer(&token)
-            .send(&server)
-            .await
-            .status,
-        200
-    );
-    assert_eq!(
-        Request::get("/skakel/v1/hello").send(&server).await.status,
-        401
-    );
-    assert_eq!(
-        Request::get("/skakel/v1/hello")
-            .bearer("a.b.c")
-            .send(&server)
-            .await
-            .status,
-        401
-    );
-
-    let secret = server
-        .clients()
-        .rotate_secret(&client.client_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        Request::get("/skakel/v1/hello")
-            .bearer(&token)
-            .send(&server)
-            .await
-            .status,
-        401,
-        "rotated"
-    );
-    assert_eq!(
-        token_request(&server, &client.client_id, &client.client_secret)
-            .await
-            .status,
-        401,
-        "the old secret"
-    );
-    let renewed = token_for(&server, &client.client_id, &secret).await;
-    assert_eq!(part(&renewed, 1)["skakel_generation"], "2");
-    assert_eq!(
-        Request::get("/skakel/v1/hello")
-            .bearer(&renewed)
-            .send(&server)
-            .await
-            .status,
-        200
-    );
-
-    assert!(server.clients().revoke(&client.client_id).await.unwrap());
-    assert_eq!(
-        Request::get("/skakel/v1/hello")
-            .bearer(&renewed)
-            .send(&server)
-            .await
-            .status,
-        401,
-        "revoked"
-    );
-}
-
-#[tokio::test]
-async fn a_token_from_before_a_signing_key_rotation_still_works_and_one_from_after_does_too() {
-    let server = start().await;
-    let (client, old) = client_with_token(&server, "bench-1").await;
-
-    server.keys().rotate_signing_key().await.unwrap();
-    let new = token_for(&server, &client.client_id, &client.client_secret).await;
-
-    assert_eq!(
-        Request::get("/skakel/v1/hello")
-            .bearer(&old)
-            .send(&server)
-            .await
-            .status,
-        200
-    );
-    assert_eq!(
-        Request::get("/skakel/v1/hello")
-            .bearer(&new)
-            .send(&server)
-            .await
-            .status,
-        200
-    );
-    assert_ne!(part(&old, 0)["kid"], part(&new, 0)["kid"]);
-}
-
-#[tokio::test]
-async fn a_token_works_under_every_name_and_address_of_the_server() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-
-    for host in ["localhost", "127.0.0.1", "some.other.name"] {
-        let (stream, _) = tls(server.local_addr(), true).await;
-        let mut request = Request::get("/skakel/v1/hello").bearer(&token);
-        request.headers.push(("X-Host-Was", host.to_owned()));
-        let reply = {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut stream = stream;
-            let text = String::from_utf8(request.bytes())
-                .unwrap()
-                .replace("Host: localhost", &format!("Host: {host}"));
-            stream.write_all(text.as_bytes()).await.unwrap();
-            let mut raw = vec![];
-            let _ = stream.read_to_end(&mut raw).await;
-            String::from_utf8_lossy(&raw).into_owned()
-        };
-        assert!(reply.starts_with("HTTP/1.1 200"), "{host}: {reply}");
-    }
-}
-
-#[tokio::test]
 async fn the_token_servers_discovery_documents_are_not_served() {
     let server = start().await;
 
     for path in [
         "/.well-known/openid-configuration",
         "/.well-known/jwks",
-        "/skakel/v1/jwks",
+        "/skakel/v2/jwks",
     ] {
         assert_eq!(Request::get(path).send(&server).await.status, 404, "{path}");
     }
@@ -797,525 +678,6 @@ async fn the_apps_own_routes_take_the_same_bearer_token() {
     assert_eq!((allowed.status, allowed.text()), (200, client.client_id));
     assert_eq!(refused.status, 401);
     assert_eq!(revoked.status, 401);
-}
-
-// ---- the hub ----
-
-#[tokio::test]
-async fn the_hub_negotiates_only_for_a_client_with_a_token_and_only_websockets() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-
-    let refused = Request::new("POST", "/skakel/v1/hub/negotiate?negotiateVersion=1")
-        .send(&server)
-        .await;
-    let v1 = Request::new("POST", "/skakel/v1/hub/negotiate?negotiateVersion=1")
-        .bearer(&token)
-        .send(&server)
-        .await;
-    let v0 = Request::new("POST", "/skakel/v1/hub/negotiate")
-        .bearer(&token)
-        .send(&server)
-        .await;
-
-    assert_eq!(refused.status, 401);
-    let v1 = v1.json();
-    assert_eq!(v1["negotiateVersion"], 1);
-    assert_ne!(v1["connectionId"], v1["connectionToken"]);
-    assert_eq!(v1["availableTransports"][0]["transport"], "WebSockets");
-    assert!(v0.json().get("connectionToken").is_none());
-    assert!(v0.json()["connectionId"].is_string());
-}
-
-#[tokio::test]
-async fn a_hub_connection_needs_a_negotiation_a_token_and_a_websocket() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-
-    let no_token = open_socket(&server, "/skakel/v1/hub?id=x", None)
-        .await
-        .err()
-        .unwrap();
-    let no_negotiation = open_socket(&server, "/skakel/v1/hub?id=x", Some(&token))
-        .await
-        .err()
-        .unwrap();
-    let not_a_socket = Request::get("/skakel/v1/hub?id=x")
-        .bearer(&token)
-        .send(&server)
-        .await;
-
-    assert_eq!(no_token.status, 401);
-    assert_eq!(no_negotiation.status, 404);
-    assert_eq!(not_a_socket.status, 400);
-}
-
-#[tokio::test]
-async fn the_hub_greets_a_new_connection_with_the_certificates_and_pings() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-
-    let mut hub = hub_connect(&server, &token).await;
-    let first = hub.next_message().await.unwrap();
-
-    assert_eq!(first["type"], 1);
-    assert_eq!(first["target"], "SkakelCertificates");
-    assert_eq!(
-        first["arguments"][0],
-        json!({ "fingerprint": server.fingerprint(), "nextFingerprint": null })
-    );
-}
-
-#[tokio::test]
-async fn hub_calls_return_results_errors_and_messages_back_to_the_caller() {
-    let server = start().await;
-    let (client, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-
-    let echo = hub.invoke("1", "Echo", json!(["hello"])).await;
-    let missing = hub.invoke("2", "NoSuchMethod", json!([])).await;
-    let skakel_own = hub.invoke("3", "SkakelSomething", json!([])).await;
-    hub.send(json!({ "type": 1, "target": "Greet", "arguments": ["hi"] }))
-        .await;
-    let greeted = hub.next_non_ping().await.unwrap();
-    let after = hub.invoke("4", "Echo", json!(["still here"])).await;
-
-    assert_eq!(echo["result"], "hello");
-    assert!(echo.get("error").is_none());
-    assert_eq!(missing["error"], "Method does not exist.");
-    assert!(
-        skakel_own["error"]
-            .as_str()
-            .unwrap()
-            .contains("Method does not exist")
-    );
-    assert_eq!(greeted["target"], "Greeted");
-    assert_eq!(greeted["arguments"][0], format!("{}: hi", client.client_id));
-    assert_eq!(after["result"], "still here");
-}
-
-#[tokio::test]
-async fn a_hub_that_gets_another_protocol_says_so_and_closes() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let negotiated = Request::new("POST", "/skakel/v1/hub/negotiate?negotiateVersion=1")
-        .bearer(&token)
-        .send(&server)
-        .await;
-    let id = negotiated.json()["connectionToken"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let mut socket = open_socket(&server, &format!("/skakel/v1/hub?id={id}"), Some(&token))
-        .await
-        .ok()
-        .unwrap();
-
-    socket
-        .send(Message::text(
-            "{\"protocol\":\"messagepack\",\"version\":1}\x1e",
-        ))
-        .await
-        .unwrap();
-
-    let Some(Message::Text(reply)) = next_frame(&mut socket).await else {
-        panic!("no reply")
-    };
-    assert!(reply.contains("messagepack"), "{reply}");
-}
-
-#[tokio::test]
-async fn a_negotiation_can_be_used_once() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let negotiated = Request::new("POST", "/skakel/v1/hub/negotiate?negotiateVersion=1")
-        .bearer(&token)
-        .send(&server)
-        .await;
-    let id = negotiated.json()["connectionToken"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    assert!(
-        open_socket(&server, &format!("/skakel/v1/hub?id={id}"), Some(&token))
-            .await
-            .is_ok()
-    );
-    let again = open_socket(&server, &format!("/skakel/v1/hub?id={id}"), Some(&token))
-        .await
-        .err()
-        .unwrap();
-
-    assert_eq!(again.status, 404);
-}
-
-#[tokio::test]
-async fn the_hub_takes_the_token_from_the_query_string_as_signalr_does_for_websockets() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let negotiated = Request::new(
-        "POST",
-        &format!("/skakel/v1/hub/negotiate?negotiateVersion=1&access_token={token}"),
-    )
-    .send(&server)
-    .await;
-    assert_eq!(negotiated.status, 200);
-    let id = negotiated.json()["connectionToken"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    let socket = open_socket(
-        &server,
-        &format!("/skakel/v1/hub?id={id}&access_token={token}"),
-        None,
-    )
-    .await;
-
-    assert!(socket.is_ok());
-}
-
-#[tokio::test]
-async fn a_revoked_client_is_told_why_and_disconnected_and_cannot_connect_again() {
-    let server = start().await;
-    let (client, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-    assert_eq!(server.open_sessions(&client.client_id), 1);
-
-    server.clients().revoke(&client.client_id).await.unwrap();
-
-    let closing = hub.next_non_ping().await.unwrap();
-    assert_eq!(closing["target"], "SkakelClosing");
-    assert_eq!(closing["arguments"][0], json!({ "reason": "revoked" }));
-    assert_eq!(hub.next_non_ping().await.unwrap()["type"], 7);
-    let negotiate = Request::new("POST", "/skakel/v1/hub/negotiate?negotiateVersion=1")
-        .bearer(&token)
-        .send(&server)
-        .await;
-    assert_eq!(negotiate.status, 401);
-}
-
-#[tokio::test]
-async fn a_rotated_secret_ends_the_hub_with_rotated() {
-    let server = start().await;
-    let (client, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-
-    server
-        .clients()
-        .rotate_secret(&client.client_id)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        hub.next_non_ping().await.unwrap()["arguments"][0],
-        json!({ "reason": "rotated" })
-    );
-}
-
-#[tokio::test]
-async fn stopping_the_server_tells_hub_connections_and_streams_it_is_stopping() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-    let mut stream = open_socket(&server, "/skakel/v1/streams/echo?target=a", Some(&token))
-        .await
-        .ok()
-        .unwrap();
-
-    let stopping = tokio::spawn(server.shutdown());
-
-    assert_eq!(
-        hub.next_non_ping().await.unwrap()["arguments"][0],
-        json!({ "reason": "stopping" })
-    );
-    let Some(Message::Close(Some(frame))) = next_frame(&mut stream).await else {
-        panic!("no close")
-    };
-    assert_eq!(u16::from(frame.code), 4003);
-    stopping.await.unwrap();
-}
-
-#[tokio::test]
-async fn the_hub_pings_a_connected_client() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-
-    hub.limit = Duration::from_secs(20);
-    let ping = hub.next_message().await.expect("a ping within 20 seconds");
-
-    assert_eq!(ping["type"], 6);
-}
-
-// ---- streams ----
-
-#[tokio::test]
-async fn a_stream_is_refused_before_the_upgrade_with_a_problem_a_person_can_read() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-
-    let no_token = open_socket(&server, "/skakel/v1/streams/echo?target=a", None)
-        .await
-        .err()
-        .unwrap();
-    let bad_token = open_socket(&server, "/skakel/v1/streams/echo?target=a", Some("a.b.c"))
-        .await
-        .err()
-        .unwrap();
-    let unknown = open_socket(&server, "/skakel/v1/streams/nope?target=a", Some(&token))
-        .await
-        .err()
-        .unwrap();
-    let invalid = open_socket(&server, "/skakel/v1/streams/echo", Some(&token))
-        .await
-        .err()
-        .unwrap();
-    let missing = open_socket(
-        &server,
-        "/skakel/v1/streams/echo?target=missing",
-        Some(&token),
-    )
-    .await
-    .err()
-    .unwrap();
-    let busy = open_socket(&server, "/skakel/v1/streams/echo?target=busy", Some(&token))
-        .await
-        .err()
-        .unwrap();
-    let not_a_socket = Request::get("/skakel/v1/streams/echo?target=a")
-        .bearer(&token)
-        .send(&server)
-        .await;
-
-    assert_eq!(no_token.status, 401);
-    assert!(
-        String::from_utf8_lossy(&no_token.body)
-            .contains("Open streams over HTTPS with a current token.")
-    );
-    assert_eq!(bad_token.status, 401);
-    assert_eq!(
-        (unknown.status, unknown.detail()),
-        (404, "This server has no stream type 'nope'.".to_owned())
-    );
-    assert_eq!(
-        (invalid.status, invalid.detail()),
-        (422, "Say which target, as ?target=<name>.".to_owned())
-    );
-    assert_eq!(
-        (missing.status, missing.detail()),
-        (404, "There is no target called missing.".to_owned())
-    );
-    assert_eq!(
-        (busy.status, busy.detail()),
-        (409, "bench-2 holds busy.".to_owned())
-    );
-    assert_eq!(not_a_socket.status, 400);
-    assert_eq!(
-        not_a_socket.header("content-type"),
-        Some("application/problem+json")
-    );
-    assert_eq!(
-        unknown.header("content-type"),
-        Some("application/problem+json")
-    );
-}
-
-#[tokio::test]
-async fn a_stream_carries_binary_and_text_frames_in_order_and_closes_normally() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut stream = open_socket(
-        &server,
-        "/skakel/v1/streams/echo?target=a%20b",
-        Some(&token),
-    )
-    .await
-    .ok()
-    .unwrap();
-
-    stream
-        .send(Message::binary(b"ping".to_vec()))
-        .await
-        .unwrap();
-    stream.send(Message::text("{\"op\":\"x\"}")).await.unwrap();
-    stream
-        .send(Message::binary(b"pong".to_vec()))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        next_frame(&mut stream).await,
-        Some(Message::binary(b"ping".to_vec()))
-    );
-    assert_eq!(
-        next_frame(&mut stream).await,
-        Some(Message::text("{\"op\":\"x\"}"))
-    );
-    assert_eq!(
-        next_frame(&mut stream).await,
-        Some(Message::binary(b"pong".to_vec()))
-    );
-    stream.close(None).await.unwrap();
-}
-
-#[tokio::test]
-async fn a_large_amount_of_data_comes_back_whole_through_the_queues() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let stream = open_socket(&server, "/skakel/v1/streams/echo?target=a", Some(&token))
-        .await
-        .ok()
-        .unwrap();
-    let chunk: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
-    use futures_util::StreamExt;
-    let (mut sink, mut source) = stream.split();
-    let sender = tokio::spawn({
-        let chunk = chunk.clone();
-        async move {
-            for _ in 0..100 {
-                sink.send(Message::binary(chunk.clone())).await.unwrap();
-            }
-            sink
-        }
-    });
-
-    let mut received = 0usize;
-    while received < chunk.len() * 100 {
-        let Some(Ok(Message::Binary(data))) =
-            tokio::time::timeout(Duration::from_secs(20), source.next())
-                .await
-                .unwrap()
-        else {
-            panic!("the stream ended early after {received} bytes");
-        };
-        assert_eq!(&data[..], &chunk[..], "a frame arrives whole and in order");
-        received += data.len();
-    }
-    let _sink = sender.await.unwrap();
-}
-
-#[tokio::test]
-async fn a_target_that_goes_away_closes_with_4004() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut stream = open_socket(
-        &server,
-        "/skakel/v1/streams/echo?target=vanish",
-        Some(&token),
-    )
-    .await
-    .ok()
-    .unwrap();
-
-    let Some(Message::Close(Some(frame))) = next_frame(&mut stream).await else {
-        panic!("no close")
-    };
-
-    assert_eq!(
-        (u16::from(frame.code), frame.reason.to_string()),
-        (4004, "unplugged".to_owned())
-    );
-}
-
-#[tokio::test]
-async fn revoking_and_rotating_close_streams_with_4001_and_4002() {
-    let server = start().await;
-    let (revoked, token) = client_with_token(&server, "bench-1").await;
-    let (rotated, token2) = client_with_token(&server, "bench-2").await;
-    let mut a = open_socket(&server, "/skakel/v1/streams/echo?target=a", Some(&token))
-        .await
-        .ok()
-        .unwrap();
-    let mut b = open_socket(&server, "/skakel/v1/streams/echo?target=a", Some(&token2))
-        .await
-        .ok()
-        .unwrap();
-
-    server.clients().revoke(&revoked.client_id).await.unwrap();
-    server
-        .clients()
-        .rotate_secret(&rotated.client_id)
-        .await
-        .unwrap();
-
-    let Some(Message::Close(Some(a_close))) = next_frame(&mut a).await else {
-        panic!("no close")
-    };
-    let Some(Message::Close(Some(b_close))) = next_frame(&mut b).await else {
-        panic!("no close")
-    };
-    assert_eq!(u16::from(a_close.code), 4001);
-    assert_eq!(u16::from(b_close.code), 4002);
-}
-
-#[tokio::test]
-async fn the_server_pings_a_stream() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut stream = open_socket(&server, "/skakel/v1/streams/echo?target=a", Some(&token))
-        .await
-        .ok()
-        .unwrap();
-
-    // tungstenite answers the server's ping by itself; the frame comes up to the reader.
-    let frame = tokio::time::timeout(
-        Duration::from_secs(20),
-        futures_util::StreamExt::next(&mut stream),
-    )
-    .await;
-
-    assert!(matches!(
-        frame.expect("a ping within 20 seconds"),
-        Some(Ok(Message::Ping(_)))
-    ));
-}
-
-#[tokio::test]
-async fn the_serial_stream_type_speaks_the_wire_format_of_skakel_serial() {
-    use skakel_serial::{ClientMessage, ServerMessage};
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut stream = open_socket(&server, "/skakel/v1/streams/serial?port=COM1", Some(&token))
-        .await
-        .ok()
-        .unwrap();
-
-    let Some(Message::Text(opened)) = next_frame(&mut stream).await else {
-        panic!("no opened")
-    };
-    assert!(matches!(
-        ServerMessage::parse(&opened),
-        Some(ServerMessage::Opened { .. })
-    ));
-    stream
-        .send(Message::text(
-            ClientMessage::ModemLines {
-                dtr: Some(true),
-                rts: None,
-            }
-            .to_json(),
-        ))
-        .await
-        .unwrap();
-    let Some(Message::Text(status)) = next_frame(&mut stream).await else {
-        panic!("no status")
-    };
-    assert!(
-        matches!(ServerMessage::parse(&status), Some(ServerMessage::ModemStatus(s)) if s.dsr && s.dcd)
-    );
-
-    let busy = open_socket(&server, "/skakel/v1/streams/serial?port=busy", Some(&token))
-        .await
-        .err()
-        .unwrap();
-    assert_eq!(busy.status, 409);
 }
 
 // ---- the certificate ----
@@ -1347,72 +709,6 @@ async fn the_server_presents_its_certificate_and_a_handover_changes_it_only_at_t
         &next
     ));
     assert_eq!(switched.from, current);
-}
-
-#[tokio::test]
-async fn a_hub_client_hears_the_handover_and_its_acknowledgement_is_recorded() {
-    let server = start().await;
-    let (client, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-
-    let next = server
-        .keys()
-        .prepare_next_certificate()
-        .await
-        .unwrap()
-        .unwrap();
-
-    let told = hub.next_non_ping().await.unwrap();
-    assert_eq!(told["target"], "SkakelCertificates");
-    assert_eq!(told["arguments"][0]["nextFingerprint"], next.as_str());
-    hub.send(json!({ "type": 1, "target": "SkakelNextCertificateReceived", "arguments": [next] }))
-        .await;
-    let mut tries = 0;
-    while !server.clients().all()[0].has_next_certificate {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        tries += 1;
-        assert!(tries < 250, "the acknowledgement never arrived");
-    }
-    server.keys().switch_certificate().await.unwrap();
-    let switched = hub.next_non_ping().await.unwrap();
-    assert_eq!(switched["arguments"][0]["fingerprint"], next.as_str());
-    assert_eq!(switched["arguments"][0]["nextFingerprint"], Value::Null);
-    let _ = client;
-}
-
-#[tokio::test]
-async fn an_acknowledgement_of_the_wrong_certificate_is_not_recorded() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-    server.keys().prepare_next_certificate().await.unwrap();
-    hub.next_non_ping().await;
-
-    let done = hub
-        .invoke("1", "SkakelNextCertificateReceived", json!(["AA:BB"]))
-        .await;
-
-    assert!(done.get("error").is_none());
-    assert!(!server.clients().all()[0].has_next_certificate);
-}
-
-#[tokio::test]
-async fn a_cancelled_handover_is_told_to_clients_with_no_next_fingerprint() {
-    let server = start().await;
-    let (_, token) = client_with_token(&server, "bench-1").await;
-    let mut hub = hub_connect(&server, &token).await;
-    hub.next_message().await;
-    server.keys().prepare_next_certificate().await.unwrap();
-    hub.next_non_ping().await;
-
-    server.keys().cancel_next_certificate().await.unwrap();
-
-    assert_eq!(
-        hub.next_non_ping().await.unwrap()["arguments"][0]["nextFingerprint"],
-        Value::Null
-    );
 }
 
 // ---- state kept between runs ----

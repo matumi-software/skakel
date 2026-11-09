@@ -13,9 +13,8 @@ the network, is the first app built on it.
 
 Version 0.2.0, Rust only. Protocol version 2 is specified in
 [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), with its
-wire format in `.proto` files under `src/proto/skakel/v2/`. The client and server crates still speak
-version 1, with a SignalR hub and WebSocket streams, and are tested against each other; they move to
-version 2 next.
+wire format in `.proto` files under `src/proto/skakel/v2/`. The server speaks version 2; the client
+still speaks version 1, with a SignalR hub and WebSocket streams, and moves to version 2 next.
 
 Up to 0.1.0 Skakel was a set of .NET packages. They stay on NuGet.org but are no longer developed,
 and their source is at the tag `v0.1.0`.
@@ -31,7 +30,7 @@ One crate per part, in the Cargo workspace in `src/`:
 | `skakel-discovery` | The discovery packet (probe, answer, cleaning, limits) and a small `std` UDP helper for answering and probing |
 | `skakel-pairing` | The pairing code, nonces and commitments, and the JSON bodies of the pairing calls |
 | `skakel-serial` | The serial stream's line settings, modem lines and control messages |
-| `skakel-server` | Serve clients: discovery answers, pairing approval, OAuth tokens, revoking clients, the control hub (SignalR's JSON protocol over a WebSocket), data stream endpoints, the per-address limits and the self-signed certificate with its handover. tokio, axum and rustls; the app supplies a store, its hubs, stream types and the pairing screen |
+| `skakel-server` | Serve clients, protocol version 2: discovery answers, pairing approval, OAuth tokens, revoking clients, the control and stream services over gRPC, the app's own gRPC services behind Skakel's token check, the per-address limits and the self-signed certificate with its handover, all on one TLS port. tokio, hyper, axum, tonic and rustls; the app supplies a store, its gRPC services, stream types and the pairing screen |
 | `skakel-client` | Find servers, pair, get tokens, pin the server's certificate, follow the control hub and open data streams, on tokio; the hub is a small SignalR client written for what Skakel's hub uses |
 | `skakel-vcam` | Feed the virtual camera, and `skakel-vcam-install` to install its media source |
 | `skakel-vcam-source` | The virtual camera's media source: the COM DLL Windows' Frame Server loads |

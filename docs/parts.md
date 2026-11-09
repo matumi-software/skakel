@@ -14,13 +14,16 @@ and a part depends only on the parts it cannot work without. The wire format is 
 | Pairing | `skakel-pairing` | nothing |
 | Serial | `skakel-serial` | nothing |
 | Client | `skakel-client` | protocol, discovery, pairing, serial |
-| Server | `skakel-server` | protocol, discovery, pairing |
+| Server | `skakel-server` | protocol, proto, discovery, pairing |
 | Virtual camera | `skakel-vcam` and `skakel-vcam-source` | nothing |
 
-The server takes tokio, axum, rustls (with ring) and rcgen, with everything they pull in under MIT,
-Apache-2.0, BSD, ISC, Unlicense or Unicode-3.0 (`r-efi`, built only for UEFI targets, offers LGPL as
-one of three options and is used under its MIT one; checked with `cargo metadata`). The hub's
-SignalR subset is written here: the SignalR crates on crates.io are clients.
+The server takes tokio, hyper, axum (its HTTPS routes), tonic (the generated services and their
+router, without tonic's transport), tonic-types (the `google.rpc.Status` details of a refusal),
+rustls (with ring) and rcgen, with everything they pull in under MIT, Apache-2.0, BSD, ISC, Zlib,
+Unlicense or Unicode-3.0 (`r-efi`, built only for UEFI targets, offers LGPL as one of three options
+and is used under its MIT one; checked with `cargo metadata`). It speaks protocol version 2: its
+own accept loop serves HTTPS and gRPC on one TLS port, so the certificate stays pinned and handed
+over the way the protocol says.
 
 The client takes tokio, reqwest and rustls (with ring) for pinned HTTPS, tokio-tungstenite for
 WebSocket framing and if-addrs to find the networks to broadcast on. It has no SignalR dependency:
@@ -28,7 +31,7 @@ no maintained Rust SignalR client lets the certificate check be pinned, so the h
 is written in the crate (see hub.rs). The other crates take only small crates for JSON, hashing and
 randomness.
 
-That is protocol version 1, which the server and the client speak today. Version 2 replaces the hub
+The client still speaks protocol version 1 and moves to version 2 next. Version 2 replaces the hub
 and the WebSocket streams with gRPC: its wire format is the `.proto` files in `src/proto/skakel/v2/`.
 `skakel-proto` generates the Rust code for them at build time, with `protox` compiling them in Rust
 (so no `protoc` is needed), `prost` writing the messages and `tonic` the services. When the server
@@ -67,9 +70,11 @@ short `vcam`.
   servers found, the pairing flow, pinned HTTP, the info call, version picking, tokens, the control
   link (hub, certificate handover, following a server to a new address), data streams, and the serial
   connection built on a stream. Storage is the app's.
-- **Server:** a server an app starts and adds its own hubs, stream types and routes to. The
-  discovery answerer, pairing approval, OAuth tokens, revoking clients, the certificate and its
-  handover, the hub, stream endpoints, and the per-address limits. Storage is the app's, through a
+- **Server:** a server an app starts and adds its own gRPC services, stream types and HTTPS
+  routes to. The discovery answerer, pairing approval, OAuth tokens, revoking clients, the
+  certificate and its handover, the control and stream services, the token check in front of every
+  gRPC service with the ending of a client's calls on revoke, rotate and stop, and the per-address
+  limits. Storage is the app's, through a
   store it supplies.
 - **Virtual camera:** a Windows 11 virtual camera any app can feed. It is not network code and has
   nothing to do with the other parts; see [virtual-camera.md](virtual-camera.md).
@@ -80,7 +85,7 @@ short `vcam`.
 |---|---|
 | Only needs a virtual camera (Tweeling) | Virtual camera |
 | Reaches servers and uses their streams (a client) | Client, which brings protocol, discovery, pairing and serial |
-| Serves clients (a server) | Server, which brings protocol, discovery and pairing |
+| Serves clients (a server) | Server, which brings protocol, proto, discovery and pairing |
 | Speaks the serial stream on the server side without the client's code | Server and Serial |
 | Only needs the wire format, for its own transport or another language | Protocol, and the parts whose packets it handles |
 

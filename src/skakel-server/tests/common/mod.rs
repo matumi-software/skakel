@@ -1,164 +1,204 @@
-//! What the integration tests share: a server wired like an app (a hub with `Greet`,
-//! `Echo` and `Connection`, an `echo` stream type and a pretend `serial` port), and a small client
-//! that speaks HTTP, WebSocket and the SignalR hub protocol over TLS to it with no certificate
-//! check, so the tests do not depend on the Rust client.
+//! What the integration tests share: a server wired like an app (its own gRPC service, an `echo`
+//! stream type and a pretend `serial` port), and small clients that speak HTTPS over HTTP/1.1 and
+//! gRPC over HTTP/2 to it, over TLS with no certificate check, so the tests do not depend on the
+//! Rust client.
 
 #![allow(dead_code)]
 
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+pub mod greeter;
 
-use futures_util::{SinkExt, StreamExt};
+use std::future::Future;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use hyper::client::conn::http2::SendRequest;
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use prost::Message as _;
+use prost::bytes::Bytes;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
-use serde_json::{Value, json};
-use skakel_serial::{
-    ClientMessage, ErrorCode, FlowControl, LineSettings, ModemStatus, Parity, ServerMessage,
-    StopBits,
+use serde_json::Value;
+use skakel_proto::v2::control_service_client::ControlServiceClient;
+use skakel_proto::v2::stream_service_client::StreamServiceClient;
+use skakel_proto::v2::{
+    FlowControl, LineSettings, ModemStatus, OpenRequest, OpenResponse, Parity, SerialClientMessage,
+    SerialError, SerialErrorCode, SerialOpened, SerialServerMessage, SerialTarget, StopBits,
+    StreamOpen, open_request, open_response, serial_client_message, serial_server_message,
 };
 use skakel_server::{
-    BoxFuture, HubCall, HubError, HubHandler, InMemoryStore, SkakelServer, SkakelServerBuilder,
-    StreamHandler, StreamMessage, StreamOpen, StreamRequest, StreamSession,
+    BoxFuture, InMemoryStore, SkakelServer, SkakelServerBuilder, StreamEnd, StreamHandler,
+    StreamMessage, StreamOpen as Opening, StreamRequest, StreamSession,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_rustls::TlsConnector;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::body::Body;
+use tonic::codegen::http;
+use tonic::{Status, Streaming};
+use tonic_types::StatusExt;
 
 pub const APP_ID: &str = "test-app";
 pub const APP_VERSION: &str = "1.2.3";
 pub const NAME: &str = "rust-bench";
 
-/// The app's hub: `Greet` answers with a `Greeted` message, `Echo` returns its argument and
-/// `Connection` the connection's id. Anything else is an error.
-pub struct TestHub;
-
-impl HubHandler for TestHub {
-    fn invoke(&self, call: HubCall) -> BoxFuture<'_, Result<Option<Value>, HubError>> {
-        Box::pin(async move {
-            let text = call.arguments.first().and_then(Value::as_str).unwrap_or("");
-            match call.target.as_str() {
-                "Greet" => {
-                    call.connection.send(
-                        "Greeted",
-                        vec![json!(format!("{}: {}", call.connection.client_id, text))],
-                    )?;
-                    Ok(None)
-                }
-                "Echo" => Ok(Some(json!(text))),
-                "Connection" => Ok(Some(json!(call.connection.connection_id))),
-                _ => Err(HubError::new("Method does not exist.")),
-            }
-        })
-    }
-}
-
-/// The test stream type. The query names a target: none is 422, `missing` 404, `busy` 409,
-/// `vanish` opens and closes at once with 4004, anything else echoes what it receives.
+/// The test stream type. The target is text: none is `BAD_TARGET`, `missing` `NO_SUCH_TARGET`,
+/// `busy` `IN_USE`, `vanish` opens and ends at once with `TARGET_GONE`, `abort` opens and ends with
+/// a reason of its own, `slow` opens and does not read for two seconds, `late` takes a second to
+/// open, `sink` counts the data it gets and, once the client ends its side, sends the count as a
+/// control frame (eight bytes, big-endian), and anything else echoes what it receives.
 pub fn echo_stream() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
+    Arc::new(|request: StreamRequest| -> BoxFuture<'static, Opening> {
         Box::pin(async move {
-            match request.query_value("target").unwrap_or("") {
-                "" => StreamOpen::Invalid("Say which target, as ?target=<name>.".into()),
-                "missing" => StreamOpen::NotFound("There is no target called missing.".into()),
-                "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
-                "vanish" => StreamOpen::accept(|session: StreamSession| async move {
-                    session.close(4004, "unplugged").await;
+            match std::str::from_utf8(&request.target).unwrap_or("") {
+                "" => Opening::BadTarget("Say which target.".into()),
+                "missing" => Opening::NotFound("There is no target called missing.".into()),
+                "busy" => Opening::InUse("bench-2 holds busy.".into()),
+                "vanish" => Opening::accept(|session: StreamSession| async move {
+                    session.end(StreamEnd::target_gone("unplugged")).await;
                 }),
-                _ => StreamOpen::accept(|mut session: StreamSession| async move {
-                    while let Some(message) = session.recv().await {
-                        if session.send(message).await.is_err() {
-                            return;
-                        }
-                    }
+                "abort" => Opening::accept(|session: StreamSession| async move {
+                    session
+                        .end(StreamEnd::aborted("WORN_OUT", "The echo is worn out.").unwrap())
+                        .await;
                 }),
+                "slow" => Opening::accept(|session: StreamSession| async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    echo(session).await;
+                }),
+                "late" => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    Opening::accept(echo)
+                }
+                "sink" => Opening::accept(sink),
+                _ => Opening::accept(echo),
             }
         })
     })
 }
 
+async fn sink(mut session: StreamSession) {
+    let mut total = 0u64;
+    while let Some(message) = session.recv().await {
+        if let StreamMessage::Data(data) = message {
+            total += data.len() as u64;
+        }
+    }
+    let _ = session.send_control(total.to_be_bytes().to_vec()).await;
+}
+
+async fn echo(mut session: StreamSession) {
+    while let Some(message) = session.recv().await {
+        if session.send(message).await.is_err() {
+            return;
+        }
+    }
+}
+
+fn settings_9600() -> LineSettings {
+    LineSettings {
+        baud: 9600,
+        data_bits: 8,
+        parity: Parity::None as i32,
+        stop_bits: StopBits::One as i32,
+        flow_control: FlowControl::None as i32,
+    }
+}
+
+fn server_message(message: serial_server_message::Message) -> Bytes {
+    SerialServerMessage {
+        message: Some(message),
+    }
+    .encode_to_vec()
+    .into()
+}
+
 /// A serial port as an app would serve it, with the port played by a loopback: bytes sent come
-/// back. `COM1` opens; `fault` opens and then reports a fault (4100); `busy` is 409; no port is
-/// 422; anything else 404. 12345 baud is a rate the port cannot do. Setting DTR raises DSR and DCD.
+/// back. `COM1` opens; `fault` opens and then reports a fault (`PORT_FAULT`); `busy` is `IN_USE`;
+/// no port is `BAD_TARGET`; anything else `NO_SUCH_TARGET`. 12345 baud is a rate the port cannot
+/// do. Setting DTR raises DSR and DCD.
 pub fn serial_stream() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
+    Arc::new(|request: StreamRequest| -> BoxFuture<'static, Opening> {
         Box::pin(async move {
-            let port = request.query_value("port").unwrap_or("").to_owned();
+            let port = SerialTarget::decode(request.target.clone())
+                .map(|t| t.port)
+                .unwrap_or_default();
             match port.as_str() {
-                "" => StreamOpen::Invalid("Say which port, as ?port=<id>.".into()),
-                "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
-                "COM1" | "fault" => {
-                    StreamOpen::accept(move |session| pretend_serial(session, port))
-                }
-                other => StreamOpen::NotFound(format!("There is no port {other}.")),
+                "" => Opening::BadTarget("Say which port.".into()),
+                "busy" => Opening::InUse("bench-2 holds busy.".into()),
+                "COM1" | "fault" => Opening::accept(move |session| pretend_serial(session, port)),
+                other => Opening::NotFound(format!("There is no port {other}.")),
             }
         })
     })
 }
 
 async fn pretend_serial(mut session: StreamSession, port: String) {
-    let mut settings = LineSettings {
-        baud: 9600,
-        data_bits: 8,
-        parity: Parity::None,
-        stop_bits: StopBits::One,
-        flow_control: FlowControl::None,
-    };
-    let opened = ServerMessage::Opened {
-        line_settings: settings,
-        modem_status: ModemStatus {
+    let mut settings = settings_9600();
+    let opened = serial_server_message::Message::Opened(SerialOpened {
+        line_settings: Some(settings),
+        modem_status: Some(ModemStatus {
             cts: true,
             dsr: false,
             dcd: false,
             ri: false,
-        },
-    };
-    if session.send_text(opened.to_json()).await.is_err() {
+        }),
+    });
+    if session.send_control(server_message(opened)).await.is_err() {
         return;
     }
     if port == "fault" {
         session
-            .close(
-                skakel_serial::CLOSE_PORT_FAULT,
-                "The port reported a fault.",
-            )
+            .end(StreamEnd::aborted("PORT_FAULT", "The port reported a fault.").unwrap())
             .await;
         return;
     }
     while let Some(message) = session.recv().await {
         let reply = match message {
-            StreamMessage::Binary(data) => {
-                if session.send_binary(data).await.is_err() {
+            StreamMessage::Data(data) => {
+                if session.send_data(data).await.is_err() {
                     return;
                 }
                 continue;
             }
-            StreamMessage::Text(text) => match ClientMessage::parse(&text) {
-                Some(ClientMessage::LineSettings(change)) if change.baud == 12345 => {
-                    ServerMessage::Error {
-                        code: ErrorCode::Unsupported,
-                        detail: Some("This port cannot run at 12345 baud.".into()),
+            StreamMessage::Control(control) => {
+                match SerialClientMessage::decode(control)
+                    .ok()
+                    .and_then(|m| m.message)
+                {
+                    Some(serial_client_message::Message::LineSettings(change))
+                        if change.baud == 12345 =>
+                    {
+                        serial_server_message::Message::Error(SerialError {
+                            code: SerialErrorCode::Unsupported as i32,
+                            detail: "This port cannot run at 12345 baud.".into(),
+                        })
                     }
+                    Some(serial_client_message::Message::LineSettings(change)) => {
+                        settings = change;
+                        serial_server_message::Message::LineSettings(settings)
+                    }
+                    Some(serial_client_message::Message::ModemLines(lines))
+                        if lines.dtr.is_some() =>
+                    {
+                        let dtr = lines.dtr == Some(true);
+                        serial_server_message::Message::ModemStatus(ModemStatus {
+                            cts: true,
+                            dsr: dtr,
+                            dcd: dtr,
+                            ri: false,
+                        })
+                    }
+                    _ => continue,
                 }
-                Some(ClientMessage::LineSettings(change)) => {
-                    settings = change;
-                    ServerMessage::LineSettings(settings)
-                }
-                Some(ClientMessage::ModemLines { dtr: Some(dtr), .. }) => {
-                    ServerMessage::ModemStatus(ModemStatus {
-                        cts: true,
-                        dsr: dtr,
-                        dcd: dtr,
-                        ri: false,
-                    })
-                }
-                _ => continue,
-            },
+            }
         };
-        if session.send_text(reply.to_json()).await.is_err() {
+        if session.send_control(server_message(reply)).await.is_err() {
             return;
         }
     }
@@ -176,7 +216,7 @@ pub fn bench_builder_with(store: Arc<InMemoryStore>) -> SkakelServerBuilder {
         .listen("127.0.0.1:0".parse().unwrap())
         .discovery_bind("127.0.0.1".parse().unwrap())
         .discovery_port(0)
-        .hub("hub", TestHub)
+        .grpc_service(greeter::Greeter)
         .stream("echo", echo_stream())
         .stream("serial", serial_stream())
 }
@@ -188,8 +228,8 @@ pub async fn start() -> SkakelServer {
 // ---- TLS that trusts anything, and records what the server presented ----
 
 #[derive(Debug)]
-struct AcceptAnything {
-    presented: Mutex<Option<Vec<u8>>>,
+pub struct AcceptAnything {
+    pub presented: Mutex<Option<Vec<u8>>>,
 }
 
 impl ServerCertVerifier for AcceptAnything {
@@ -240,11 +280,8 @@ impl ServerCertVerifier for AcceptAnything {
     }
 }
 
-/// A TLS connection to `address` and the certificate the server presented.
-pub async fn tls(
-    address: SocketAddr,
-    http1_only: bool,
-) -> (tokio_rustls::client::TlsStream<TcpStream>, Vec<u8>) {
+/// A TLS client config that trusts anything, offering `alpn`, and its verifier.
+pub fn tls_config(alpn: &[&[u8]]) -> (Arc<ClientConfig>, Arc<AcceptAnything>) {
     let verifier = Arc::new(AcceptAnything {
         presented: Mutex::new(None),
     });
@@ -255,14 +292,32 @@ pub async fn tls(
             .dangerous()
             .with_custom_certificate_verifier(verifier.clone())
             .with_no_client_auth();
-    if http1_only {
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    }
+    config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
+    (Arc::new(config), verifier)
+}
+
+pub type Tls = tokio_rustls::client::TlsStream<TcpStream>;
+
+/// A TLS connection to `address` with `config`.
+pub async fn tls_with(address: SocketAddr, config: Arc<ClientConfig>) -> Tls {
     let tcp = TcpStream::connect(address).await.unwrap();
-    let stream = TlsConnector::from(Arc::new(config))
+    tcp.set_nodelay(true).unwrap();
+    TlsConnector::from(config)
         .connect(ServerName::try_from("localhost").unwrap(), tcp)
         .await
-        .expect("the TLS handshake");
+        .expect("the TLS handshake")
+}
+
+/// A TLS connection to `address`, offering HTTP/1.1 only or HTTP/2 too, and the certificate the
+/// server presented.
+pub async fn tls(address: SocketAddr, http1_only: bool) -> (Tls, Vec<u8>) {
+    let alpn: &[&[u8]] = if http1_only {
+        &[b"http/1.1"]
+    } else {
+        &[b"h2", b"http/1.1"]
+    };
+    let (config, verifier) = tls_config(alpn);
+    let stream = tls_with(address, config).await;
     let presented = verifier
         .presented
         .lock()
@@ -278,7 +333,7 @@ pub async fn presented_fingerprint(address: SocketAddr) -> String {
     skakel_protocol::fingerprints::of_der(&der)
 }
 
-// ---- HTTP ----
+// ---- HTTPS over HTTP/1.1 ----
 
 #[derive(Debug)]
 pub struct Reply {
@@ -462,7 +517,7 @@ pub async fn token_for(server: &SkakelServer, id: &str, secret: &str) -> String 
 }
 
 pub async fn token_request(server: &SkakelServer, id: &str, secret: &str) -> Reply {
-    Request::new("POST", "/skakel/v1/token")
+    Request::new("POST", "/skakel/v2/token")
         .form(&format!(
             "grant_type=client_credentials&client_id={id}&client_secret={secret}"
         ))
@@ -470,142 +525,227 @@ pub async fn token_request(server: &SkakelServer, id: &str, secret: &str) -> Rep
         .await
 }
 
-// ---- WebSocket ----
+// ---- gRPC over HTTP/2 ----
 
-pub type Socket = tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+/// One HTTP/2 connection to the server, for the generated gRPC clients. Each call goes out on it
+/// with the scheme and authority filled in.
+#[derive(Clone)]
+pub struct Grpc {
+    send: SendRequest<Body>,
+    authority: String,
+    /// The protocol ALPN chose.
+    pub alpn: Option<Vec<u8>>,
+}
 
-/// Opens a WebSocket at `path_and_query` with `token`, or returns the HTTP answer that refused it.
-pub async fn open_socket(
-    server: &SkakelServer,
-    path_and_query: &str,
-    token: Option<&str>,
-) -> Result<Socket, Reply> {
-    let (stream, _) = tls(server.local_addr(), true).await;
-    let mut request = format!(
-        "wss://localhost:{}{path_and_query}",
-        server.local_addr().port()
+impl tower_service::Service<http::Request<Body>> for Grpc {
+    type Response = http::Response<hyper::body::Incoming>;
+    type Error = hyper::Error;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.send.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut request: http::Request<Body>) -> Self::Future {
+        let path = request
+            .uri()
+            .path_and_query()
+            .map_or("/", |p| p.as_str())
+            .to_owned();
+        *request.uri_mut() = format!("https://{}{path}", self.authority).parse().unwrap();
+        Box::pin(self.send.send_request(request))
+    }
+}
+
+/// An HTTP/2 connection over `stream`, already through TLS.
+pub async fn grpc_over<S>(stream: S, authority: String, alpn: Option<Vec<u8>>) -> Grpc
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (send, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+        .timer(TokioTimer::new())
+        .adaptive_window(true)
+        .handshake(TokioIo::new(stream))
+        .await
+        .expect("the HTTP/2 handshake");
+    tokio::spawn(connection);
+    Grpc {
+        send,
+        authority,
+        alpn,
+    }
+}
+
+/// A new HTTP/2 connection to the server.
+pub async fn grpc(server: &SkakelServer) -> Grpc {
+    let (stream, _) = tls(server.local_addr(), false).await;
+    let alpn = stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+    grpc_over(
+        stream,
+        format!("localhost:{}", server.local_addr().port()),
+        alpn,
     )
-    .into_client_request()
-    .unwrap();
-    if let Some(token) = token {
-        request.headers_mut().insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-        );
+    .await
+}
+
+pub fn control(connection: &Grpc) -> ControlServiceClient<Grpc> {
+    ControlServiceClient::new(connection.clone())
+}
+
+pub fn streams(connection: &Grpc) -> StreamServiceClient<Grpc> {
+    StreamServiceClient::new(connection.clone())
+        .max_decoding_message_size(64 << 20)
+        .max_encoding_message_size(64 << 20)
+}
+
+/// A request that carries `token` as its bearer token.
+pub fn with_token<T>(message: T, token: &str) -> tonic::Request<T> {
+    let mut request = tonic::Request::new(message);
+    request
+        .metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    request
+}
+
+/// The domain and reason of a status's `ErrorInfo`.
+pub fn reason_of(status: &Status) -> Option<(String, String)> {
+    status
+        .get_details_error_info()
+        .map(|info| (info.domain, info.reason))
+}
+
+/// The status's code and its Skakel reason, for a short assertion.
+pub fn refused(status: &Status) -> (tonic::Code, String) {
+    let reason = match reason_of(status) {
+        Some((domain, reason)) if domain == "skakel" => reason,
+        Some((domain, reason)) => format!("{domain}/{reason}"),
+        None => String::new(),
+    };
+    (status.code(), reason)
+}
+
+/// A control call's requests, and its answers.
+pub struct ControlCall {
+    pub requests: mpsc::Sender<skakel_proto::v2::ConnectRequest>,
+    pub answers: Streaming<skakel_proto::v2::ConnectResponse>,
+}
+
+impl ControlCall {
+    /// The next answer, within ten seconds: `Ok(None)` when the call ended with `OK`.
+    pub async fn next(
+        &mut self,
+    ) -> Result<Option<skakel_proto::v2::connect_response::Message>, Status> {
+        let answer = tokio::time::timeout(Duration::from_secs(10), self.answers.message())
+            .await
+            .expect("an answer within ten seconds")?;
+        Ok(answer.map(|a| a.message.expect("a message of a known kind")))
     }
-    match tokio_tungstenite::client_async(request, stream).await {
-        Ok((socket, _)) => Ok(socket),
-        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => Err(Reply {
-            status: response.status().as_u16(),
-            headers: response
-                .headers()
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_owned()))
-                .collect(),
-            body: response.body().clone().unwrap_or_default(),
-        }),
-        Err(other) => panic!("the WebSocket did not open: {other}"),
+}
+
+/// Opens `ControlService.Connect` with `token` on `connection`.
+pub async fn connect(connection: &Grpc, token: &str) -> Result<ControlCall, Status> {
+    let (requests, rx) = mpsc::channel(8);
+    let answers = control(connection)
+        .connect(with_token(ReceiverStream::new(rx), token))
+        .await?
+        .into_inner();
+    Ok(ControlCall { requests, answers })
+}
+
+/// An open stream: what goes out, and what comes back.
+pub struct TestStream {
+    pub frames: mpsc::Sender<OpenRequest>,
+    pub answers: Streaming<OpenResponse>,
+}
+
+impl TestStream {
+    pub async fn send_data(&self, data: impl Into<Bytes>) {
+        self.frames
+            .send(OpenRequest {
+                frame: Some(open_request::Frame::Data(data.into())),
+            })
+            .await
+            .expect("the stream takes frames");
+    }
+
+    pub async fn send_control(&self, control: impl Into<Bytes>) {
+        self.frames
+            .send(OpenRequest {
+                frame: Some(open_request::Frame::Control(control.into())),
+            })
+            .await
+            .expect("the stream takes frames");
+    }
+
+    /// The next frame within ten seconds: `Ok(None)` when the stream ended with `OK`.
+    pub async fn next(&mut self) -> Result<Option<open_response::Frame>, Status> {
+        self.next_within(Duration::from_secs(10)).await
+    }
+
+    pub async fn next_within(
+        &mut self,
+        limit: Duration,
+    ) -> Result<Option<open_response::Frame>, Status> {
+        let answer = tokio::time::timeout(limit, self.answers.message())
+            .await
+            .expect("a frame within the limit")?;
+        Ok(answer.map(|a| a.frame.expect("a frame of a known kind")))
     }
 }
 
-/// The next frame, with a limit.
-pub async fn next_frame(socket: &mut Socket) -> Option<Message> {
-    next_frame_for(socket, std::time::Duration::from_secs(10)).await
-}
-
-/// The next frame, with a limit of your own.
-pub async fn next_frame_for(socket: &mut Socket, limit: std::time::Duration) -> Option<Message> {
-    tokio::time::timeout(limit, socket.next())
-        .await
-        .expect("a frame within the limit")
-        .map(|m| m.expect("a readable frame"))
-}
-
-// ---- The SignalR hub, as a client ----
-
-pub struct HubClient {
-    pub socket: Socket,
-    buffer: Vec<u8>,
-    /// How long to wait for the next message.
-    pub limit: std::time::Duration,
-}
-
-const RS: u8 = 0x1E;
-
-/// Negotiates and connects the hub at `/skakel/v1/hub`, and does the handshake.
-pub async fn hub_connect(server: &SkakelServer, token: &str) -> HubClient {
-    let negotiated = Request::new("POST", "/skakel/v1/hub/negotiate?negotiateVersion=1")
-        .bearer(token)
-        .send(server)
-        .await;
-    assert_eq!(negotiated.status, 200, "{}", negotiated.text());
-    let body = negotiated.json();
-    let id = body["connectionToken"].as_str().unwrap();
-    let mut socket = open_socket(server, &format!("/skakel/v1/hub?id={id}"), Some(token))
-        .await
-        .map_err(|r| format!("{}: {}", r.status, r.text()))
-        .expect("the hub connects");
-    socket
-        .send(Message::text(format!(
-            "{{\"protocol\":\"json\",\"version\":1}}{}",
-            char::from(RS)
-        )))
+/// Opens a stream of `stream_type` for `target` with `token` on `connection`, and waits for
+/// `opened`.
+pub async fn open_stream_on(
+    connection: &Grpc,
+    token: &str,
+    stream_type: &str,
+    target: &[u8],
+) -> Result<TestStream, Status> {
+    let (frames, rx) = mpsc::channel(16);
+    frames
+        .send(OpenRequest {
+            frame: Some(open_request::Frame::Open(StreamOpen {
+                stream_type: stream_type.into(),
+                target: Bytes::copy_from_slice(target),
+            })),
+        })
         .await
         .unwrap();
-    let mut client = HubClient {
-        socket,
-        buffer: vec![],
-        limit: std::time::Duration::from_secs(10),
-    };
-    assert_eq!(client.next_message().await.unwrap(), json!({}));
-    client
+    let answers = streams(connection)
+        .open(with_token(ReceiverStream::new(rx), token))
+        .await?
+        .into_inner();
+    let mut stream = TestStream { frames, answers };
+    match stream.next().await? {
+        Some(open_response::Frame::Opened(_)) => Ok(stream),
+        other => panic!("the first frame is not opened: {other:?}"),
+    }
 }
 
-impl HubClient {
-    /// The next hub message, or `None` when the connection ended.
-    pub async fn next_message(&mut self) -> Option<Value> {
-        loop {
-            if let Some(end) = self.buffer.iter().position(|b| *b == RS) {
-                let record: Vec<u8> = self.buffer.drain(..=end).collect();
-                return Some(serde_json::from_slice(&record[..record.len() - 1]).unwrap());
-            }
-            match next_frame_for(&mut self.socket, self.limit).await? {
-                Message::Text(text) => self.buffer.extend_from_slice(text.as_bytes()),
-                Message::Binary(data) => self.buffer.extend_from_slice(&data),
-                Message::Close(_) => return None,
-                _ => {}
-            }
-        }
-    }
+/// Opens a stream on a connection of its own.
+pub async fn open_stream(
+    server: &SkakelServer,
+    token: &str,
+    stream_type: &str,
+    target: &[u8],
+) -> Result<TestStream, Status> {
+    let connection = grpc(server).await;
+    open_stream_on(&connection, token, stream_type, target).await
+}
 
-    /// The next message that is not a ping.
-    pub async fn next_non_ping(&mut self) -> Option<Value> {
-        loop {
-            let message = self.next_message().await?;
-            if message["type"] != 6 {
-                return Some(message);
-            }
-        }
-    }
+/// The encoded target of a `serial` stream.
+pub fn serial_target(port: &str) -> Vec<u8> {
+    SerialTarget { port: port.into() }.encode_to_vec()
+}
 
-    pub async fn send(&mut self, message: Value) {
-        self.socket
-            .send(Message::text(format!("{message}{}", char::from(RS))))
-            .await
-            .unwrap();
-    }
-
-    /// Invokes a method and returns its completion.
-    pub async fn invoke(&mut self, id: &str, target: &str, arguments: Value) -> Value {
-        self.send(
-            json!({ "type": 1, "invocationId": id, "target": target, "arguments": arguments }),
-        )
-        .await;
-        loop {
-            let message = self.next_non_ping().await.expect("a completion");
-            if message["type"] == 3 && message["invocationId"] == id {
-                return message;
-            }
+/// Waits until `check` holds, for up to five seconds.
+pub async fn eventually(what: &str, check: impl Fn() -> bool) {
+    for _ in 0..250 {
+        if check() {
+            return;
         }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    panic!("{what} never happened");
 }

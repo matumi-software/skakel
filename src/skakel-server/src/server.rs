@@ -5,7 +5,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::convert::Infallible;
+
 use axum::Router;
+use axum::http::{Request, Response};
 use hyper::body::Incoming;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
@@ -13,25 +16,34 @@ use rustls::ServerConfig;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 use skakel_discovery::MAX_APP_VERSION_LENGTH;
-use skakel_protocol::{BASE_PATH, SkakelApp, is_app_id, is_stream_type};
+use skakel_proto::v2::control_service_server::ControlServiceServer;
+use skakel_proto::v2::stream_service_server::StreamServiceServer;
+use skakel_protocol::{
+    CONTROL_MESSAGE_LIMIT, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, Reason, STREAM_MESSAGE_LIMIT,
+    SkakelApp, is_app_id, is_app_service_name, is_stream_type,
+};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
+use tonic::body::Body;
+use tonic::server::NamedService;
+use tonic::service::RoutesBuilder;
 use tower_service::Service;
 
+use crate::control::Control;
 use crate::discovery::{self, Announcement};
 use crate::error::ServerError;
 use crate::events::{Events, ServerEvent};
+use crate::grpc::{Guarded, is_grpc};
 use crate::http::{self, looks_like_tls, plain_http_answer};
-use crate::hub::{HubHandle, HubHandler, HubRoute};
 use crate::limits::Limits;
 use crate::pairing::{Pairing, PairingOverview};
 use crate::sessions::Sessions;
 use crate::state::{CertificateSwitch, ClientView, KeysView, NewClient, ServerState};
 use crate::store::SkakelStore;
-use crate::streams::StreamHandler;
+use crate::streams::{StreamHandler, Streams};
 
 /// How long a client has to start a TLS handshake, and to finish one.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -51,12 +63,22 @@ pub(crate) struct Shared {
     pub pairing: Pairing,
     pub sessions: Arc<Sessions>,
     pub streams: HashMap<String, StreamHandler>,
+    pub token_lifetime: Duration,
 }
 
 type Callback = Box<dyn Fn(&ServerEvent) + Send + Sync>;
 
+/// Adds an app's service to the routes, behind the token check, once the server's state exists.
+type AddService = Box<dyn FnOnce(&mut RoutesBuilder, Arc<Shared>) + Send>;
+
+/// An app's gRPC service, waiting for the server's state to be put in front of it.
+struct AppService {
+    name: &'static str,
+    add: AddService,
+}
+
 /// Builds a Skakel server. Give it an app id and version and a store, say where to listen, add
-/// the app's hubs, streams and routes, and [`start`](Self::start) it.
+/// the app's gRPC services, stream types and HTTPS routes, and [`start`](Self::start) it.
 pub struct SkakelServerBuilder {
     app_id: String,
     app_version: String,
@@ -70,7 +92,8 @@ pub struct SkakelServerBuilder {
     pair_requests_per_minute: u32,
     keep_client_secrets: bool,
     certificate_host_name: String,
-    hubs: Vec<(String, Arc<dyn HubHandler>)>,
+    token_lifetime: Duration,
+    services: Vec<AppService>,
     streams: HashMap<String, StreamHandler>,
     routes: Option<Router>,
     callbacks: Vec<Callback>,
@@ -106,7 +129,8 @@ impl SkakelServerBuilder {
             pair_requests_per_minute: 120,
             keep_client_secrets: false,
             certificate_host_name: machine,
-            hubs: vec![],
+            token_lifetime: skakel_protocol::ACCESS_TOKEN_LIFETIME,
+            services: vec![],
             streams: HashMap::new(),
             routes: None,
             callbacks: vec![],
@@ -171,13 +195,44 @@ impl SkakelServerBuilder {
         self
     }
 
-    /// Adds a hub at `/skakel/v1/{path}`, such as `hub`. Clients connect with the same path.
-    pub fn hub(mut self, path: impl Into<String>, handler: impl HubHandler) -> Self {
-        self.hubs.push((path.into(), Arc::new(handler)));
+    /// How long the access tokens it issues last, at most the protocol's 30 minutes. For tests of
+    /// what happens when a token runs out.
+    #[doc(hidden)]
+    pub fn token_lifetime(mut self, lifetime: Duration) -> Self {
+        self.token_lifetime = lifetime;
         self
     }
 
-    /// Adds a stream type: `/skakel/v1/streams/{stream_type}`.
+    /// Adds one of the app's own gRPC services, such as the server tonic generated from the app's
+    /// `.proto` file, beside Skakel's on the same port and connections. Its package must not be
+    /// `skakel` or start with `skakel.`.
+    ///
+    /// Skakel checks every call's bearer token, and the client's generation, before the service
+    /// sees it, and refuses one without a current token with `TOKEN_REFUSED`. A call that gets
+    /// through carries a [`ClientPrincipal`](crate::ClientPrincipal) in its extensions, so the app
+    /// knows which client called. When that client is revoked or its secret rotated, or the server
+    /// stops, Skakel ends its calls still running with `REVOKED`, `ROTATED` or `STOPPING`. A token
+    /// that expires does not end a call already running.
+    pub fn grpc_service<S>(mut self, service: S) -> Self
+    where
+        S: NamedService
+            + Service<Request<Body>, Response = Response<Body>, Error = Infallible>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        S::Future: Send + 'static,
+    {
+        self.services.push(AppService {
+            name: S::NAME,
+            add: Box::new(move |routes, shared| {
+                routes.add_service(Guarded::new(service, shared, true));
+            }),
+        });
+        self
+    }
+
+    /// Adds a stream type, opened with `StreamService.Open` and this type in its `open` frame.
     pub fn stream(mut self, stream_type: impl Into<String>, handler: StreamHandler) -> Self {
         self.streams.insert(stream_type.into(), handler);
         self
@@ -230,17 +285,16 @@ impl SkakelServerBuilder {
         if self.certificate_host_name.trim().is_empty() {
             problems.push("The certificate host name must not be empty.".to_owned());
         }
-        for (path, _) in &self.hubs {
-            let fine = !path.is_empty()
-                && !path.starts_with('/')
-                && !path.ends_with('/')
-                && !path.eq_ignore_ascii_case("streams")
-                && path
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/'));
-            if !fine {
+        for (i, service) in self.services.iter().enumerate() {
+            if !is_app_service_name(service.name) {
                 problems.push(format!(
-                    "The hub path '{path}' must be letters, digits, - _ and /, with no slash at either end, and not 'streams'."
+                    "The gRPC service '{}' must be in a package of the app's own, not skakel or one under it.",
+                    service.name
+                ));
+            } else if self.services[..i].iter().any(|s| s.name == service.name) {
+                problems.push(format!(
+                    "The gRPC service '{}' was added twice.",
+                    service.name
                 ));
             }
         }
@@ -292,20 +346,15 @@ impl SkakelServerBuilder {
             pairing: pairing.clone(),
             sessions: sessions.clone(),
             streams: self.streams,
+            token_lifetime: self.token_lifetime,
         });
 
         let mut router = http::router(shared.clone());
-        let mut hubs = HashMap::new();
-        for (path, handler) in self.hubs {
-            let handle = HubHandle::default();
-            let route = HubRoute::new(shared.clone(), handler, handle.clone());
-            router = router.nest(&format!("{BASE_PATH}/{path}"), route.router());
-            hubs.insert(path, handle);
-        }
         if let Some(routes) = self.routes {
             router = router.merge(routes);
         }
-        let router = http::guard(router, shared.clone());
+        let https = http::guard(router, shared.clone());
+        let grpc = grpc_router(&shared, self.services);
 
         let listener = TcpListener::bind(self.listen)
             .await
@@ -338,7 +387,7 @@ impl SkakelServerBuilder {
         tasks.push(tokio::spawn(accept_loop(
             listener,
             acceptor,
-            router,
+            Routers { https, grpc },
             stopped.clone(),
         )));
 
@@ -346,11 +395,31 @@ impl SkakelServerBuilder {
             shared,
             local_addr,
             discovery_addr,
-            hubs,
             stop,
             tasks,
         })
     }
+}
+
+/// Skakel's control and stream services and the app's, each behind the token check.
+fn grpc_router(shared: &Arc<Shared>, services: Vec<AppService>) -> Router {
+    let mut routes = RoutesBuilder::default();
+    let control = ControlServiceServer::new(Control {
+        shared: shared.clone(),
+    })
+    .max_decoding_message_size(CONTROL_MESSAGE_LIMIT)
+    .max_encoding_message_size(CONTROL_MESSAGE_LIMIT);
+    routes.add_service(Guarded::new(control, shared.clone(), false));
+    let streams = StreamServiceServer::new(Streams {
+        shared: shared.clone(),
+    })
+    .max_decoding_message_size(STREAM_MESSAGE_LIMIT)
+    .max_encoding_message_size(STREAM_MESSAGE_LIMIT);
+    routes.add_service(Guarded::new(streams, shared.clone(), false));
+    for service in services {
+        (service.add)(&mut routes, shared.clone());
+    }
+    routes.routes().into_axum_router()
 }
 
 fn spawn_pruner(state: &Arc<ServerState>) {
@@ -370,7 +439,6 @@ pub struct SkakelServer {
     shared: Arc<Shared>,
     local_addr: SocketAddr,
     discovery_addr: Option<SocketAddr>,
-    hubs: HashMap<String, HubHandle>,
     stop: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -416,23 +484,16 @@ impl SkakelServer {
         self.shared.state.events.subscribe()
     }
 
-    /// The connections of the hub at `path`, as passed to
-    /// [`SkakelServerBuilder::hub`], for sending to clients.
-    pub fn hub(&self, path: &str) -> Option<HubHandle> {
-        self.hubs.get(path).cloned()
-    }
-
-    /// How many hub connections and streams a client has open.
+    /// How many calls a client has running that stay open: control calls, streams and calls to
+    /// the app's own services.
     pub fn open_sessions(&self, client_id: &str) -> usize {
         self.shared.sessions.count_for(client_id)
     }
 
-    /// Stops the server. Hub connections and streams get `stopping`, the listener closes, and
-    /// connections have a few seconds to finish.
+    /// Stops the server. Control calls are told `closing` and every call still running ends with
+    /// `STOPPING`, the listener closes, and connections have a few seconds to finish.
     pub async fn shutdown(mut self) {
-        self.shared
-            .sessions
-            .end_all(skakel_protocol::CLOSING_STOPPING);
+        self.shared.sessions.end_all(Reason::Stopping);
         // Time for the closing messages to leave before connections are asked to wind down.
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.stop.send_replace(true);
@@ -444,9 +505,7 @@ impl SkakelServer {
 
 impl Drop for SkakelServer {
     fn drop(&mut self) {
-        self.shared
-            .sessions
-            .end_all(skakel_protocol::CLOSING_STOPPING);
+        self.shared.sessions.end_all(Reason::Stopping);
         self.stop.send_replace(true);
     }
 }
@@ -469,13 +528,14 @@ impl Clients {
         self.state.register_client(name).await
     }
 
-    /// Gives a client a new secret. Its tokens, hub connections and streams from before end at
-    /// once. `None` for an unknown client.
+    /// Gives a client a new secret. Its tokens from before stop working, and its calls still
+    /// running end at once with `ROTATED`. `None` for an unknown client.
     pub async fn rotate_secret(&self, client_id: &str) -> Result<Option<String>, ServerError> {
         self.state.rotate_secret(client_id).await
     }
 
-    /// Removes a client. Its tokens, hub connections and streams end at once. False for an
+    /// Removes a client. Its tokens stop working, and its calls still running end at once with
+    /// `REVOKED`. False for an
     /// unknown client.
     pub async fn revoke(&self, client_id: &str) -> Result<bool, ServerError> {
         self.state.revoke_client(client_id).await
@@ -519,7 +579,7 @@ impl Keys {
         self.state.keys()
     }
 
-    /// Prepares the next certificate. Clients are told over the hub; the server goes on
+    /// Prepares the next certificate. Clients are told on the control channel; the server goes on
     /// presenting the current one. Returns the next fingerprint, or `None` when one is already
     /// prepared.
     pub async fn prepare_next_certificate(&self) -> Result<Option<String>, ServerError> {
@@ -575,10 +635,17 @@ fn tls_acceptor(state: &Arc<ServerState>) -> Result<TlsAcceptor, ServerError> {
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
+/// The HTTPS routes and the gRPC services, which share the port and its connections.
+#[derive(Clone)]
+struct Routers {
+    https: Router,
+    grpc: Router,
+}
+
 async fn accept_loop(
     listener: TcpListener,
     acceptor: TlsAcceptor,
-    router: Router,
+    routers: Routers,
     mut stopped: watch::Receiver<bool>,
 ) {
     let mut connections = tokio::task::JoinSet::new();
@@ -591,7 +658,7 @@ async fn accept_loop(
                         stream,
                         remote,
                         acceptor.clone(),
-                        router.clone(),
+                        routers.clone(),
                         stopped.clone(),
                     ));
                 }
@@ -613,7 +680,7 @@ async fn serve_connection(
     mut stream: TcpStream,
     remote: SocketAddr,
     acceptor: TlsAcceptor,
-    router: Router,
+    routers: Routers,
     mut stopped: watch::Receiver<bool>,
 ) {
     let _ = stream.set_nodelay(true);
@@ -635,7 +702,12 @@ async fn serve_connection(
         request
             .extensions_mut()
             .insert(axum::extract::ConnectInfo(remote));
-        let mut router = router.clone();
+        // The content type tells a gRPC call; everything else is an HTTPS request.
+        let mut router = if is_grpc(request.headers()) {
+            routers.grpc.clone()
+        } else {
+            routers.https.clone()
+        };
         async move { router.call(request).await }
     });
     let mut builder = auto::Builder::new(TokioExecutor::new());
@@ -643,6 +715,16 @@ async fn serve_connection(
         .http1()
         .timer(TokioTimer::new())
         .header_read_timeout(HEADER_TIMEOUT);
+    // A PING after 15 seconds without a frame from the client, and the connection is dead when that
+    // PING has no answer 15 seconds later: 30 seconds of silence in all. Pings from the client are
+    // answered at any rate. Adaptive windows let a stream's flow-control window grow with the link,
+    // beyond HTTP/2's 64 KiB start, which would hold a stream to 64 KiB per round trip.
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .keep_alive_interval(KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT - KEEP_ALIVE_INTERVAL)
+        .adaptive_window(true);
     let connection = builder.serve_connection_with_upgrades(TokioIo::new(tls), service);
     tokio::pin!(connection);
     tokio::select! {

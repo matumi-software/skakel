@@ -432,11 +432,11 @@ mod tests {
 
         assert_eq!(
             pair_url(&server, "a/b?c", None).unwrap().as_str(),
-            "https://10.0.0.5:5240/skakel/v1/pair/a%2Fb%3Fc"
+            "https://10.0.0.5:5240/skakel/v2/pair/a%2Fb%3Fc"
         );
         assert_eq!(
             pair_url(&server, "r1", Some("reveal")).unwrap().as_str(),
-            "https://10.0.0.5:5240/skakel/v1/pair/r1/reveal"
+            "https://10.0.0.5:5240/skakel/v2/pair/r1/reveal"
         );
     }
 }

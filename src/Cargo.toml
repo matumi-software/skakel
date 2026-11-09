@@ -61,4 +61,7 @@ prost = "0.14.4"
 tonic = { version = "0.14.9", default-features = false }
 tonic-prost = "0.14.9"
 tonic-prost-build = "0.14.9"
+# The `google.rpc.Status` and `ErrorInfo` a refusal carries in `grpc-status-details-bin` (MIT, same
+# repository as tonic).
+tonic-types = "0.14.9"
 protox = "0.10.0"

@@ -8,8 +8,7 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
 use skakel_protocol::{
     CLOSE_FIRST_TYPE_DEFINED, CLOSE_LAST_TYPE_DEFINED, CLOSE_NORMAL, CLOSE_REVOKED, CLOSE_ROTATED,
-    CLOSE_STOPPING, CLOSE_TARGET_GONE, STREAM_KEEP_ALIVE_INTERVAL, STREAM_KEEP_ALIVE_TIMEOUT,
-    STREAMS_PATH,
+    CLOSE_STOPPING, CLOSE_TARGET_GONE, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, STREAMS_PATH,
 };
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -311,10 +310,10 @@ async fn run(
     incoming: mpsc::Sender<Frame>,
     closed: watch::Sender<Option<StreamClose>>,
 ) {
-    let mut ping = tokio::time::interval(STREAM_KEEP_ALIVE_INTERVAL);
+    let mut ping = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ping.reset();
-    let silent = tokio::time::sleep(STREAM_KEEP_ALIVE_TIMEOUT);
+    let silent = tokio::time::sleep(KEEP_ALIVE_TIMEOUT);
     tokio::pin!(silent);
     let mut permit = None;
     let mut we_closed = false;
@@ -329,7 +328,7 @@ async fn run(
                 }
             }
             message = socket.next(), if permit.is_some() => {
-                silent.as_mut().reset(tokio::time::Instant::now() + STREAM_KEEP_ALIVE_TIMEOUT);
+                silent.as_mut().reset(tokio::time::Instant::now() + KEEP_ALIVE_TIMEOUT);
                 match message {
                     Some(Ok(Message::Binary(data))) => {
                         if let Some(room) = permit.take() {
