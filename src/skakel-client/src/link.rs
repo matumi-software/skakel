@@ -14,7 +14,8 @@
 //! one has sent the certificates. When the connection drops it connects again, after a pause that
 //! grows to a minute. Connections and `Connect` calls never start less than a second apart, and a
 //! token is taken to last 2 to 30 minutes whatever the server says. A revoke or rotation on the
-//! server ends it for good, as [`LinkState::Closed`].
+//! server ends it for good, as [`LinkState::Closed`], and so does the token endpoint refusing the
+//! client's credentials.
 //!
 //! The app's own gRPC services are reached through [`Link::channel`], over the control channel's
 //! connection with the link's token; each stream opens a connection of its own.
@@ -84,8 +85,8 @@ pub enum LinkState {
     Connected,
     /// The last attempt failed, or the connection was lost; the link tries again after a pause.
     Failed,
-    /// The server ended the client for good (revoked, or its secret rotated). The link does not try
-    /// again.
+    /// The server ended the client for good: revoked it, rotated its secret, or refused its
+    /// credentials. The link does not try again; the client has to pair again.
     Closed,
 }
 
@@ -683,7 +684,7 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
         match connect_once(&inner, &address, &stop).await {
             Ok(None) => return,
             Ok(Some(end)) => {
-                if matches!(end.kind(), FailureKind::Revoked | FailureKind::Rotated) {
+                if ends_for_good(end.kind()) {
                     log::warn!(
                         "{} ended this client: {}. The link stops",
                         http::authority(&address),
@@ -703,6 +704,19 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
             }
             Err(error) => {
                 if stop.is_cancelled() {
+                    return;
+                }
+                if ends_for_good(error.kind()) {
+                    log::warn!(
+                        "{} refused this client: {}: {error:?}. The link stops",
+                        http::authority(&address),
+                        error.failure().code()
+                    );
+                    set_status(
+                        &inner,
+                        LinkStatus::with(LinkState::Closed, error.failure().clone()),
+                    )
+                    .await;
                     return;
                 }
                 log::warn!(
@@ -728,6 +742,15 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
         }
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
+}
+
+/// True for a failure that trying again cannot mend: the server revoked the client, rotated its
+/// secret, or its token endpoint refused the credentials. The client has to pair again.
+fn ends_for_good(kind: FailureKind) -> bool {
+    matches!(
+        kind,
+        FailureKind::Revoked | FailureKind::Rotated | FailureKind::RejectedCredentials
+    )
 }
 
 /// Waits before the next try. A move ends the wait at once.
