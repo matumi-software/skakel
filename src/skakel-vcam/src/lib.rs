@@ -2,7 +2,9 @@
 //! name; this crate creates it and sends it frames. See `docs/virtual-camera.md` at the repository
 //! root for how it works and the contract with the media source.
 //!
-//! ```no_run
+// The example uses the camera, which is Windows only: compiled there, ignored elsewhere.
+#![cfg_attr(windows, doc = "```no_run")]
+#![cfg_attr(not(windows), doc = "```ignore")]
 //! # fn main() -> skakel_vcam::Result<()> {
 //! use skakel_vcam::{CameraOptions, PixelFormat, VirtualCamera};
 //!
