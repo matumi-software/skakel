@@ -21,8 +21,22 @@ The server takes tokio, hyper, axum (its HTTPS routes), tonic (the generated ser
 router, without tonic's transport), tonic-types (the `google.rpc.Status` details of a refusal),
 rustls (with ring) and rcgen, with everything they pull in under MIT, Apache-2.0, BSD, ISC, Zlib,
 Unlicense or Unicode-3.0 (`r-efi`, built only for UEFI targets, offers LGPL as one of three options
-and is used under its MIT one; checked with `cargo metadata`). Its own accept loop serves HTTPS and
-gRPC on one TLS port, so the certificate stays pinned and handed over the way the protocol says.
+and is used under its MIT one; checked with `cargo metadata`). It serves in one of two ways:
+
+- **On a port of its own** (`SkakelServerBuilder::start`). Its own accept loop serves HTTPS and gRPC
+  on one TLS port, so the certificate stays pinned and handed over the way the protocol says.
+- **On the app's listener** (`SkakelServerBuilder::start_mounted`), for an app that serves its own
+  pages on the same port, as Koppel does. The server binds nothing. The app mounts
+  `SkakelServer::service`, a tower service with Skakel's HTTPS endpoints and gRPC services (the
+  app's included, behind the token check), on its own hyper or axum server, and puts the caller's
+  address on every request as axum's `ConnectInfo<SocketAddr>`, which every per-address limit
+  counts by; a request without it is refused. The app's TLS acceptor takes
+  `SkakelServer::tls_config`, which asks the server for its current certificate on every handshake
+  and keeps session resumption off, so the handover works as on Skakel's own port. The app's
+  connections take Skakel's HTTP/2 keep-alive and adaptive windows from `connection_builder`.
+  Skakel keeps the certificate in both ways, because it decides when a prepared one is presented.
+
+The wire is the same either way.
 
 The client takes tokio, reqwest and rustls (with ring) for pinned HTTPS, tonic's generated clients
 over hyper's HTTP/2 client and tokio-rustls for pinned gRPC connections it opens itself, one TCP
@@ -72,8 +86,8 @@ short `vcam`.
   picking, tokens, the control link (the control channel and its renewal, certificate handover,
   following a server to a new address), the app's own gRPC calls over it, data streams, and the serial
   connection built on a stream. Storage is the app's.
-- **Server:** a server an app starts and adds its own gRPC services, stream types and HTTPS
-  routes to. The discovery answerer, pairing approval, OAuth tokens, revoking clients, the
+- **Server:** a server an app starts, on a port of its own or mounted on the app's listener, and
+  adds its own gRPC services, stream types and HTTPS routes to. The discovery answerer, pairing approval, OAuth tokens, revoking clients, the
   certificate and its handover, the control and stream services, the token check in front of every
   gRPC service with the ending of a client's calls on revoke, rotate and stop, and the per-address
   limits. Storage is the app's, through a
