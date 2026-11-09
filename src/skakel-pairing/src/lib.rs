@@ -5,7 +5,7 @@
 //!
 //! 1. The client sends [`commit`] of a random nonce, not the nonce.
 //! 2. The server answers with its own random nonce.
-//! 3. The client reveals its nonce; the server checks it with [`matches`].
+//! 3. The client reveals its nonce; the server checks it with [`matches()`].
 //!
 //! Both ends then derive the code with [`compute`] from the certificate the client pinned and both
 //! nonces. A man in the middle has its own certificate and must fix each nonce before it sees the

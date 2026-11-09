@@ -157,7 +157,7 @@ impl VirtualCamera {
         Ok(true)
     }
 
-    /// Sets the frame the camera shows while no app writes to it, such as "<App> is closed". It is
+    /// Sets the frame the camera shows while no app writes to it, such as `<App> is closed`. It is
     /// kept in `%ProgramData%\Skakel\VirtualCamera`, so the camera shows it after the app has gone.
     pub fn set_idle_frame(&mut self, data: &[u8], format: PixelFormat) -> Result<()> {
         check_size(data, format, &self.format)?;

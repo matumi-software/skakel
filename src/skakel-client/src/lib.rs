@@ -14,8 +14,8 @@
 //!   its own. [`Link::open_serial`] gives a [`SerialConnection`].
 //! - [`Pins`] and [`Credentials`] are what an app keeps for each server it is paired with.
 //! - [`Error`] carries a [`Failure`], a fixed set of kinds with fixed wording an app shows. The
-//!   detail goes to the log through the [`log`] crate and to [`Error::source`], never into the
-//!   message.
+//!   detail goes to the log through the [`log`] crate and to
+//!   [`Error::source`](std::error::Error::source), never into the message.
 //!
 //! # Trust
 //!
