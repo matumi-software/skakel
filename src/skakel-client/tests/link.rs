@@ -152,8 +152,11 @@ async fn the_channel_is_unavailable_before_the_link_is_connected() {
     assert_eq!(error.message(), "Not connected to the server.");
 }
 
+/// Longer than the pause before a link tries again after a failure, which starts at a second.
+const LONGER_THAN_A_RETRY: Duration = Duration::from_millis(2500);
+
 #[tokio::test]
-async fn a_wrong_secret_is_rejected_credentials() {
+async fn a_wrong_secret_is_rejected_credentials_and_closes_the_link_for_good() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let credentials = bench.register(&server).await;
@@ -168,14 +171,55 @@ async fn a_wrong_secret_is_rejected_credentials() {
 
     link.start();
 
-    let failed = statuses.wait(|s| s.state == LinkState::Failed).await;
+    let closed = statuses.wait(|s| s.state == LinkState::Closed).await;
+    let failure = closed.failure.unwrap();
+    assert_eq!(failure.kind(), FailureKind::RejectedCredentials);
     assert_eq!(
-        failed.failure.unwrap().kind(),
-        FailureKind::RejectedCredentials
+        failure.message(),
+        "The server refused this client's ID or secret. Pair with the server again."
+    );
+    tokio::time::sleep(LONGER_THAN_A_RETRY).await;
+    assert_eq!(
+        states(&statuses),
+        [LinkState::Connecting, LinkState::Closed],
+        "the link tried again"
     );
     assert_eq!(
         link.hello().await.unwrap_err().kind(),
         FailureKind::RejectedCredentials
+    );
+    link.stop().await;
+}
+
+#[tokio::test]
+async fn a_client_revoked_while_the_link_was_down_is_closed_for_good_when_it_comes_back() {
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let (link, credentials) = linked(&mut bench, &server).await;
+    let statuses = record_status(&link);
+    link.start();
+    statuses.wait(|s| s.state == LinkState::Connected).await;
+    link.stop().await;
+    assert!(bench.revoke(&server, &credentials.client_id).await);
+
+    link.start();
+
+    let closed = statuses.wait(|s| s.state == LinkState::Closed).await;
+    assert_eq!(
+        closed.failure.unwrap().kind(),
+        FailureKind::RejectedCredentials
+    );
+    tokio::time::sleep(LONGER_THAN_A_RETRY).await;
+    assert_eq!(
+        states(&statuses),
+        [
+            LinkState::Connecting,
+            LinkState::Connected,
+            LinkState::Stopped,
+            LinkState::Connecting,
+            LinkState::Closed,
+        ],
+        "the link tried again"
     );
     link.stop().await;
 }
