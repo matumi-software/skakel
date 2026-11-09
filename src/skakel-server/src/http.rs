@@ -3,7 +3,7 @@
 //! request. Hello and the streams are gRPC in version 2.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use axum::Json;
 use axum::Router;
@@ -104,6 +104,11 @@ pub(crate) fn authenticate_request(shared: &Shared, headers: &HeaderMap) -> Opti
 /// reads it with `request.extensions().get::<ClientPrincipal>()`. Either way the token is checked
 /// as the server's own calls check it, so one from a revoked client or an older generation is
 /// refused.
+///
+/// A route that takes it must be given to [`SkakelServerBuilder::routes`](crate::SkakelServerBuilder::routes),
+/// also when Skakel is mounted on the app's own router, because the server's state reaches only
+/// the requests Skakel serves. A route on the app's own router instead gets a 500 with a problem
+/// body that says so, and the first such request logs an error through the `log` crate.
 #[derive(Debug, Clone)]
 pub struct ClientPrincipal(pub Principal);
 
@@ -111,15 +116,29 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientPrincipal {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let shared = parts
-            .extensions
-            .get::<Arc<Shared>>()
-            .expect("the Skakel server's layer puts its state on every request")
-            .clone();
+        let Some(shared) = parts.extensions.get::<Arc<Shared>>().cloned() else {
+            return Err(outside_skakel(parts.uri.path()));
+        };
         authenticate_request(&shared, &parts.headers)
             .map(Self)
             .ok_or_else(|| unauthorized("Send a current bearer token. This one is missing or has expired, or the client was revoked or its secret rotated since it was issued."))
     }
+}
+
+/// The answer when [`ClientPrincipal`] is taken on a request Skakel did not serve, so there is no
+/// server to check the token against. There is also no server to tell with an event, so it logs,
+/// once per process rather than once per request.
+fn outside_skakel(path: &str) -> Response {
+    static LOGGED: Once = Once::new();
+    LOGGED.call_once(|| {
+        log::error!(
+            "The route {path:?} takes ClientPrincipal but is not served by Skakel. Give it to SkakelServerBuilder::routes instead of the app's own router."
+        );
+    });
+    problem(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "This route needs the client behind the bearer token, but it is not served by Skakel. The app must give it to SkakelServerBuilder::routes rather than mount it on its own router.",
+    )
 }
 
 /// The server's own routes, with the gate in front.
