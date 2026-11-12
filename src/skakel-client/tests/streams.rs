@@ -385,7 +385,7 @@ async fn serial_bytes_go_both_ways() {
 
     assert_eq!(
         within(Duration::from_secs(20), serial.recv()).await,
-        Some(b"AT\r\n".to_vec())
+        Some(Bytes::from_static(b"AT\r\n"))
     );
     serial.close().await;
     assert_eq!(serial.recv().await, None);
@@ -517,7 +517,7 @@ async fn break_and_purge_reach_the_server_without_ending_the_stream() {
     serial.send(b"x".to_vec()).await.unwrap();
     assert_eq!(
         within(Duration::from_secs(20), serial.recv()).await,
-        Some(b"x".to_vec())
+        Some(Bytes::from_static(b"x"))
     );
     assert_eq!(serial.stream().close_info(), None);
     serial.close().await;

@@ -14,9 +14,10 @@ use std::time::Duration;
 
 use prost::bytes::Bytes;
 use skakel_serial::{ClientMessage, ErrorCode, LineSettings, ModemStatus, ServerMessage};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+use crate::events::{Events, StateWatch};
 use crate::failure::{Error, FailureKind, bad_answer};
 use crate::streams::{Frame, StreamClose, StreamConnection};
 
@@ -76,8 +77,8 @@ struct Answers {
 }
 
 struct Shared {
-    line_settings: Mutex<LineSettings>,
-    modem_status: Mutex<ModemStatus>,
+    line_settings: watch::Sender<LineSettings>,
+    modem_status: watch::Sender<ModemStatus>,
     answers: Mutex<Answers>,
     events: broadcast::Sender<SerialEvent>,
 }
@@ -86,7 +87,7 @@ struct Shared {
 pub struct SerialConnection {
     stream: Arc<StreamConnection>,
     shared: Arc<Shared>,
-    data: tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>,
+    data: tokio::sync::Mutex<mpsc::Receiver<Bytes>>,
     changing: tokio::sync::Mutex<()>,
     change_timeout: Mutex<Duration>,
     receiving: JoinHandle<()>,
@@ -142,8 +143,8 @@ impl SerialConnection {
 
         let (events, _) = broadcast::channel(64);
         let shared = Arc::new(Shared {
-            line_settings: Mutex::new(line_settings),
-            modem_status: Mutex::new(modem_status),
+            line_settings: watch::channel(line_settings).0,
+            modem_status: watch::channel(modem_status).0,
             answers: Mutex::new(Answers::default()),
             events,
         });
@@ -167,17 +168,27 @@ impl SerialConnection {
 
     /// The port's settings, as the server last said.
     pub fn line_settings(&self) -> LineSettings {
-        *lock(&self.shared.line_settings)
+        *self.shared.line_settings.borrow()
+    }
+
+    /// The port's settings, to wait on for the server's next word about them.
+    pub fn watch_line_settings(&self) -> StateWatch<LineSettings> {
+        StateWatch::new(self.shared.line_settings.subscribe())
     }
 
     /// The port's input lines, as the server last said.
     pub fn modem_status(&self) -> ModemStatus {
-        *lock(&self.shared.modem_status)
+        *self.shared.modem_status.borrow()
     }
 
-    /// Modem line changes and errors the port reports, as they come.
-    pub fn events(&self) -> broadcast::Receiver<SerialEvent> {
-        self.shared.events.subscribe()
+    /// The port's input lines, to wait on for the next change.
+    pub fn watch_modem_status(&self) -> StateWatch<ModemStatus> {
+        StateWatch::new(self.shared.modem_status.subscribe())
+    }
+
+    /// Modem line changes and errors the port reports, from now on and in order.
+    pub fn events(&self) -> Events<SerialEvent> {
+        Events::new(self.shared.events.subscribe())
     }
 
     /// Completes when the stream ended, with how: a [`StreamCloseReason::TypeDefined`] close whose
@@ -195,7 +206,7 @@ impl SerialConnection {
 
     /// The next bytes that came from the port, or `None` once the stream has ended and everything
     /// was read. One task at a time reads.
-    pub async fn recv(&self) -> Option<Vec<u8>> {
+    pub async fn recv(&self) -> Option<Bytes> {
         self.data.lock().await.recv().await
     }
 
@@ -302,11 +313,11 @@ impl SerialConnection {
     }
 }
 
-async fn receive(stream: Arc<StreamConnection>, shared: Arc<Shared>, data: mpsc::Sender<Vec<u8>>) {
+async fn receive(stream: Arc<StreamConnection>, shared: Arc<Shared>, data: mpsc::Sender<Bytes>) {
     while let Some(frame) = stream.recv().await {
         match frame {
             Frame::Data(bytes) => {
-                if !bytes.is_empty() && data.send(Vec::from(bytes)).await.is_err() {
+                if !bytes.is_empty() && data.send(bytes).await.is_err() {
                     break;
                 }
             }
@@ -336,17 +347,17 @@ fn handle(shared: &Shared, bytes: &[u8]) {
             line_settings,
             modem_status,
         } => {
-            *lock(&shared.line_settings) = line_settings;
-            *lock(&shared.modem_status) = modem_status;
+            shared.line_settings.send_replace(line_settings);
+            shared.modem_status.send_replace(modem_status);
         }
         ServerMessage::LineSettings(applied) => {
-            *lock(&shared.line_settings) = applied;
+            shared.line_settings.send_replace(applied);
             if let Some(pending) = answer_for(shared, Some(&applied)) {
                 let _ = pending.send(Answer::Applied(applied));
             }
         }
         ServerMessage::ModemStatus(status) => {
-            *lock(&shared.modem_status) = status;
+            shared.modem_status.send_replace(status);
             let _ = shared.events.send(SerialEvent::ModemStatus(status));
         }
         ServerMessage::Error {
@@ -409,13 +420,14 @@ mod tests {
     fn shared(pending: Option<(LineSettings, oneshot::Sender<Answer>)>, owed: u32) -> Shared {
         let (events, _) = broadcast::channel(8);
         Shared {
-            line_settings: Mutex::new(settings(9600)),
-            modem_status: Mutex::new(ModemStatus {
+            line_settings: watch::channel(settings(9600)).0,
+            modem_status: watch::channel(ModemStatus {
                 cts: false,
                 dsr: false,
                 dcd: false,
                 ri: false,
-            }),
+            })
+            .0,
             answers: Mutex::new(Answers {
                 change: pending.map(|(settings, answer)| Pending { settings, answer }),
                 owed,
@@ -435,7 +447,7 @@ mod tests {
         );
 
         assert!(matches!(rx.try_recv(), Ok(Answer::Applied(s)) if s.baud == 115_200));
-        assert_eq!(lock(&shared.line_settings).baud, 115_200);
+        assert_eq!(shared.line_settings.borrow().baud, 115_200);
     }
 
     #[test]
@@ -452,7 +464,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "still waiting");
         assert_eq!(lock(&shared.answers).owed, 0);
         assert_eq!(
-            lock(&shared.line_settings).baud,
+            shared.line_settings.borrow().baud,
             4800,
             "the settings still follow the server"
         );
@@ -531,7 +543,7 @@ mod tests {
             .encode(),
         );
 
-        assert!(lock(&shared.modem_status).cts);
+        assert!(shared.modem_status.borrow().cts);
         assert!(matches!(events.try_recv().unwrap(), SerialEvent::ModemStatus(s) if s.dsr));
         assert_eq!(
             events.try_recv().unwrap(),
@@ -549,7 +561,7 @@ mod tests {
         handle(&shared, &[0x2A, 0x00]);
         handle(&shared, b"not protobuf");
 
-        assert_eq!(lock(&shared.line_settings).baud, 9600);
+        assert_eq!(shared.line_settings.borrow().baud, 9600);
     }
 
     #[test]
@@ -576,7 +588,7 @@ mod tests {
             matches!(rx.try_recv(), Ok(Answer::Applied(s)) if s.parity == Parity::Unknown(42)),
             "the change is answered at once, not left to time out"
         );
-        assert_eq!(lock(&shared.line_settings).parity, Parity::Unknown(42));
+        assert_eq!(shared.line_settings.borrow().parity, Parity::Unknown(42));
     }
 
     #[test]

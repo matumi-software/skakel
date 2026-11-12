@@ -272,7 +272,7 @@ async fn streams_and_the_serial_stream_work() {
     port.send(b"AT".to_vec()).await.unwrap();
     assert_eq!(
         within(Duration::from_secs(20), port.recv()).await,
-        Some(b"AT".to_vec())
+        Some(Bytes::from_static(b"AT"))
     );
     port.close().await;
 }
