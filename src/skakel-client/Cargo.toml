@@ -43,6 +43,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 tokio-stream = { version = "0.1.19", default-features = false, features = ["sync"] }
 tower-service = "0.3.3"
 if-addrs.workspace = true
+socket2.workspace = true
 log.workspace = true
 url.workspace = true
 

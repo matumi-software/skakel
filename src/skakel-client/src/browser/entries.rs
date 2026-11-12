@@ -27,6 +27,19 @@ pub(super) struct Seen {
     last_probe: u64,
 }
 
+/// What counts as one address for the limits: an IPv4 address as it is, an IPv6 address as its
+/// `/64`, which a host on that network owns whole.
+pub(super) fn group_of(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(v6) => {
+            let mut octets = v6.octets();
+            octets[8..].fill(0);
+            IpAddr::V6(std::net::Ipv6Addr::from(octets))
+        }
+        v4 => v4,
+    }
+}
+
 impl Entries {
     /// A probe went out.
     pub fn probed(&mut self) {
@@ -103,17 +116,24 @@ impl Entries {
             .keys()
             .filter(|key| !is_protected(&key.fingerprint))
             .collect();
-        let from_address = self.seen.keys().filter(|k| k.address == address).count();
+        // An address is its IPv4 address or its IPv6 `/64`: a host owns the whole `/64` and can
+        // answer from any address in it.
+        let group = group_of(address);
+        let from_address = self
+            .seen
+            .keys()
+            .filter(|k| group_of(k.address) == group)
+            .count();
         let pool: Vec<&EntryKey> = if from_address >= MAX_ENTRIES_PER_ADDRESS {
             candidates
                 .into_iter()
-                .filter(|key| key.address == address)
+                .filter(|key| group_of(key.address) == group)
                 .collect()
         } else if self.seen.len() >= MAX_ENTRIES {
             // From the address that holds the most.
             let mut counts: HashMap<IpAddr, Vec<&EntryKey>> = HashMap::new();
             for key in candidates {
-                counts.entry(key.address).or_default().push(key);
+                counts.entry(group_of(key.address)).or_default().push(key);
             }
             counts
                 .into_values()

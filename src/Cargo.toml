@@ -46,8 +46,11 @@ tokio-util = "0.7"
 # Wipes a secret when it is dropped (RustCrypto; MIT or Apache-2.0, depends on nothing here).
 zeroize = "1.8"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-# Which IPv4 networks to broadcast a probe on.
+# Which networks to probe on, and with it the IPv6 ones.
 if-addrs = "0.15.0"
+# UDP sockets that are IPv6 only (so one can sit beside an IPv4 socket on the same port on every
+# system). MIT or Apache-2.0; tokio already builds it.
+socket2 = "0.6.5"
 log = "0.4"
 url = "2.5.8"
 

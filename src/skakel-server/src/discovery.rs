@@ -1,7 +1,7 @@
 //! Answers discovery probes on a UDP socket.
 
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -22,10 +22,16 @@ pub(crate) struct Announcement {
 }
 
 /// The discovery answerer of a server, which can be started and stopped while the server runs.
+///
+/// It answers on an IPv4 socket and, when the server's HTTPS also serves IPv6 (or the bind address
+/// is an IPv6 one), on an IPv6 socket of its own on the same port, so a client that probes over
+/// IPv6 is answered at an address it can use.
 pub(crate) struct Discovery {
     state: Arc<ServerState>,
     announcement: Announcement,
     bind: IpAddr,
+    /// Whether HTTPS is served over IPv6 too, so an IPv6 answer leads somewhere.
+    serves_ipv6: bool,
     port: u16,
     server_stopped: watch::Receiver<bool>,
     running: Mutex<Option<Running>>,
@@ -37,7 +43,7 @@ pub(crate) struct Discovery {
 
 struct Running {
     stop: watch::Sender<bool>,
-    task: JoinHandle<()>,
+    tasks: Vec<JoinHandle<()>>,
 }
 
 impl Discovery {
@@ -45,6 +51,7 @@ impl Discovery {
         state: Arc<ServerState>,
         announcement: Announcement,
         bind: IpAddr,
+        serves_ipv6: bool,
         port: u16,
         server_stopped: watch::Receiver<bool>,
     ) -> Self {
@@ -52,6 +59,7 @@ impl Discovery {
             state,
             announcement,
             bind,
+            serves_ipv6,
             port,
             server_stopped,
             running: Mutex::new(None),
@@ -78,21 +86,26 @@ impl Discovery {
             (0, Some(last)) => last,
             (port, _) => port,
         };
-        let socket = UdpSocket::bind(SocketAddr::new(self.bind, port)).await?;
-        let address = socket.local_addr()?;
+        let sockets = bind_sockets(self.bind, self.serves_ipv6, port).await?;
+        let address = sockets[0].local_addr()?;
         let (stop, stopped) = watch::channel(false);
-        let task = tokio::spawn(answer(
-            socket,
-            self.state.clone(),
-            Announcement {
-                name: self.announcement.name.clone(),
-                port: self.announcement.port,
-                app: self.announcement.app.clone(),
-            },
-            stopped,
-            self.server_stopped.clone(),
-        ));
-        *running = Some(Running { stop, task });
+        let tasks = sockets
+            .into_iter()
+            .map(|socket| {
+                tokio::spawn(answer(
+                    socket,
+                    self.state.clone(),
+                    Announcement {
+                        name: self.announcement.name.clone(),
+                        port: self.announcement.port,
+                        app: self.announcement.app.clone(),
+                    },
+                    stopped.clone(),
+                    self.server_stopped.clone(),
+                ))
+            })
+            .collect();
+        *running = Some(Running { stop, tasks });
         *self.address.lock().unwrap() = Some(address);
         *self.last_port.lock().unwrap() = Some(address.port());
         Ok(address)
@@ -102,9 +115,11 @@ impl Discovery {
     /// answering.
     pub(crate) async fn stop(&self) {
         let mut running = self.running.lock().await;
-        if let Some(Running { stop, task }) = running.take() {
+        if let Some(Running { stop, tasks }) = running.take() {
             stop.send_replace(true);
-            let _ = task.await;
+            for task in tasks {
+                let _ = task.await;
+            }
         }
         self.address.lock().unwrap().take();
     }
@@ -112,6 +127,59 @@ impl Discovery {
     /// The address answering, when it is.
     pub(crate) fn address(&self) -> Option<SocketAddr> {
         *self.address.lock().unwrap()
+    }
+}
+
+/// The sockets discovery answers on, the first one the one whose address is reported. An IPv4
+/// bind address gets an IPv4 socket, and the unspecified one (the default) also an IPv6 one when
+/// HTTPS is served over IPv6; an IPv6 bind address gets an IPv6 socket, and the unspecified one
+/// also an IPv4 socket. The second socket is best effort: a host without IPv6, or a port that is
+/// taken on the other family, costs that family only, and is logged.
+async fn bind_sockets(bind: IpAddr, serves_ipv6: bool, port: u16) -> io::Result<Vec<UdpSocket>> {
+    match bind {
+        IpAddr::V4(address) => {
+            let first = UdpSocket::bind(SocketAddr::new(IpAddr::V4(address), port)).await?;
+            let mut sockets = vec![first];
+            if address.is_unspecified() && serves_ipv6 {
+                let port = sockets[0].local_addr()?.port();
+                push_best_effort(&mut sockets, bind_ipv6(Ipv6Addr::UNSPECIFIED, port));
+            }
+            Ok(sockets)
+        }
+        IpAddr::V6(address) => {
+            let first = bind_ipv6(address, port)?;
+            let mut sockets = vec![first];
+            if address.is_unspecified() {
+                let port = sockets[0].local_addr()?.port();
+                push_best_effort(&mut sockets, bind_ipv4(Ipv4Addr::UNSPECIFIED, port).await);
+            }
+            Ok(sockets)
+        }
+    }
+}
+
+async fn bind_ipv4(address: Ipv4Addr, port: u16) -> io::Result<UdpSocket> {
+    UdpSocket::bind(SocketAddr::new(IpAddr::V4(address), port)).await
+}
+
+/// An IPv6-only UDP socket. IPv6 only, so it never takes the IPv4 packets of the same port on a
+/// system where a wildcard IPv6 socket would (Linux by default); the IPv4 socket answers those.
+fn bind_ipv6(address: Ipv6Addr, port: u16) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV6,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    socket.set_only_v6(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&SocketAddr::new(IpAddr::V6(address), port).into())?;
+    UdpSocket::from_std(socket.into())
+}
+
+fn push_best_effort(sockets: &mut Vec<UdpSocket>, bound: io::Result<UdpSocket>) {
+    match bound {
+        Ok(socket) => sockets.push(socket),
+        Err(error) => log::warn!("Discovery will not answer on the other address family: {error}"),
     }
 }
 

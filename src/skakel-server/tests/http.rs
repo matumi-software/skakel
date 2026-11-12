@@ -121,6 +121,92 @@ async fn probe_is_answered(address: std::net::SocketAddr) -> bool {
         .is_ok_and(|received| received.is_ok())
 }
 
+/// Sends a probe from `from` to `to` and whether an answer came back to the same socket.
+async fn probe_answered_over(from: &str, to: std::net::SocketAddr) -> bool {
+    let socket = UdpSocket::bind(from).await.unwrap();
+    socket
+        .send_to(&skakel_wire::discovery::create_probe(), to)
+        .await
+        .unwrap();
+    let mut buffer = [0u8; 2048];
+    match tokio::time::timeout(Duration::from_secs(2), socket.recv_from(&mut buffer)).await {
+        Ok(Ok((length, _))) => {
+            skakel_wire::discovery::try_parse_answer(&buffer[..length]).is_some()
+        }
+        _ => false,
+    }
+}
+
+/// True when this machine can use IPv6 on loopback; a test that needs it says so and passes
+/// without it (a container with IPv6 switched off).
+async fn has_ipv6_loopback() -> bool {
+    let usable = UdpSocket::bind("[::1]:0").await.is_ok();
+    if !usable {
+        eprintln!("no IPv6 loopback here, so the IPv6 discovery test is skipped");
+    }
+    usable
+}
+
+#[tokio::test]
+async fn discovery_answers_probes_over_ipv6_when_https_serves_ipv6() {
+    if !has_ipv6_loopback().await {
+        return;
+    }
+    // HTTPS on an IPv6 address and discovery on every IPv4 address: it also answers on an IPv6
+    // socket of its own, on the same port, so both families find the server.
+    let server = bench_builder()
+        .listen("[::1]:0".parse().unwrap())
+        .discovery_bind("0.0.0.0".parse().unwrap())
+        .start()
+        .await
+        .unwrap();
+    let port = server.discovery_addr().unwrap().port();
+
+    assert!(probe_answered_over("127.0.0.1:0", ([127, 0, 0, 1], port).into()).await);
+    assert!(probe_answered_over("[::1]:0", format!("[::1]:{port}").parse().unwrap()).await);
+    server.stop_discovery().await;
+    assert!(
+        !probe_answered_over("[::1]:0", format!("[::1]:{port}").parse().unwrap()).await,
+        "stopping releases the IPv6 socket too"
+    );
+}
+
+#[tokio::test]
+async fn discovery_stays_on_ipv4_when_https_is_ipv4_only() {
+    if !has_ipv6_loopback().await {
+        return;
+    }
+    let server = bench_builder()
+        .discovery_bind("0.0.0.0".parse().unwrap())
+        .start()
+        .await
+        .unwrap();
+    let port = server.discovery_addr().unwrap().port();
+
+    assert!(probe_answered_over("127.0.0.1:0", ([127, 0, 0, 1], port).into()).await);
+    assert!(
+        !probe_answered_over("[::1]:0", format!("[::1]:{port}").parse().unwrap()).await,
+        "an IPv6 answer would lead to an address HTTPS does not serve"
+    );
+}
+
+#[tokio::test]
+async fn discovery_binds_an_ipv6_address_when_asked_to() {
+    if !has_ipv6_loopback().await {
+        return;
+    }
+    let server = bench_builder()
+        .listen("[::1]:0".parse().unwrap())
+        .discovery_bind("::1".parse().unwrap())
+        .start()
+        .await
+        .unwrap();
+    let address = server.discovery_addr().unwrap();
+
+    assert!(address.is_ipv6());
+    assert!(probe_answered_over("[::1]:0", address).await);
+}
+
 #[tokio::test]
 async fn discovery_can_be_started_after_it_was_built_off() {
     let server = bench_builder().discovery(false).start().await.unwrap();

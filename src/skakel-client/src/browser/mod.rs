@@ -23,7 +23,7 @@ use self::networks::*;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -162,7 +162,23 @@ struct State {
 
 struct Running {
     stop: CancellationToken,
+    /// The IPv4 socket, which broadcasts probes and takes the answers.
     socket: Arc<UdpSocket>,
+    /// The IPv6 sockets (see [`V6Sockets`]), shared with the probe round that keeps them.
+    v6: Arc<Mutex<V6Sockets>>,
+}
+
+/// The IPv6 sockets a browser holds. A probe goes to the all-nodes group on each network from an
+/// address of that network that is not link-local, so a server answers (unicast, to that address)
+/// from an address that is not link-local either, which a client can connect to without a zone.
+#[derive(Default)]
+struct V6Sockets {
+    /// For probes sent to addresses the app named (see [`BrowserOptions::probe_targets`]). Not
+    /// tied to a network.
+    general: Option<Arc<UdpSocket>>,
+    /// One per local address a multicast probe goes out from, with the token that ends its
+    /// listener when the address goes away.
+    by_address: HashMap<Ipv6Addr, (Arc<UdpSocket>, CancellationToken)>,
 }
 
 struct Inner {
@@ -274,14 +290,30 @@ impl Browser {
         socket.set_broadcast(true)?;
         let socket = Arc::new(socket);
         let stop = CancellationToken::new();
+        let mut v6 = V6Sockets::default();
+        // IPv6 is best effort: a machine without it still finds servers over IPv4.
+        match bind_ipv6(Ipv6Addr::UNSPECIFIED) {
+            Ok(general) => {
+                let general = Arc::new(general);
+                tokio::spawn(listen(
+                    Arc::downgrade(&self.inner),
+                    general.clone(),
+                    stop.child_token(),
+                ));
+                v6.general = Some(general);
+            }
+            Err(error) => log::info!("Discovery over IPv6 is off: {error}"),
+        }
         {
             let mut running = self.inner.running();
             if running.is_some() {
+                stop.cancel();
                 return Ok(());
             }
             *running = Some(Running {
                 stop: stop.clone(),
                 socket: socket.clone(),
+                v6: Arc::new(Mutex::new(v6)),
             });
         }
         tokio::spawn(listen(Arc::downgrade(&self.inner), socket, stop.clone()));
@@ -412,26 +444,98 @@ impl Inner {
     }
 }
 
-async fn probe(inner: &Inner) {
-    let socket = {
-        let Some(running) = inner.running().as_ref().map(|r| r.socket.clone()) else {
+async fn probe(inner: &Arc<Inner>) {
+    let (socket, v6, stop) = {
+        let Some((socket, v6, stop)) = inner
+            .running()
+            .as_ref()
+            .map(|r| (r.socket.clone(), r.v6.clone(), r.stop.clone()))
+        else {
             return;
         };
         let mut state = inner.state();
         state.entries.probed();
         state.probed_at = Some(Instant::now());
-        running
+        (socket, v6, stop)
     };
     let probe = create_probe();
-    let targets = inner
-        .options
-        .probe_targets
-        .clone()
-        .unwrap_or_else(|| broadcast_targets(inner.options.port));
-    for target in targets {
-        // That network is down or refuses broadcasts; the others still get the probe.
+    // Each send is about one network or one address: one that is down or refuses the probe does
+    // not keep the others from getting it.
+    if let Some(targets) = inner.options.probe_targets.clone() {
+        let general = v6.lock().ok().and_then(|v6| v6.general.clone());
+        for target in targets {
+            match (target, &general) {
+                (SocketAddr::V4(_), _) => {
+                    let _ = socket.send_to(&probe, target).await;
+                }
+                (SocketAddr::V6(_), Some(general)) => {
+                    let _ = general.send_to(&probe, target).await;
+                }
+                (SocketAddr::V6(_), None) => {}
+            }
+        }
+        return;
+    }
+    for target in broadcast_targets(inner.options.port) {
         let _ = socket.send_to(&probe, target).await;
     }
+    for (socket, target) in multicast_sockets(inner, &v6, &stop) {
+        let _ = socket.send_to(&probe, target).await;
+    }
+}
+
+/// The socket and the place to send for each network an IPv6 probe goes out on, opening the sockets
+/// of networks that are new and closing those of networks that went away.
+fn multicast_sockets(
+    inner: &Arc<Inner>,
+    v6: &Mutex<V6Sockets>,
+    stop: &CancellationToken,
+) -> Vec<(Arc<UdpSocket>, SocketAddr)> {
+    let wanted = multicast_targets();
+    let Ok(mut held) = v6.lock() else {
+        return vec![];
+    };
+    held.by_address.retain(|address, (_, listener)| {
+        let keep = wanted.iter().any(|t| t.local == *address);
+        if !keep {
+            listener.cancel();
+        }
+        keep
+    });
+    let mut out = vec![];
+    for target in wanted {
+        let socket = match held.by_address.get(&target.local) {
+            Some((socket, _)) => socket.clone(),
+            None => match bind_ipv6(target.local) {
+                Ok(socket) => {
+                    let socket = Arc::new(socket);
+                    let listener = stop.child_token();
+                    tokio::spawn(listen(
+                        Arc::downgrade(inner),
+                        socket.clone(),
+                        listener.clone(),
+                    ));
+                    held.by_address
+                        .insert(target.local, (socket.clone(), listener));
+                    socket
+                }
+                Err(error) => {
+                    log::debug!("No IPv6 probes from {}: {error}", target.local);
+                    continue;
+                }
+            },
+        };
+        out.push((
+            socket,
+            SocketAddr::V6(SocketAddrV6::new(
+                ALL_NODES,
+                inner.options.port,
+                0,
+                target.scope_id,
+            )),
+        ));
+    }
+    out
 }
 
 async fn probe_every(inner: Weak<Inner>, stop: CancellationToken) {
@@ -485,6 +589,11 @@ async fn listen(inner: Weak<Inner>, socket: Arc<UdpSocket>, stop: CancellationTo
             IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
             v4 => v4,
         };
+        // A link-local address cannot be dialled without the interface, which a server's address
+        // does not carry (see `is_routable_v6`): the answer is not one the client can use.
+        if matches!(address, IpAddr::V6(v6) if is_link_local_v6(v6)) {
+            continue;
+        }
         let name = if answer.name.is_empty() {
             address.to_string()
         } else {
@@ -624,6 +733,109 @@ mod tests {
         let names: Vec<String> = entries.snapshot().into_iter().map(|s| s.name).collect();
 
         assert_eq!(names, ["Alpha", "beta", "gamma"]);
+    }
+
+    fn server_at(name: &str, address: &str, port: u16, fp: &str) -> DiscoveredServer {
+        DiscoveredServer {
+            address: address.parse().unwrap(),
+            ..server(name, [0, 0, 0, 0], port, fp)
+        }
+    }
+
+    #[test]
+    fn one_ipv6_64_keeps_at_most_eight_entries_however_many_addresses_it_answers_from() {
+        // A host owns its whole /64 and can answer from any address in it, so the limit per
+        // address counts the /64, not the single address.
+        let base = Instant::now();
+        let mut entries = Entries::default();
+        for i in 0..12u16 {
+            entries.probed();
+            entries.add(
+                server_at(
+                    "x",
+                    &format!("2001:db8:1:2::{:x}", i + 1),
+                    5240,
+                    &format!("{i:02X}"),
+                ),
+                0,
+                at(base, u64::from(i)),
+                &none_protected,
+            );
+        }
+        entries.add(
+            server_at("other", "2001:db8:1:3::1", 5240, "EE"),
+            0,
+            at(base, 20),
+            &none_protected,
+        );
+
+        let all = entries.all();
+
+        assert_eq!(
+            all.iter().filter(|s| s.name == "x").count(),
+            8,
+            "twelve answers from one /64 leave eight"
+        );
+        assert!(
+            all.iter().any(|s| s.name == "other"),
+            "another /64 is untouched"
+        );
+    }
+
+    #[test]
+    fn an_address_group_is_the_ipv4_address_or_the_ipv6_64() {
+        let group = |text: &str| entries::group_of(text.parse().unwrap());
+
+        assert_eq!(group("10.0.0.5"), "10.0.0.5".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            group("2001:db8:1:2:aaaa:bbbb:cccc:dddd"),
+            "2001:db8:1:2::".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(group("2001:db8:1:2::1"), group("2001:db8:1:2:ffff::9"));
+        assert_ne!(group("2001:db8:1:2::1"), group("2001:db8:1:3::1"));
+    }
+
+    #[test]
+    fn an_ipv6_probe_comes_from_and_an_answer_from_an_address_that_needs_no_zone() {
+        let routable = |text: &str| is_routable_v6(text.parse().unwrap());
+
+        assert!(routable("2001:db8::1"));
+        assert!(routable("fd00:1234::5"), "a unique local address is fine");
+        assert!(
+            !routable("fe80::1"),
+            "link-local needs the interface to be reached"
+        );
+        assert!(!routable("febf::1"), "the whole of fe80::/10 is link-local");
+        assert!(routable("fec0::1"), "fec0 is outside fe80::/10");
+        assert!(!routable("::1"));
+        assert!(!routable("::"));
+        assert!(!routable("ff02::1"));
+        assert!(is_link_local_v6("fe80::dead:beef".parse().unwrap()));
+        assert!(!is_link_local_v6("fd00::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn the_multicast_targets_are_one_routable_address_per_interface() {
+        let targets = multicast_targets();
+
+        assert!(
+            targets
+                .iter()
+                .all(|t| is_routable_v6(t.local) && t.scope_id != 0)
+        );
+        let mut scopes: Vec<u32> = targets.iter().map(|t| t.scope_id).collect();
+        scopes.sort_unstable();
+        scopes.dedup();
+        assert_eq!(
+            scopes.len(),
+            targets.len(),
+            "at most one address per interface"
+        );
+    }
+
+    #[test]
+    fn an_ipv6_probe_goes_to_the_all_nodes_group() {
+        assert_eq!(ALL_NODES, "ff02::1".parse::<Ipv6Addr>().unwrap());
     }
 
     #[test]

@@ -390,4 +390,19 @@ mod tests {
 
         assert!(moved.is_none());
     }
+
+    #[tokio::test]
+    async fn an_ipv6_saved_host_stands_for_itself_and_a_mapped_one_for_its_ipv4_address() {
+        let v6 = Url::parse("https://[2001:db8::1]:5240/").unwrap();
+        let mapped = Url::parse("https://[::ffff:10.0.0.5]:5240/").unwrap();
+
+        assert_eq!(
+            addresses_of(&v6).await,
+            ["2001:db8::1".parse::<IpAddr>().unwrap()]
+        );
+        assert_eq!(
+            addresses_of(&mapped).await,
+            [IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))]
+        );
+    }
 }

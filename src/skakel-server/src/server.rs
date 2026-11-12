@@ -155,7 +155,9 @@ impl SkakelServerBuilder {
     }
 
     /// The local address the discovery socket binds. Defaults to every IPv4 address, which is
-    /// what receiving broadcast probes takes.
+    /// what receiving broadcast probes takes; a server whose HTTPS listens on an IPv6 address
+    /// (such as `[::]`) also answers IPv6 probes, on an IPv6-only socket of its own on the same
+    /// port. An IPv6 address here binds IPv6 (and the unspecified `::` IPv4 too).
     pub fn discovery_bind(mut self, address: IpAddr) -> Self {
         self.discovery_bind = address;
         self
@@ -364,6 +366,7 @@ impl SkakelServerBuilder {
                 app,
             },
             self.discovery_bind,
+            local_addr.is_ipv6(),
             self.discovery_port.unwrap_or(local_addr.port()),
             stopped.clone(),
         );
