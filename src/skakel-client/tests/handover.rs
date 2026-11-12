@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use common::greeter::{self, GreetRequest};
 use common::{ManualClock, Recorder, within};
-use tonic::Request;
 use skakel_client::{ClientOptions, Credentials, FailureKind, Link, LinkState, LinkStatus, Pins};
+use tonic::Request;
 
 fn record_status(link: &Link) -> Recorder<LinkStatus> {
     common::record_status(link)

@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use common::{Recorder, free_tcp, free_udp};
 use skakel_client::{
-    Browser, BrowserOptions, ClientOptions, DiscoveredServer, FailureKind, Link, LinkEvent, LinkState,
-    LinkStatus, SkakelApp, Url,
+    Browser, BrowserOptions, ClientOptions, DiscoveredServer, FailureKind, Link, LinkEvent,
+    LinkState, LinkStatus, SkakelApp, Url,
 };
 
 fn record_status(link: &Link) -> Recorder<LinkStatus> {

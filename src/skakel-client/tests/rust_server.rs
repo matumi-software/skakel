@@ -11,15 +11,16 @@ use std::time::Duration;
 
 use common::greeter::{self, GreetRequest};
 use common::{Recorder, within};
-use tonic::Request;
 use skakel_client::{
-    Browser, BrowserOptions, Bytes, ClientOptions, FailureKind, Frame, GrpcCode, LineSettings, Link,
-    LinkState, LinkStatus, OpenResult, PairingClient, Pins, StreamCloseReason, Url, read_info,
+    Browser, BrowserOptions, Bytes, ClientOptions, FailureKind, Frame, GrpcCode, LineSettings,
+    Link, LinkState, LinkStatus, OpenResult, PairingClient, Pins, StreamCloseReason, Url,
+    read_info,
 };
 use skakel_server::{
     BoxFuture, InMemoryStore, SkakelServer, SkakelServerBuilder, StreamHandler, StreamMessage,
     StreamOpen, StreamRequest, StreamSession,
 };
+use tonic::Request;
 
 fn echo() -> StreamHandler {
     Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {

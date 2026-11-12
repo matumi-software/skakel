@@ -45,17 +45,17 @@ mod pairing;
 mod pins;
 mod request;
 mod serial;
-mod stream_io;
 mod status;
+mod stream_io;
 mod streams;
 mod tokens;
 
 pub use ::http::{Method, StatusCode};
 pub use browser::{Browser, BrowserOptions, DiscoveredServer};
 pub use clock::{Clock, Sleep, SystemClock};
+pub use events::{Events, EventsError, StateWatch};
 pub use failure::{Error, Failure, FailureKind, Result};
 pub use info::{pick_version, read_info, require_version};
-pub use events::{Events, EventsError, StateWatch};
 pub use link::{
     Link, LinkChannel, LinkEvent, LinkState, LinkStatus, PinStore, SaveFuture, StoreError,
 };
@@ -63,9 +63,9 @@ pub use options::ClientOptions;
 pub use pairing::{MAX_WAIT, PairingClient, PairingError};
 pub use pins::{Credentials, InvalidFingerprint, Pins};
 pub use request::{RequestBuilder, Response};
-pub use stream_io::StreamIo;
-pub use status::GrpcCode;
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
+pub use status::GrpcCode;
+pub use stream_io::StreamIo;
 pub use streams::{
     Frame, OpenResult, StreamClose, StreamCloseReason, StreamConnection, StreamRefusal,
     StreamRefusalReason,
