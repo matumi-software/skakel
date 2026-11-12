@@ -122,7 +122,7 @@ impl SerialConnection {
                 }
                 Some(Frame::Control(bytes)) if bytes.len() <= MAX_CONTROL_BYTES => {
                     match ServerMessage::decode(&bytes) {
-                        Some(ServerMessage::Opened {
+                        Ok(ServerMessage::Opened {
                             line_settings,
                             modem_status,
                         }) => Ok((line_settings, modem_status)),
@@ -324,9 +324,12 @@ async fn receive(stream: Arc<StreamConnection>, shared: Arc<Shared>, data: mpsc:
 }
 
 fn handle(shared: &Shared, bytes: &[u8]) {
-    let Some(message) = ServerMessage::decode(bytes) else {
-        log::warn!("Dropped a control message on a serial stream: not a serial message");
-        return;
+    let message = match ServerMessage::decode(bytes) {
+        Ok(message) => message,
+        Err(why) => {
+            log::warn!("Dropped a control message on a serial stream: {why}");
+            return;
+        }
     };
     match message {
         ServerMessage::Opened {
@@ -363,6 +366,9 @@ fn handle(shared: &Shared, bytes: &[u8]) {
         ServerMessage::Error { code, detail } => {
             let _ = shared.events.send(SerialEvent::Error { code, detail });
         }
+        other => {
+            log::warn!("Ignored a serial control message this end does not use: {other:?}");
+        }
     }
 }
 
@@ -388,12 +394,12 @@ fn answer_for(shared: &Shared, applied: Option<&LineSettings>) -> Option<oneshot
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skakel_serial::{FlowControl, Parity, StopBits};
+    use skakel_serial::{DataBits, FlowControl, Parity, StopBits};
 
     fn settings(baud: u32) -> LineSettings {
         LineSettings {
             baud,
-            data_bits: 8,
+            data_bits: DataBits::Eight,
             parity: Parity::None,
             stop_bits: StopBits::One,
             flow_control: FlowControl::None,
@@ -544,5 +550,57 @@ mod tests {
         handle(&shared, b"not protobuf");
 
         assert_eq!(lock(&shared.line_settings).baud, 9600);
+    }
+
+    #[test]
+    fn an_echo_with_a_value_this_end_does_not_know_still_answers_the_pending_change() {
+        let (tx, mut rx) = oneshot::channel();
+        let shared = shared(Some((settings(115_200), tx)), 0);
+        let echo = skakel_proto::v2::SerialServerMessage {
+            message: Some(
+                skakel_proto::v2::serial_server_message::Message::LineSettings(
+                    skakel_proto::v2::LineSettings {
+                        baud: 115_200,
+                        data_bits: 8,
+                        parity: 42,
+                        stop_bits: 1,
+                        flow_control: 1,
+                    },
+                ),
+            ),
+        };
+
+        handle(&shared, &prost::Message::encode_to_vec(&echo));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(Answer::Applied(s)) if s.parity == Parity::Unknown(42)),
+            "the change is answered at once, not left to time out"
+        );
+        assert_eq!(lock(&shared.line_settings).parity, Parity::Unknown(42));
+    }
+
+    #[test]
+    fn an_error_code_this_end_does_not_know_is_an_event_and_does_not_refuse_the_change() {
+        let (tx, mut rx) = oneshot::channel();
+        let shared = shared(Some((settings(1200), tx)), 0);
+        let mut events = shared.events.subscribe();
+
+        handle(
+            &shared,
+            &ServerMessage::Error {
+                code: ErrorCode::Unknown(77),
+                detail: None,
+            }
+            .encode(),
+        );
+
+        assert!(rx.try_recv().is_err(), "the change is still waiting");
+        assert_eq!(
+            events.try_recv().unwrap(),
+            SerialEvent::Error {
+                code: ErrorCode::Unknown(77),
+                detail: None
+            }
+        );
     }
 }

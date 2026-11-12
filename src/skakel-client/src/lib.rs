@@ -64,7 +64,9 @@ pub use streams::{
 /// Skakel's own types the client's API is made of, so an app needs only this crate.
 pub use prost::bytes::Bytes;
 pub use skakel_protocol::{SkakelApp, SkakelHello, SkakelInfo};
-pub use skakel_serial::{ErrorCode, FlowControl, LineSettings, ModemStatus, Parity, StopBits};
+pub use skakel_serial::{
+    DataBits, ErrorCode, FlowControl, LineSettings, ModemStatus, Parity, StopBits,
+};
 /// The gRPC library [`LinkChannel`] and the stream statuses come from, so an app builds its
 /// generated clients on the same version.
 pub use tonic;

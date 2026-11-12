@@ -20,6 +20,14 @@
 - Virtual camera layout contract: a producer that attaches after one died mid-write of the idle frame
   starts the idle version from the time, so readers no longer skip its first idle frame
   (`docs/virtual-camera.md`). Layout version 1 is unchanged.
+- `skakel-serial`: a value this end does not know (a new parity, stop bits, flow control or error
+  code) is kept as `Unknown(value)` instead of dropping the message, so a newer server's message
+  still arrives and a pending change is answered at once instead of timing out after 10 seconds.
+  `ServerMessage::decode` returns a `Result` with the new `ServerMessageError`, as
+  `ClientMessage::decode` does. `LineSettings::data_bits` is the new `DataBits` enum and
+  `LineSettings::is_valid` says whether a port can be asked for the settings. The enums and both
+  message enums are `#[non_exhaustive]`, so an app matching on them needs a wildcard arm.
+  `skakel-client` re-exports `DataBits`. The wire is unchanged.
 
 ## 0.2.1 (2026-11-12)
 
