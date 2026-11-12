@@ -22,7 +22,7 @@ use skakel_protocol::{
     is_stream_type,
 };
 use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
@@ -32,7 +32,7 @@ use tonic::service::RoutesBuilder;
 use tower_service::Service;
 
 use crate::control::Control;
-use crate::discovery::{self, Announcement};
+use crate::discovery::{Announcement, Discovery};
 use crate::error::ServerError;
 use crate::events::{Events, ServerEvent};
 use crate::grpc::Guarded;
@@ -395,24 +395,21 @@ impl SkakelServerBuilder {
         let service = SkakelService::new(Routers { https, grpc }, stopped.clone());
         let mut tasks = vec![];
 
-        let mut discovery_addr = None;
+        let discovery = Discovery::new(
+            state.clone(),
+            Announcement {
+                name,
+                port: local_addr.port(),
+                app,
+            },
+            self.discovery_bind,
+            self.discovery_port.unwrap_or(local_addr.port()),
+            stopped.clone(),
+        );
         if self.discovery {
-            let port = self.discovery_port.unwrap_or(local_addr.port());
-            // A port that is not free costs only discovery; clients can still enter the address.
-            if let Ok(socket) = UdpSocket::bind(SocketAddr::new(self.discovery_bind, port)).await {
-                discovery_addr = socket.local_addr().ok();
-                let announcement = Announcement {
-                    name,
-                    port: local_addr.port(),
-                    app,
-                };
-                tasks.push(tokio::spawn(discovery::answer(
-                    socket,
-                    state.clone(),
-                    announcement,
-                    stopped.clone(),
-                )));
-            }
+            // A port that is not free costs only discovery; clients can still enter the address,
+            // and `start_discovery` can try again.
+            let _ = discovery.start().await;
         }
 
         if let Some(listener) = listener {
@@ -429,7 +426,7 @@ impl SkakelServerBuilder {
             service,
             tls_config,
             local_addr,
-            discovery_addr,
+            discovery,
             stop,
             tasks,
         })
@@ -475,7 +472,7 @@ pub struct SkakelServer {
     service: SkakelService,
     tls_config: Arc<ServerConfig>,
     local_addr: SocketAddr,
-    discovery_addr: Option<SocketAddr>,
+    discovery: Discovery,
     stop: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -513,7 +510,27 @@ impl SkakelServer {
 
     /// The UDP address discovery answers on, when it is running.
     pub fn discovery_addr(&self) -> Option<SocketAddr> {
-        self.discovery_addr
+        self.discovery.address()
+    }
+
+    /// Binds the discovery port and starts answering probes, for a server that was built with
+    /// [`discovery(false)`](SkakelServerBuilder::discovery) or whose discovery was stopped, and
+    /// gives the address it answers on. Does nothing but give the address when it is already
+    /// answering, so it is safe to call again and from any task.
+    ///
+    /// A port that is not free is an error, and discovery stays off. After
+    /// [`stop_discovery`](Self::stop_discovery), a configured port of 0 takes the port it had
+    /// before. An error after [`shutdown`](Self::shutdown) has begun.
+    pub async fn start_discovery(&self) -> std::io::Result<SocketAddr> {
+        self.discovery.start().await
+    }
+
+    /// Stops answering probes and releases the UDP port before it returns. Does nothing when
+    /// discovery is not running, so it is safe to call again and from any task. Pairing, tokens
+    /// and every call already running are not affected, and clients that know the address can
+    /// still reach the server.
+    pub async fn stop_discovery(&self) {
+        self.discovery.stop().await;
     }
 
     /// The fingerprint of the certificate the server presents.
@@ -559,6 +576,7 @@ impl SkakelServer {
         // Time for the closing messages to leave before connections are asked to wind down.
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.stop.send_replace(true);
+        self.discovery.stop().await;
         for task in self.tasks.drain(..) {
             let _ = tokio::time::timeout(STOP_GRACE + Duration::from_secs(1), task).await;
         }
