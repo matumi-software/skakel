@@ -161,6 +161,13 @@ impl SkakelStore for InMemoryStore {
     }
 }
 
+/// Whether a saved state still has the signing keys an earlier build kept.
+fn held_signing_keys(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes).is_ok_and(|value| {
+        value.get("signingKey").is_some() || value.get("retiredSigningKeys").is_some()
+    })
+}
+
 /// Keeps the state in one JSON file, written to a temporary file and renamed over the old one so
 /// a crash never leaves half a state.
 #[derive(Debug, Clone)]
@@ -178,13 +185,26 @@ impl FileStore {
 impl SkakelStore for FileStore {
     fn load(&self) -> StoreFuture<'_, Option<SkakelState>> {
         Box::pin(async move {
-            match tokio::fs::read(&self.path).await {
-                Ok(bytes) => serde_json::from_slice(&bytes)
-                    .map(Some)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(error),
+            let bytes = match tokio::fs::read(&self.path).await {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let state: SkakelState = serde_json::from_slice(&bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            if held_signing_keys(&bytes) {
+                // Access tokens are no longer signed, so the keys a server of an earlier build left
+                // in the file are dead weight and a private key at rest: write the file again
+                // without them. When that fails the next save drops them, so it is no reason to
+                // stop.
+                if let Err(error) = self.save(&state).await {
+                    log::warn!(
+                        "The state file {} still holds old signing keys and could not be rewritten: {error}",
+                        self.path.display()
+                    );
+                }
             }
+            Ok(Some(state))
         })
     }
 
@@ -353,5 +373,38 @@ mod tests {
 
         assert!(state.clients.is_empty());
         assert!(!written.contains("SECRETKEY") && !written.contains("OLDKEY"));
+    }
+
+    #[tokio::test]
+    async fn the_file_store_drops_signing_keys_from_the_file_it_loads() {
+        let folder = std::env::temp_dir().join(format!(
+            "skakel-store-legacy-{}",
+            crate::util::hex_lower(&crate::util::random::<6>())
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("state.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "clients": [],
+                "signingKey": {"keyId": "skakel-1", "privateKey": "SECRETKEY", "createdAt": "2026-11-01T00:00:00Z"},
+                "retiredSigningKeys": [{"keyId": "skakel-0", "privateKey": "OLDKEY", "createdAt": "2026-10-01T00:00:00Z"}],
+                "certificate": {"certificate": "AA==", "privateKey": "AA=="}
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = FileStore::new(&path).load().await.unwrap().unwrap();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !on_disk.contains("SECRETKEY") && !on_disk.contains("OLDKEY"),
+            "{on_disk}"
+        );
+        assert_eq!(
+            serde_json::from_str::<SkakelState>(&on_disk).unwrap(),
+            loaded
+        );
+        let _ = std::fs::remove_dir_all(folder);
     }
 }

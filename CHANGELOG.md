@@ -66,6 +66,26 @@ unchanged: protocol version 2 as 0.2.0 speaks it.
     `DiscoveredServer::for_test`, behind the `test-util` feature.
   - `SerialConnection::into_io` gives a `SerialIo`, the port's data as tokio's `AsyncRead` and
     `AsyncWrite`; the line settings, modem lines and events stay on `SerialIo::connection`.
+- `skakel-server`: more API clean-up, breaking for apps, in the same release as the rest.
+  - Stream types: `StreamHandler` is now a trait with `async fn open(&self, StreamRequest) ->
+    StreamOpen`, and every async function or closure of that shape implements it, so
+    `.stream("echo", |request: StreamRequest| async move { ... })` works as it is. It was an
+    `Arc<dyn Fn(..) -> BoxFuture<..>>` alias; `SkakelServerBuilder::stream` takes the handler itself
+    and `BoxFuture` is no longer exported (return `impl StreamHandler` from a function, or write
+    `async` blocks).
+  - Events: one channel, `SkakelServer::subscribe`. `SkakelServerBuilder::on_event` and `on_pairing`
+    are gone, and `subscribe` returns the server's own `ServerEvents` (`recv` and `try_recv`, an
+    event missed by a slow reader is skipped), not tokio's receiver. To move over, call `subscribe`
+    right after `start` and match `ServerEvent::Pairing` on a task of the app's own; the server no
+    longer runs app code on its tasks.
+  - `ServerError::State(String)`, `Invalid(String)` and `Options(Vec<String>)` are typed:
+    `State(StateError)`, `Tls(source)`, `InvalidName`, `InvalidReason(String)` and
+    `Options(Vec<OptionProblem>)`, each with its cause on `source()` and the same words in `Display`.
+  - `Keys`, `KeysView` and `SkakelServer::keys` are `Certificates`, `CertificatesView` and
+    `SkakelServer::certificates`, and `ServerEvent::Keys` is `ServerEvent::Certificates`, because
+    they only cover the certificates now.
+  - `FileStore` rewrites a state file that still holds the signing keys of an earlier build when it
+    loads it, so the old private key does not stay on disk until the next change.
 - `skakel-server`: access tokens are random strings the server remembers, not signed JWTs. Clients
   never read a token, so nothing changes for them, but a server that restarts forgets its tokens
   and clients ask for new ones (they already do on `TOKEN_REFUSED`). Breaking for apps: the signing

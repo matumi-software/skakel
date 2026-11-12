@@ -184,9 +184,13 @@ async fn discovery_announces_the_new_fingerprint_after_a_certificate_switch() {
     let server = start().await;
     let address = server.discovery_addr().unwrap();
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    server.keys().prepare_next_certificate().await.unwrap();
-    let next = server.keys().next_fingerprint().unwrap();
-    server.keys().switch_certificate().await.unwrap();
+    server
+        .certificates()
+        .prepare_next_certificate()
+        .await
+        .unwrap();
+    let next = server.certificates().next_fingerprint().unwrap();
+    server.certificates().switch_certificate().await.unwrap();
 
     socket
         .send_to(&skakel_discovery::create_probe(), address)
@@ -291,30 +295,28 @@ async fn pairing_runs_open_reveal_approve_poll_and_the_credentials_sign_in() {
 }
 
 #[tokio::test]
-async fn the_apps_callback_hears_of_a_revealed_request_and_how_it_ended() {
-    let (sender, mut heard) = tokio::sync::mpsc::unbounded_channel();
-    let server = bench_builder()
-        .on_pairing(move |overview| {
-            let _ = sender.send(overview.clone());
-        })
-        .start()
-        .await
-        .unwrap();
+async fn the_apps_event_stream_hears_of_a_revealed_request_and_how_it_ended() {
+    let server = bench_builder().start().await.unwrap();
     let mut events = server.subscribe();
     let (opened, nonce) = open_pairing(&server, "lab pc").await;
     assert_eq!(reveal(&server, &opened, &nonce).await.status, 204);
 
-    let overview = tokio::time::timeout(Duration::from_secs(5), heard.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let overview = loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if let ServerEvent::Pairing(overview) = event {
+            break overview;
+        }
+    };
     assert_eq!(overview.requests.len(), 1);
     assert_eq!(overview.requests[0].state, "waiting");
 
     assert!(server.pairing().deny(&overview.requests[0].id).await);
     assert_eq!(poll(&server, &opened).await.json()["state"], "denied");
     let mut decided = None;
-    while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(5), events.recv()).await {
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(5), events.recv()).await {
         if let ServerEvent::Decided(decision) = event {
             decided = Some(decision);
             break;
@@ -751,7 +753,7 @@ async fn the_server_presents_its_certificate_and_a_handover_changes_it_only_at_t
     ));
 
     let next = server
-        .keys()
+        .certificates()
         .prepare_next_certificate()
         .await
         .unwrap()
@@ -762,7 +764,12 @@ async fn the_server_presents_its_certificate_and_a_handover_changes_it_only_at_t
         "still the current one"
     );
     assert_ne!(next, current);
-    let switched = server.keys().switch_certificate().await.unwrap().unwrap();
+    let switched = server
+        .certificates()
+        .switch_certificate()
+        .await
+        .unwrap()
+        .unwrap();
     assert!(fingerprints::are_equal(
         &presented_fingerprint(server.local_addr()).await,
         &next

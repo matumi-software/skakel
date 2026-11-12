@@ -1,6 +1,5 @@
 //! The server: its builder, its listener and what the app holds on to.
 
-use crate::events::Callback;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -24,7 +23,7 @@ use skakel_protocol::{
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tonic::body::Body;
@@ -34,17 +33,17 @@ use tower_service::Service;
 
 use crate::control::Control;
 use crate::discovery::{Announcement, Discovery};
-use crate::error::ServerError;
-use crate::events::{Events, ServerEvent};
+use crate::error::{OptionProblem, ServerError};
+use crate::events::{Events, ServerEvents};
 use crate::grpc::Guarded;
 use crate::http::{self, looks_like_tls, plain_http_answer};
 use crate::limits::Limits;
-use crate::pairing::{Pairing, PairingOverview};
+use crate::pairing::Pairing;
 use crate::service::{Routers, SkakelService, connection_builder};
 use crate::sessions::Sessions;
-use crate::state::{CertificateSwitch, ClientView, KeysView, NewClient, ServerState};
+use crate::state::{CertificateSwitch, CertificatesView, ClientView, NewClient, ServerState};
 use crate::store::SkakelStore;
-use crate::streams::{StreamHandler, Streams};
+use crate::streams::{Handler, StreamHandler, Streams, erase};
 
 /// How long a client has to start a TLS handshake, and to finish one.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -58,7 +57,7 @@ pub(crate) struct Shared {
     pub limits: Limits,
     pub pairing: Pairing,
     pub sessions: Arc<Sessions>,
-    pub streams: HashMap<String, StreamHandler>,
+    pub streams: HashMap<String, Handler>,
     pub token_lifetime: Duration,
 }
 
@@ -88,9 +87,8 @@ pub struct SkakelServerBuilder {
     certificate_host_name: String,
     token_lifetime: Duration,
     services: Vec<AppService>,
-    streams: HashMap<String, StreamHandler>,
+    streams: HashMap<String, Handler>,
     routes: Option<Router>,
-    callbacks: Vec<Callback>,
 }
 
 fn machine_name() -> String {
@@ -127,7 +125,6 @@ impl SkakelServerBuilder {
             services: vec![],
             streams: HashMap::new(),
             routes: None,
-            callbacks: vec![],
         }
     }
 
@@ -227,8 +224,8 @@ impl SkakelServerBuilder {
     }
 
     /// Adds a stream type, opened with `StreamService.Open` and this type in its `open` frame.
-    pub fn stream(mut self, stream_type: impl Into<String>, handler: StreamHandler) -> Self {
-        self.streams.insert(stream_type.into(), handler);
+    pub fn stream(mut self, stream_type: impl Into<String>, handler: impl StreamHandler) -> Self {
+        self.streams.insert(stream_type.into(), erase(handler));
         self
     }
 
@@ -240,63 +237,35 @@ impl SkakelServerBuilder {
         self
     }
 
-    /// Calls `callback` for everything that happens on the server, such as a pairing request
-    /// waiting for a person. It runs on the server's own tasks, so it must not block; send what
-    /// it gets to the app's UI thread.
-    pub fn on_event(mut self, callback: impl Fn(&ServerEvent) + Send + Sync + 'static) -> Self {
-        self.callbacks.push(Box::new(callback));
-        self
-    }
-
-    /// Calls `callback` with the pairing requests waiting for a person, whenever they change.
-    /// The app shows them and calls [`Pairing::approve`] or [`Pairing::deny`].
-    pub fn on_pairing(self, callback: impl Fn(&PairingOverview) + Send + Sync + 'static) -> Self {
-        self.on_event(move |event| {
-            if let ServerEvent::Pairing(overview) = event {
-                callback(overview);
-            }
-        })
-    }
-
-    fn problems(&self) -> Vec<String> {
+    fn problems(&self) -> Vec<OptionProblem> {
         let mut problems = vec![];
         if !is_app_id(&self.app_id) {
-            problems.push("The app id must be 1 to 32 of a-z, 0-9 and -.".to_owned());
+            problems.push(OptionProblem::AppId);
         }
         if self.app_version.trim().is_empty()
             || self.app_version.encode_utf16().count() > MAX_APP_VERSION_LENGTH
         {
-            problems.push(format!(
-                "The app version must be 1 to {MAX_APP_VERSION_LENGTH} characters."
-            ));
+            problems.push(OptionProblem::AppVersion);
         }
         if self.name.trim().is_empty() {
-            problems.push("The name must not be empty.".to_owned());
+            problems.push(OptionProblem::Name);
         }
         if self.token_requests_per_minute < 1 || self.pair_requests_per_minute < 1 {
-            problems.push("The rate limits must allow at least one request a minute.".to_owned());
+            problems.push(OptionProblem::RateLimits);
         }
         if self.certificate_host_name.trim().is_empty() {
-            problems.push("The certificate host name must not be empty.".to_owned());
+            problems.push(OptionProblem::CertificateHostName);
         }
         for (i, service) in self.services.iter().enumerate() {
             if !is_app_service_name(service.name) {
-                problems.push(format!(
-                    "The gRPC service '{}' must be in a package of the app's own, not skakel or one under it.",
-                    service.name
-                ));
+                problems.push(OptionProblem::ServiceName(service.name.to_owned()));
             } else if self.services[..i].iter().any(|s| s.name == service.name) {
-                problems.push(format!(
-                    "The gRPC service '{}' was added twice.",
-                    service.name
-                ));
+                problems.push(OptionProblem::ServiceAddedTwice(service.name.to_owned()));
             }
         }
         for stream_type in self.streams.keys() {
             if !is_stream_type(stream_type) {
-                problems.push(format!(
-                    "The stream type '{stream_type}' must be from a-z, 0-9 and -."
-                ));
+                problems.push(OptionProblem::StreamType(stream_type.clone()));
             }
         }
         problems
@@ -328,10 +297,7 @@ impl SkakelServerBuilder {
     pub async fn start_mounted(self, app_addr: SocketAddr) -> Result<SkakelServer, ServerError> {
         let mut problems = self.problems();
         if self.discovery && self.discovery_port.is_none() && app_addr.port() == 0 {
-            problems.push(
-                "Give the address the app's listener is bound to, with the port it bound, for discovery to announce."
-                    .to_owned(),
-            );
+            problems.push(OptionProblem::DiscoveryPort);
         }
         if !problems.is_empty() {
             return Err(ServerError::Options(problems));
@@ -345,7 +311,7 @@ impl SkakelServerBuilder {
         listener: Option<TcpListener>,
         local_addr: SocketAddr,
     ) -> Result<SkakelServer, ServerError> {
-        let events = Events::new(self.callbacks);
+        let events = Events::new();
         let state = ServerState::start(
             self.store,
             self.keep_client_secrets,
@@ -529,8 +495,8 @@ impl SkakelServer {
     }
 
     /// The certificates.
-    pub fn keys(&self) -> Keys {
-        Keys {
+    pub fn certificates(&self) -> Certificates {
+        Certificates {
             state: self.shared.state.clone(),
         }
     }
@@ -542,7 +508,7 @@ impl SkakelServer {
 
     /// What happens on the server, as a stream the app can read. A slow reader misses events
     /// rather than slowing the server.
-    pub fn subscribe(&self) -> broadcast::Receiver<ServerEvent> {
+    pub fn subscribe(&self) -> ServerEvents {
         self.shared.state.events.subscribe()
     }
 
@@ -618,11 +584,11 @@ impl Clients {
 
 /// The server's certificates.
 #[derive(Clone)]
-pub struct Keys {
+pub struct Certificates {
     state: Arc<ServerState>,
 }
 
-impl Keys {
+impl Certificates {
     /// The certificate the server presents, DER.
     pub fn certificate_der(&self) -> Vec<u8> {
         self.state.loaded().certified.cert[0].as_ref().to_vec()
@@ -639,8 +605,8 @@ impl Keys {
     }
 
     /// Both fingerprints and when the next certificate was prepared.
-    pub fn view(&self) -> KeysView {
-        self.state.keys()
+    pub fn view(&self) -> CertificatesView {
+        self.state.certificates()
     }
 
     /// Prepares the next certificate. Clients are told on the control channel; the server goes on
@@ -680,7 +646,7 @@ fn tls_config(state: &Arc<ServerState>) -> Result<Arc<ServerConfig>, ServerError
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
-        .map_err(|e| ServerError::State(format!("TLS could not be set up: {e}")))?
+        .map_err(|e| ServerError::Tls(Box::new(e)))?
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(Resolver(state.clone())));
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];

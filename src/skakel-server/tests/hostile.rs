@@ -228,26 +228,22 @@ async fn many_64s_cannot_fill_the_servers_unrevealed_requests_past_its_cap() {
 }
 
 /// A stream type whose handler panics once it is opened.
-fn panicking() -> skakel_server::StreamHandler {
-    std::sync::Arc::new(|_| {
-        Box::pin(async {
-            Opening::accept(|_session| async move {
-                panic!("the handler is broken");
-            })
+fn panicking() -> impl skakel_server::StreamHandler {
+    |_| async {
+        Opening::accept(|_session| async move {
+            panic!("the handler is broken");
         })
-    })
+    }
 }
 
 /// A stream type whose handler never reads and never ends.
-fn hanging() -> skakel_server::StreamHandler {
-    std::sync::Arc::new(|_| {
-        Box::pin(async {
-            Opening::accept(|session| async move {
-                let _keep = &session;
-                std::future::pending::<()>().await;
-            })
+fn hanging() -> impl skakel_server::StreamHandler {
+    |_| async {
+        Opening::accept(|session| async move {
+            let _keep = &session;
+            std::future::pending::<()>().await;
         })
-    })
+    }
 }
 
 #[tokio::test]

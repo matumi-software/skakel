@@ -40,8 +40,8 @@ const RETURN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Frames waiting between the call and the handler, either way.
 const QUEUE: usize = 16;
 
-/// A boxed future, the way a handler returns an async result.
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+/// A boxed future, for the server's own type-erased calls.
+pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A frame on a stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,8 +106,66 @@ impl StreamOpen {
     }
 }
 
-/// Opens the streams of one type.
-pub type StreamHandler = Arc<dyn Fn(StreamRequest) -> BoxFuture<'static, StreamOpen> + Send + Sync>;
+/// Opens the streams of one type. It looks at the request and either refuses it or accepts it
+/// with [`StreamOpen::accept`], which runs the stream.
+///
+/// Any async function or closure from a [`StreamRequest`] to a [`StreamOpen`] is a handler, so an
+/// app seldom implements this itself:
+///
+/// ```
+/// use skakel_server::{InMemoryStore, SkakelServerBuilder, StreamOpen, StreamRequest};
+///
+/// let builder = SkakelServerBuilder::new("my-app", "1.0.0", InMemoryStore::new()).stream(
+///     "echo",
+///     |request: StreamRequest| async move {
+///         if request.target.is_empty() {
+///             StreamOpen::accept(|mut session| async move {
+///                 while let Some(message) = session.recv().await {
+///                     let _ = session.send(message).await;
+///                 }
+///             })
+///         } else {
+///             StreamOpen::BadTarget("the echo stream takes no target".into())
+///         }
+///     },
+/// );
+/// # let _ = builder;
+/// ```
+pub trait StreamHandler: Send + Sync + 'static {
+    /// Decides whether to open the stream `request` asks for.
+    fn open(&self, request: StreamRequest) -> impl Future<Output = StreamOpen> + Send;
+}
+
+impl<F, Fut> StreamHandler for F
+where
+    F: Fn(StreamRequest) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = StreamOpen> + Send,
+{
+    fn open(&self, request: StreamRequest) -> impl Future<Output = StreamOpen> + Send {
+        self(request)
+    }
+}
+
+/// A handler with its future boxed, so the server can keep handlers of every type in one map.
+pub(crate) trait ErasedHandler: Send + Sync {
+    fn open(&self, request: StreamRequest) -> BoxFuture<'static, StreamOpen>;
+}
+
+struct Erased<H>(Arc<H>);
+
+impl<H: StreamHandler> ErasedHandler for Erased<H> {
+    fn open(&self, request: StreamRequest) -> BoxFuture<'static, StreamOpen> {
+        let handler = self.0.clone();
+        Box::pin(async move { handler.open(request).await })
+    }
+}
+
+/// A handler as the server keeps it.
+pub(crate) type Handler = Arc<dyn ErasedHandler>;
+
+pub(crate) fn erase(handler: impl StreamHandler) -> Handler {
+    Arc::new(Erased(Arc::new(handler)))
+}
 
 /// The stream is over; nothing more can be sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,9 +211,7 @@ impl StreamEnd {
     ) -> Result<Self, ServerError> {
         let reason = reason.into();
         if !is_reason(&reason) {
-            return Err(ServerError::Invalid(format!(
-                "The reason '{reason}' must be upper case letters, digits and _, start with a letter and be at most 63 characters."
-            )));
+            return Err(ServerError::InvalidReason(reason));
         }
         Ok(Self(End::Aborted {
             reason,
@@ -375,7 +431,7 @@ impl StreamService for Streams {
         };
 
         // The client sends nothing more until the server answers; anything it does is a bug.
-        let deciding = handler(request.clone());
+        let deciding = handler.open(request.clone());
         tokio::pin!(deciding);
         let mut half_closed = false;
         let decision = loop {

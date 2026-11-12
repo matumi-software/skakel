@@ -22,9 +22,8 @@ use serde_json::json;
 use skakel_client::{Clock, Credentials, Pins, Sleep, Url};
 use skakel_serial::{ClientMessage, ErrorCode, LineSettings, ModemStatus, ServerMessage};
 use skakel_server::{
-    Approval, BoxFuture, CertificateSwitch, ClientPrincipal, InMemoryStore, SkakelServer,
-    SkakelServerBuilder, StreamEnd, StreamHandler, StreamMessage, StreamOpen, StreamRequest,
-    StreamSession,
+    Approval, CertificateSwitch, ClientPrincipal, InMemoryStore, SkakelServer, SkakelServerBuilder,
+    StreamEnd, StreamMessage, StreamOpen, StreamRequest, StreamSession,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, oneshot};
@@ -211,7 +210,7 @@ impl Bench {
     /// Prepares the next certificate. Its fingerprint.
     pub async fn prepare(&mut self, server: &Server) -> String {
         self.running(server)
-            .keys()
+            .certificates()
             .prepare_next_certificate()
             .await
             .unwrap()
@@ -220,7 +219,7 @@ impl Bench {
 
     pub async fn switch(&mut self, server: &Server) -> CertificateSwitch {
         self.running(server)
-            .keys()
+            .certificates()
             .switch_certificate()
             .await
             .unwrap()
@@ -229,7 +228,7 @@ impl Bench {
 
     pub async fn cancel(&mut self, server: &Server) -> bool {
         self.running(server)
-            .keys()
+            .certificates()
             .cancel_next_certificate()
             .await
             .unwrap()
@@ -269,7 +268,9 @@ async fn start_with(
         .stream("echo", echo())
         .stream("serial", pretend_serial())
         // A stream type whose server never answers the open.
-        .stream("stall", Arc::new(|_| Box::pin(std::future::pending())))
+        .stream("stall", |_request: StreamRequest| {
+            std::future::pending::<StreamOpen>()
+        })
         // The app's own HTTPS endpoint, which takes the same token.
         .routes(Router::new().route("/app/whoami", get(whoami)));
     if let Some(lifetime) = token_lifetime {
@@ -292,35 +293,33 @@ async fn whoami(ClientPrincipal(principal): ClientPrincipal) -> String {
 /// `busy` `IN_USE`, `vanish` opens and ends at once with `TARGET_GONE`, `sink` counts the data it
 /// gets and, once the client ends its side, sends the count as a control frame (eight bytes,
 /// big-endian), anything else echoes what it receives.
-fn echo() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
-        Box::pin(async move {
-            match std::str::from_utf8(&request.target).unwrap_or("") {
-                "" => StreamOpen::BadTarget("Say which target.".into()),
-                "missing" => StreamOpen::NotFound("There is no target called missing.".into()),
-                "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
-                "vanish" => StreamOpen::accept(|session: StreamSession| async move {
-                    session.end(StreamEnd::target_gone("unplugged")).await;
-                }),
-                "sink" => StreamOpen::accept(|mut session: StreamSession| async move {
-                    let mut total = 0u64;
-                    while let Some(message) = session.recv().await {
-                        if let StreamMessage::Data(data) = message {
-                            total += data.len() as u64;
-                        }
+fn echo() -> impl skakel_server::StreamHandler {
+    |request: StreamRequest| async move {
+        match std::str::from_utf8(&request.target).unwrap_or("") {
+            "" => StreamOpen::BadTarget("Say which target.".into()),
+            "missing" => StreamOpen::NotFound("There is no target called missing.".into()),
+            "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
+            "vanish" => StreamOpen::accept(|session: StreamSession| async move {
+                session.end(StreamEnd::target_gone("unplugged")).await;
+            }),
+            "sink" => StreamOpen::accept(|mut session: StreamSession| async move {
+                let mut total = 0u64;
+                while let Some(message) = session.recv().await {
+                    if let StreamMessage::Data(data) = message {
+                        total += data.len() as u64;
                     }
-                    let _ = session.send_control(total.to_be_bytes().to_vec()).await;
-                }),
-                _ => StreamOpen::accept(|mut session: StreamSession| async move {
-                    while let Some(message) = session.recv().await {
-                        if session.send(message).await.is_err() {
-                            return;
-                        }
+                }
+                let _ = session.send_control(total.to_be_bytes().to_vec()).await;
+            }),
+            _ => StreamOpen::accept(|mut session: StreamSession| async move {
+                while let Some(message) = session.recv().await {
+                    if session.send(message).await.is_err() {
+                        return;
                     }
-                }),
-            }
-        })
-    })
+                }
+            }),
+        }
+    }
 }
 
 /// A rate the pretend port cannot do.
@@ -333,20 +332,18 @@ pub const SLOW_BAUD: u32 = 4800;
 /// A serial port as an app would serve it, with the port played by a loopback: bytes sent come
 /// back. `COM1` opens; `fault` opens and then reports a fault (`PORT_FAULT`); `busy` is `IN_USE`;
 /// no port is `BAD_TARGET`; anything else `NO_SUCH_TARGET`. Setting DTR raises DSR and DCD.
-fn pretend_serial() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
-        Box::pin(async move {
-            let port = skakel_serial::port_of(&request.target).unwrap_or_default();
-            match port.as_str() {
-                "" => StreamOpen::BadTarget("Say which port.".into()),
-                "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
-                "COM1" | "fault" => {
-                    StreamOpen::accept(move |session| run_serial(session, port == "fault"))
-                }
-                _ => StreamOpen::NotFound(format!("There is no port {port}.")),
+fn pretend_serial() -> impl skakel_server::StreamHandler {
+    |request: StreamRequest| async move {
+        let port = skakel_serial::port_of(&request.target).unwrap_or_default();
+        match port.as_str() {
+            "" => StreamOpen::BadTarget("Say which port.".into()),
+            "busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
+            "COM1" | "fault" => {
+                StreamOpen::accept(move |session| run_serial(session, port == "fault"))
             }
-        })
-    })
+            _ => StreamOpen::NotFound(format!("There is no port {port}.")),
+        }
+    }
 }
 
 async fn run_serial(mut session: StreamSession, fault: bool) {

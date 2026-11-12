@@ -7,24 +7,30 @@
 //! An app builds a server with [`SkakelServerBuilder`], gives it a [`SkakelStore`] to keep its
 //! state in, adds its own gRPC services ([`SkakelServerBuilder::grpc_service`]), stream types
 //! ([`StreamHandler`]) and HTTPS routes, and starts it. Pairing needs a person: the app shows the requests it is told of (see
-//! [`SkakelServerBuilder::on_pairing`]) and calls [`Pairing::approve`] with the code the person
-//! typed.
+//! [`SkakelServer::subscribe`]) and calls [`Pairing::approve`] with the code the person typed.
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), skakel_server::ServerError> {
-//! use skakel_server::{InMemoryStore, SkakelServerBuilder};
+//! use skakel_server::{InMemoryStore, ServerEvent, SkakelServerBuilder};
 //!
 //! let server = SkakelServerBuilder::new("my-app", "1.0.0", InMemoryStore::new())
 //!     .name("pi-lab")
 //!     .listen("0.0.0.0:5240".parse().unwrap())
-//!     .on_pairing(|overview| {
-//!         for request in &overview.requests {
-//!             println!("{} wants to pair from {}", request.client_name, request.from);
-//!         }
-//!     })
 //!     .start()
 //!     .await?;
 //! println!("pinned to {}", server.fingerprint());
+//!
+//! // What happens on the server arrives as events, on a task of the app's own.
+//! let mut events = server.subscribe();
+//! tokio::spawn(async move {
+//!     while let Some(event) = events.recv().await {
+//!         if let ServerEvent::Pairing(overview) = event {
+//!             for request in &overview.requests {
+//!                 println!("{} wants to pair from {}", request.client_name, request.from);
+//!             }
+//!         }
+//!     }
+//! });
 //! # Ok(())
 //! # }
 //! ```
@@ -123,19 +129,19 @@ mod tokens;
 mod util;
 
 pub use crypto::CryptoError;
-pub use error::ServerError;
-pub use events::ServerEvent;
+pub use error::{OptionProblem, ServerError, StateError};
+pub use events::{ServerEvent, ServerEvents};
 pub use http::ClientPrincipal;
 pub use pairing::{Approval, Pairing, PairingDecision, PairingOverview, PairingRequest};
-pub use server::{Clients, Keys, SkakelServer, SkakelServerBuilder};
+pub use server::{Certificates, Clients, SkakelServer, SkakelServerBuilder};
 pub use service::{SkakelService, connection_builder};
-pub use state::{CertificateSwitch, ClientView, KeysView, NewClient};
+pub use state::{CertificateSwitch, CertificatesView, ClientView, NewClient};
 pub use store::{
     CertificateRecord, ClientRecord, FileStore, InMemoryStore, NextCertificateRecord, SkakelState,
     SkakelStore, StoreFuture,
 };
 pub use streams::{
-    Accepted, BoxFuture, StreamClosed, StreamEnd, StreamHandler, StreamMessage, StreamOpen,
-    StreamRequest, StreamSession, StreamWriter,
+    Accepted, StreamClosed, StreamEnd, StreamHandler, StreamMessage, StreamOpen, StreamRequest,
+    StreamSession, StreamWriter,
 };
 pub use tokens::Principal;
