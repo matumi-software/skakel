@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use common::greeter::{self, GreetRequest};
 use common::{Recorder, within};
-use skakel_client::tonic::{Code, Request};
+use tonic::{Code, Request};
 use skakel_client::{
     Browser, BrowserOptions, Bytes, ClientOptions, FailureKind, Frame, LineSettings, Link,
     LinkState, LinkStatus, OpenResult, PairingClient, Pins, StreamCloseReason, Url, read_info,
@@ -130,13 +130,7 @@ async fn linked(server: &SkakelServer) -> (Link, skakel_client::Credentials) {
 }
 
 fn record_status(link: &Link) -> Recorder<LinkStatus> {
-    let recorder = Recorder::new();
-    let to = recorder.clone();
-    link.on_status_changed(move |status| {
-        let to = to.clone();
-        async move { to.record(status) }
-    });
-    recorder
+    common::record_status(link)
 }
 
 #[tokio::test]
@@ -289,7 +283,7 @@ async fn a_certificate_handover_is_learned_and_a_new_connection_shows_the_new_ce
     let (link, credentials) = linked(&server).await;
     let pins_seen: Recorder<Pins> = Recorder::new();
     let to = pins_seen.clone();
-    link.on_pins_changed(move |p| {
+    link.set_pin_store(move |p| {
         let to = to.clone();
         async move {
             to.record(p);

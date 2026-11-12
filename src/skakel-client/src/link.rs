@@ -3,9 +3,10 @@
 //! server it is paired with.
 //!
 //! The app keeps the address, the pins and the credentials, and hands them in. What changes goes
-//! back out as handlers: [`Link::on_pins_changed`] during a certificate handover,
-//! [`Link::on_address_changed`] when the server moved on the local network. Save the new values in
-//! the handler; a pins handler that returns an error is taken as not saved.
+//! back out two ways: [`Link::watch_status`], [`Link::watch_address`] and [`Link::watch_pins`]
+//! hold the latest value, [`Link::events`] has each change in order, and a [`PinStore`] set with
+//! [`Link::set_pin_store`] saves the pins during a certificate handover, which the link
+//! acknowledges to the server only once the store has them.
 //!
 //! Once started, the link keeps the control channel up: it reads `/skakel/info` to check the
 //! version, gets a token, opens a gRPC connection pinned to the certificate and calls
@@ -37,7 +38,7 @@ use skakel_protocol::{
     is_stream_type,
 };
 use skakel_serial::STREAM_TYPE;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::body::Body;
@@ -46,6 +47,7 @@ use url::Url;
 
 use crate::browser::{Browser, Protection};
 use crate::clock::{Clock, since};
+use crate::events::{Events, StateWatch};
 use crate::failure::{Error, Failure, FailureKind, Result, bad_answer, is_unreachable};
 use crate::grpc::{self, Connection, call_failed, is_token_refused, reason_of};
 use crate::http::{self, is_at};
@@ -76,11 +78,61 @@ const STABLE_AFTER: Duration = Duration::from_secs(30);
 /// Messages waiting to go out on a control call.
 const CONTROL_QUEUE: usize = 8;
 
-/// What a handler may fail with.
-pub type HandlerError = Box<dyn std::error::Error + Send + Sync>;
+/// What saving the pins may fail with.
+pub type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
-type HandlerFuture = Pin<Box<dyn Future<Output = Result<(), HandlerError>> + Send>>;
-type Handler<T> = Arc<dyn Fn(T) -> HandlerFuture + Send + Sync>;
+/// What [`PinStore::save`] gives back.
+pub type SaveFuture = Pin<Box<dyn Future<Output = Result<(), StoreError>> + Send>>;
+
+/// Where an app keeps the pins of a server, so a certificate handover survives a restart. The link
+/// hands every change of its pins to it and tells the server it has the next certificate only once
+/// `save` has returned `Ok`; a save that fails, or panics, is taken as not saved, and the server
+/// says it again on the next connection.
+///
+/// Any `Fn(Pins) -> impl Future<Output = Result<(), E>>` is one:
+///
+/// ```no_run
+/// # fn demo(link: &skakel_client::Link) {
+/// link.set_pin_store(|pins: skakel_client::Pins| async move {
+///     std::fs::write("pins.txt", pins.fingerprint())?;
+///     Ok::<(), std::io::Error>(())
+/// });
+/// # }
+/// ```
+pub trait PinStore: Send + Sync + 'static {
+    /// Saves the pins.
+    fn save(&self, pins: Pins) -> SaveFuture;
+}
+
+impl<F, Fut, E> PinStore for F
+where
+    F: Fn(Pins) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), E>> + Send + 'static,
+    E: Into<StoreError>,
+{
+    fn save(&self, pins: Pins) -> SaveFuture {
+        let saving = self(pins);
+        Box::pin(async move { saving.await.map_err(Into::into) })
+    }
+}
+
+/// Something that happened to a link, in order. See [`Link::events`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LinkEvent {
+    /// The link's state or failure changed. Renewing the control call before its token runs out is
+    /// not a change. An app whose own services push state calls them again when the link is
+    /// [`LinkState::Connected`] after it was not, since the calls of a lost connection are over.
+    Status(LinkStatus),
+    /// The link followed its server to another address on the local network. Save the address.
+    AddressChanged(Url),
+    /// The server's word about its certificates changed the pins: a next one to trust as well, a
+    /// switch to it, or a cancelled one. The [`PinStore`] has them too.
+    PinsChanged(Pins),
+}
+
+/// How many events a slow subscriber may fall behind.
+const EVENT_BACKLOG: usize = 64;
 
 /// Where a link stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,9 +216,10 @@ struct Inner {
     wake: Notify,
     run: Mutex<Option<Running>>,
     following: Mutex<Following>,
-    status_handlers: Mutex<Vec<Handler<LinkStatus>>>,
-    pins_handlers: Mutex<Vec<Handler<Pins>>>,
-    address_handlers: Mutex<Vec<Handler<Url>>>,
+    events: broadcast::Sender<LinkEvent>,
+    address_watch: watch::Sender<Url>,
+    pins_watch: watch::Sender<Pins>,
+    pin_store: Mutex<Option<Arc<dyn PinStore>>>,
 }
 
 impl Inner {
@@ -217,8 +270,11 @@ impl Link {
         credentials: Credentials,
         options: ClientOptions,
     ) -> Result<Self> {
-        let address = Arc::new(Mutex::new(http::base_address(address)?));
+        let address = http::base_address(address)?;
+        let initial_address = address.clone();
+        let address = Arc::new(Mutex::new(address));
         let saved_pins = Mutex::new(pins.clone());
+        let initial_pins = pins.clone();
         let pins = Arc::new(Mutex::new(pins));
         let pins_fn: http::PinsFn = {
             let pins = pins.clone();
@@ -256,9 +312,10 @@ impl Link {
                 wake: Notify::new(),
                 run: Mutex::new(None),
                 following: Mutex::new(Following::default()),
-                status_handlers: Mutex::new(Vec::new()),
-                pins_handlers: Mutex::new(Vec::new()),
-                address_handlers: Mutex::new(Vec::new()),
+                events: broadcast::channel(EVENT_BACKLOG).0,
+                address_watch: watch::channel(initial_address).0,
+                pins_watch: watch::channel(initial_pins).0,
+                pin_store: Mutex::new(None),
                 options,
             }),
         })
@@ -284,62 +341,39 @@ impl Link {
         self.inner.status.borrow().clone()
     }
 
-    /// The status as it changes, for a UI that shows the latest. A handler registered with
-    /// [`on_status_changed`](Self::on_status_changed) hears every change, in order.
-    pub fn watch_status(&self) -> watch::Receiver<LinkStatus> {
-        self.inner.status.subscribe()
+    /// The status, to read now and to wait on for changes. A watcher sees the latest status, not
+    /// every one in between; [`events`](Self::events) has them all.
+    pub fn watch_status(&self) -> StateWatch<LinkStatus> {
+        StateWatch::new(self.inner.status.subscribe())
     }
 
-    /// Handles each change of state, in order. Renewing the control call before its token runs out
-    /// is not a change. An app whose own services push state calls them again when the link is
-    /// [`LinkState::Connected`] after it was not, since the calls of a lost connection are over.
-    pub fn on_status_changed<F, Fut>(&self, handler: F)
-    where
-        F: Fn(LinkStatus) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        lock(&self.inner.status_handlers).push(Arc::new(move |status| {
-            let done = handler(status);
-            Box::pin(async move {
-                done.await;
-                Ok(())
-            })
-        }));
+    /// The server's address, to read now and to wait on. It changes when the link follows the
+    /// server to another one.
+    pub fn watch_address(&self) -> StateWatch<Url> {
+        StateWatch::new(self.inner.address_watch.subscribe())
     }
 
-    /// Handles the server's word about its certificates, when the pins changed: a next one to trust
-    /// as well, a switch to it, or a cancelled one. Save the pins in the handler. Only once every
-    /// handler returned `Ok` does the link tell the server it has the next certificate; one that
-    /// fails is taken as not saved.
-    pub fn on_pins_changed<F, Fut, E>(&self, handler: F)
-    where
-        F: Fn(Pins) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<(), E>> + Send + 'static,
-        E: Into<HandlerError>,
-    {
-        lock(&self.inner.pins_handlers).push(Arc::new(move |pins| {
-            let done = handler(pins);
-            Box::pin(async move { done.await.map_err(Into::into) })
-        }));
+    /// The pins, to read now and to wait on. They change on a certificate handover.
+    pub fn watch_pins(&self) -> StateWatch<Pins> {
+        StateWatch::new(self.inner.pins_watch.subscribe())
     }
 
-    /// Handles the server moving on the local network, when the link followed it. Save the address
-    /// in the handler.
-    pub fn on_address_changed<F, Fut>(&self, handler: F)
-    where
-        F: Fn(Url) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        lock(&self.inner.address_handlers).push(Arc::new(move |address| {
-            let done = handler(address);
-            Box::pin(async move {
-                done.await;
-                Ok(())
-            })
-        }));
+    /// What happens to the link from now on, in order: each change of status, a move to another
+    /// address and a change of pins. A subscriber that is not read for long misses the oldest events
+    /// and is told; the link never waits for one.
+    pub fn events(&self) -> Events<LinkEvent> {
+        Events::new(self.inner.events.subscribe())
     }
 
-    /// Starts keeping the control channel up, in the background. Handlers report how it goes.
+    /// Where the pins are kept. The link hands every change of its pins to the store, and tells the
+    /// server it has the next certificate only once the store has saved them. Without a store the
+    /// pins live as long as the link, and the app saves what [`watch_pins`](Self::watch_pins) gives.
+    /// Replaces the store set before.
+    pub fn set_pin_store(&self, store: impl PinStore) {
+        *lock(&self.inner.pin_store) = Some(Arc::new(store));
+    }
+
+    /// Starts keeping the control channel up, in the background. Watch it with [`events`](Self::events) and [`watch_status`](Self::watch_status).
     /// Starting a started link does nothing.
     pub fn start(&self) {
         let mut run = lock(&self.inner.run);
@@ -679,19 +713,28 @@ fn is_server_path(path: &str) -> bool {
             .any(|c| c == '\\' || c.is_control() || c == ' ')
 }
 
-/// Calls each handler in turn. False when any failed.
-async fn raise<T: Clone>(handlers: Vec<Handler<T>>, value: T) -> bool {
-    let mut all_saved = true;
-    for handler in handlers {
-        if let Err(error) = handler(value.clone()).await {
-            log::warn!("A handler failed: {error}");
-            all_saved = false;
+/// Hands the pins to the app's store. True when it saved them, or when there is no store. The store
+/// runs on a task of its own, so one that panics cannot take the link down with it.
+async fn save_pins(inner: &Inner, pins: Pins) -> bool {
+    let store = lock(&inner.pin_store).clone();
+    let Some(store) = store else {
+        return true;
+    };
+    let saving = tokio::spawn(async move { store.save(pins).await });
+    match saving.await {
+        Ok(Ok(())) => true,
+        Ok(Err(error)) => {
+            log::warn!("The pin store failed to save the pins: {error}");
+            false
+        }
+        Err(error) => {
+            log::warn!("The pin store panicked while saving the pins: {error}");
+            false
         }
     }
-    all_saved
 }
 
-/// Sets the status and raises it when it changed.
+/// Sets the status and tells subscribers when it changed.
 async fn set_status(inner: &Inner, status: LinkStatus) {
     let changed = inner.status.send_if_modified(|current| {
         if *current == status {
@@ -702,8 +745,7 @@ async fn set_status(inner: &Inner, status: LinkStatus) {
         }
     });
     if changed {
-        let handlers = lock(&inner.status_handlers).clone();
-        raise(handlers, status).await;
+        let _ = inner.events.send(LinkEvent::Status(status));
     }
 }
 
@@ -1147,8 +1189,9 @@ async fn learn_certificates(
             after.fingerprint(),
             after.next_fingerprint().unwrap_or("none")
         );
-        let handlers = lock(&inner.pins_handlers).clone();
-        if !raise(handlers, after.clone()).await {
+        inner.pins_watch.send_replace(after.clone());
+        let _ = inner.events.send(LinkEvent::PinsChanged(after.clone()));
+        if !save_pins(inner, after.clone()).await {
             // Not saved: the server is not told, and says it again on the next connection.
             return;
         }
@@ -1270,8 +1313,8 @@ async fn follow(inner: &Arc<Inner>, servers: &[crate::browser::DiscoveredServer]
         http::authority(&from),
         http::authority(&to)
     );
-    let handlers = lock(&inner.address_handlers).clone();
-    raise(handlers, to).await;
+    inner.address_watch.send_replace(to.clone());
+    let _ = inner.events.send(LinkEvent::AddressChanged(to));
 }
 
 /// Whether `url` holds a certificate the link trusts: `GET /skakel/info` over the pinned client,

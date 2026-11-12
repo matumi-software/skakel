@@ -7,23 +7,17 @@ use std::time::Duration;
 
 use common::greeter::{self, GreetRequest};
 use common::{ManualClock, Recorder, within};
-use skakel_client::tonic::Request;
+use tonic::Request;
 use skakel_client::{ClientOptions, Credentials, FailureKind, Link, LinkState, LinkStatus, Pins};
 
 fn record_status(link: &Link) -> Recorder<LinkStatus> {
-    let recorder = Recorder::new();
-    let to = recorder.clone();
-    link.on_status_changed(move |status| {
-        let to = to.clone();
-        async move { to.record(status) }
-    });
-    recorder
+    common::record_status(link)
 }
 
 fn record_pins(link: &Link) -> Recorder<Pins> {
     let recorder = Recorder::new();
     let to = recorder.clone();
-    link.on_pins_changed(move |pins| {
+    link.set_pin_store(move |pins| {
         let to = to.clone();
         async move {
             to.record(pins);
@@ -280,7 +274,7 @@ async fn a_handover_the_app_could_not_save_is_not_acknowledged() {
     let (link, credentials) = link_with(&mut bench, &server, ClientOptions::default()).await;
     let tried: Recorder<()> = Recorder::new();
     let to = tried.clone();
-    link.on_pins_changed(move |_| {
+    link.set_pin_store(move |_| {
         let to = to.clone();
         async move {
             to.record(());
@@ -314,7 +308,7 @@ async fn a_handover_the_app_could_not_save_is_offered_to_it_again_on_the_next_co
     let tried: Recorder<usize> = Recorder::new();
     let to = tried.clone();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    link.on_pins_changed(move |_| {
+    link.set_pin_store(move |_| {
         let to = to.clone();
         let calls = calls.clone();
         async move {
@@ -345,5 +339,42 @@ async fn a_handover_the_app_could_not_save_is_offered_to_it_again_on_the_next_co
 
     tried.wait(|n| *n == 2).await;
     acknowledged(&mut bench, &server, &credentials.client_id).await;
+    link.stop().await;
+}
+
+#[tokio::test]
+async fn a_pin_store_that_panics_does_not_take_the_link_down_and_counts_as_not_saved() {
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let (link, credentials) = link_with(&mut bench, &server, ClientOptions::default()).await;
+    let tried: Recorder<()> = Recorder::new();
+    let to = tried.clone();
+    link.set_pin_store(move |_| {
+        let to = to.clone();
+        async move {
+            to.record(());
+            if true {
+                panic!("the disk is on fire");
+            }
+            Ok::<(), std::io::Error>(())
+        }
+    });
+    let statuses = record_status(&link);
+    connected(&link, &statuses).await;
+
+    bench.prepare(&server).await;
+    tried.wait(|_| true).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert_eq!(link.status().state, LinkState::Connected, "the link is up");
+    assert!(greet(&link).await.ends_with(": hi"));
+    assert!(
+        !bench
+            .clients(&server)
+            .await
+            .iter()
+            .any(|c| c.0 == credentials.client_id && c.2),
+        "not acknowledged"
+    );
     link.stop().await;
 }

@@ -9,26 +9,24 @@ use std::time::Duration;
 
 use common::{Recorder, free_tcp, free_udp};
 use skakel_client::{
-    Browser, BrowserOptions, ClientOptions, DiscoveredServer, FailureKind, Link, LinkState,
+    Browser, BrowserOptions, ClientOptions, DiscoveredServer, FailureKind, Link, LinkEvent, LinkState,
     LinkStatus, SkakelApp, Url,
 };
 
 fn record_status(link: &Link) -> Recorder<LinkStatus> {
-    let recorder = Recorder::new();
-    let to = recorder.clone();
-    link.on_status_changed(move |status| {
-        let to = to.clone();
-        async move { to.record(status) }
-    });
-    recorder
+    common::record_status(link)
 }
 
 fn record_moves(link: &Link) -> Recorder<Url> {
     let recorder = Recorder::new();
     let to = recorder.clone();
-    link.on_address_changed(move |address| {
-        let to = to.clone();
-        async move { to.record(address) }
+    let mut events = link.events();
+    tokio::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let LinkEvent::AddressChanged(address) = event {
+                to.record(address);
+            }
+        }
     });
     recorder
 }
