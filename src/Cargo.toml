@@ -18,7 +18,7 @@ skakel-vcam = { path = "skakel-vcam", version = "0.2.0" }
 # Microsoft's Windows bindings (MIT OR Apache-2.0). `windows-core` is named directly because the
 # `#[implement]` macro expands to paths in it.
 windows = "0.62.2"
-windows-core = "0.62.2"
+windows-core = "0.100.0"
 
 # Wire formats and hashing. Every one is MIT or Apache-2.0 (or BSD-3-Clause for subtle,
 # Apache-2.0 for unicode-general-category), checked with `cargo info` before it was added.
