@@ -34,6 +34,22 @@
   `LineSettings::is_valid` says whether a port can be asked for the settings. The enums and both
   message enums are `#[non_exhaustive]`, so an app matching on them needs a wildcard arm.
   `skakel-client` re-exports `DataBits`. The wire is unchanged.
+- `skakel-client`: a certificate handover the app's handler failed to save is offered to it again
+  on the next connection and is acknowledged to the server only once the app has saved it (before,
+  a reconnect acknowledged it unsaved, and the client had to pair again after a restart).
+- `skakel-client`: `Link::request`, `Link::open_stream` and `Link::open_serial` return the new
+  `FailureKind::InvalidRequest` for a path that leaves the server (control characters and spaces
+  included), a stream type that is not one or an empty port id, where they panicked. Apps that
+  match every `FailureKind` need an arm for it.
+- `skakel-client`: `Link::start` starts a link that closed for good (credentials refused, revoked,
+  rotated), where it did nothing until `stop()`. The info answer is refused when it lists more than 8
+  versions, as discovery's is. A pairing wait goes on after a poll that failed on the network and
+  gives up after 10 in a row; the poll uses the request timeout instead of 30 seconds. The pause
+  between reconnect attempts is jittered and keeps growing for a connection that did not stay up
+  for 30 seconds. Discovery datagrams outside the answer window are dropped before they are parsed.
+  Access tokens are marked sensitive in headers, and one that cannot be a header value is refused
+  when it is issued. `StreamConnection::closed` says it waits for unread frames.
+Nothing yet. `main` is at the v0.2.1 tag.
 
 ## 0.2.1 (2026-11-12)
 

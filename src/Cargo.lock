@@ -1538,6 +1538,7 @@ name = "skakel-client"
 version = "0.2.1"
 dependencies = [
  "axum",
+ "getrandom 0.4.3",
  "http-body-util",
  "hyper",
  "hyper-util",

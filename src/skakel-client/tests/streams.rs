@@ -240,13 +240,22 @@ async fn open_stream_gives_up_when_the_server_does_not_answer_within_the_request
 }
 
 #[tokio::test]
-#[should_panic(expected = "A stream type is one or more of")]
-async fn open_stream_refuses_a_type_that_is_not_one() {
+async fn open_stream_refuses_a_type_that_is_not_one_and_open_serial_an_empty_port() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, _) = linked(&mut bench, &server).await;
 
-    let _ = link.open_stream("Not A Type", b"").await;
+    assert_eq!(
+        link.open_stream("Not A Type", b"")
+            .await
+            .unwrap_err()
+            .kind(),
+        FailureKind::InvalidRequest
+    );
+    assert_eq!(
+        link.open_serial("").await.err().map(|e| e.kind()),
+        Some(FailureKind::InvalidRequest)
+    );
 }
 
 #[tokio::test]

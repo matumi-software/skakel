@@ -111,6 +111,11 @@ impl TokenClient {
             return Err(bad_answer("The token answer has no access token."));
         };
 
+        // It goes in a header on every call, so one that cannot is refused here, once, not dropped
+        // later without a word.
+        if reqwest::header::HeaderValue::from_str(&format!("Bearer {value}")).is_err() {
+            return Err(bad_answer("The access token cannot be sent in a header."));
+        }
         let fresh = Token {
             value,
             expires_at: self.clock.now() + lifetime(expires_in),

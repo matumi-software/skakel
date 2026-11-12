@@ -122,6 +122,34 @@ async fn wait_hands_over_credentials_once_the_code_is_typed_on_the_server() {
 }
 
 #[tokio::test]
+async fn a_poll_that_fails_on_the_network_is_tried_again_and_the_wait_goes_on() {
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let proxy = common::CountingProxy::start(server.port).await;
+    let mut pairing = PairingClient::open(
+        &proxy.address(),
+        &server.fingerprint,
+        "laptop",
+        &ClientOptions::default(),
+    )
+    .await
+    .unwrap();
+    pairing.set_poll_interval(Duration::from_millis(100));
+    let requests = bench.requests(&server).await;
+    bench.approve(&server, &requests[0].0, pairing.code()).await;
+    let before = proxy.connections();
+    proxy.fail_next(2);
+
+    let credentials = pairing.wait().await.unwrap();
+
+    assert_eq!(bench.clients(&server).await[0].0, credentials.client_id);
+    assert!(
+        proxy.connections() - before >= 3,
+        "two polls died and a third came"
+    );
+}
+
+#[tokio::test]
 async fn a_wrong_code_is_not_approved_and_the_request_waits() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;

@@ -35,7 +35,7 @@ pub const MAX_WAIT: Duration = Duration::from_secs(5 * 60);
 const MAX_ID_LENGTH: usize = 128;
 
 /// The longest a client name is, in UTF-16 code units as the server counts them.
-const MAX_NAME_LENGTH: usize = 80;
+const MAX_CLIENT_NAME_LENGTH: usize = 80;
 
 /// Why a pairing request could not be opened.
 #[derive(Debug)]
@@ -71,6 +71,9 @@ impl From<Error> for PairingError {
     }
 }
 
+/// How many polls in a row may fail on the network before the wait gives up.
+const MAX_FAILED_POLLS: u32 = 10;
+
 const WAITING: u8 = 0;
 const FINISHED: u8 = 1;
 
@@ -87,6 +90,7 @@ pub struct PairingClient {
     poll_token: String,
     clock: Arc<dyn Clock>,
     poll_interval: Duration,
+    request_timeout: Duration,
     state: Arc<AtomicU8>,
 }
 
@@ -115,7 +119,7 @@ impl PairingClient {
         options: &ClientOptions,
     ) -> Result<Self, PairingError> {
         let name = client_name.trim();
-        if name.is_empty() || name.encode_utf16().count() > MAX_NAME_LENGTH {
+        if name.is_empty() || name.encode_utf16().count() > MAX_CLIENT_NAME_LENGTH {
             return Err(PairingError::InvalidClientName);
         }
         let server = base_address(address)?;
@@ -164,6 +168,7 @@ impl PairingClient {
                 poll_token: opened.poll_token,
                 clock: options.clock.clone(),
                 poll_interval: Duration::from_secs(2),
+                request_timeout: timeout,
                 state: Arc::new(AtomicU8::new(WAITING)),
             };
 
@@ -259,20 +264,45 @@ impl PairingClient {
 
     async fn poll_until_decided(&self) -> Result<Credentials> {
         let url = pair_url(&self.address, &self.request_id, None)?;
+        let mut failed_polls = 0;
         loop {
             if since(self.clock.now(), self.expires_at) > EXPIRY_GRACE {
                 return Err(Error::of(FailureKind::PairingExpired));
             }
 
             self.clock.sleep(self.poll_interval).await;
-            let response = self
+            let response = match self
                 .http
                 .get(url.clone())
                 .header(PAIR_TOKEN_HEADER, &self.poll_token)
-                .timeout(Duration::from_secs(30))
+                .timeout(self.request_timeout)
                 .send()
                 .await
-                .map_err(Error::from_cause)?;
+            {
+                Ok(response) => {
+                    failed_polls = 0;
+                    response
+                }
+                Err(cause) => {
+                    let error = Error::from_cause(cause);
+                    // A blip on the network is not the end of the request: it is still on the
+                    // server, and the next poll finds it. A server that stays away is.
+                    failed_polls += 1;
+                    if failed_polls < MAX_FAILED_POLLS
+                        && matches!(
+                            error.kind(),
+                            FailureKind::Unreachable | FailureKind::ConnectionLost
+                        )
+                    {
+                        log::info!(
+                            "A poll of the pairing request on {} failed, trying again: {error:?}",
+                            http::authority(&self.address)
+                        );
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             match response.status() {
                 // Others from this address are pairing too; the next poll is soon enough.
                 StatusCode::TOO_MANY_REQUESTS => continue,
@@ -393,7 +423,7 @@ fn is_id(text: &str) -> bool {
     (1..=MAX_ID_LENGTH).contains(&text.len()) && text.bytes().all(|b| b > b' ' && b < 0x7f)
 }
 
-/// `/skakel/v1/pair/{id}` and what follows it, with the id escaped as one path segment.
+/// `/skakel/v2/pair/{id}` and what follows it, with the id escaped as one path segment.
 fn pair_url(server: &Url, id: &str, tail: Option<&str>) -> Result<Url, Error> {
     let mut url = server.clone();
     {

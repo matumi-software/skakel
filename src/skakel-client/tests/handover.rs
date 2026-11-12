@@ -305,3 +305,45 @@ async fn a_handover_the_app_could_not_save_is_not_acknowledged() {
     );
     link.stop().await;
 }
+
+#[tokio::test]
+async fn a_handover_the_app_could_not_save_is_offered_to_it_again_on_the_next_connection() {
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let (link, credentials) = link_with(&mut bench, &server, ClientOptions::default()).await;
+    let tried: Recorder<usize> = Recorder::new();
+    let to = tried.clone();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    link.on_pins_changed(move |_| {
+        let to = to.clone();
+        let calls = calls.clone();
+        async move {
+            let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            to.record(call);
+            if call == 1 {
+                Err(std::io::Error::other("disk full"))
+            } else {
+                Ok(())
+            }
+        }
+    });
+    let statuses = record_status(&link);
+    connected(&link, &statuses).await;
+    bench.prepare(&server).await;
+    tried.wait(|n| *n == 1).await;
+    assert!(
+        !bench
+            .clients(&server)
+            .await
+            .iter()
+            .any(|c| c.0 == credentials.client_id && c.2),
+        "not acknowledged while unsaved"
+    );
+
+    // The server says it again on a new connection, and this time the app can save it.
+    bench.end_all(&server).await;
+
+    tried.wait(|n| *n == 2).await;
+    acknowledged(&mut bench, &server, &credentials.client_id).await;
+    link.stop().await;
+}
