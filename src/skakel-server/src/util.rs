@@ -79,11 +79,28 @@ pub(crate) fn same_token(expected: &str, presented: Option<&str>) -> bool {
     }
 }
 
-/// The key a per-address limit counts under: the whole address, with an IPv4-mapped IPv6 address
-/// as its IPv4 address.
-pub(crate) fn address_key(address: IpAddr) -> String {
+/// The address as text, with an IPv4-mapped IPv6 address as its IPv4 address. What the app sees as
+/// where a request came from.
+pub(crate) fn address_text(address: IpAddr) -> String {
     match address {
         IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(address, IpAddr::V4).to_string(),
+        IpAddr::V4(_) => address.to_string(),
+    }
+}
+
+/// The key a per-address limit counts under. An IPv4 address, or an IPv4-mapped IPv6 address, counts
+/// as itself. An IPv6 address counts as its `/64`, because one host on a network owns a whole `/64`
+/// and can take any address in it, so counting whole addresses would let it spend a limit as often
+/// as it likes.
+pub(crate) fn address_key(address: IpAddr) -> String {
+    match address {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => {
+                let s = v6.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
         IpAddr::V4(_) => address.to_string(),
     }
 }
@@ -166,11 +183,26 @@ mod tests {
     #[test]
     fn address_key_counts_a_mapped_address_as_its_ipv4_address() {
         let mapped: IpAddr = "::ffff:10.1.2.3".parse().unwrap();
-        let v6: IpAddr = "2001:db8::1".parse().unwrap();
 
         assert_eq!(address_key(mapped), "10.1.2.3");
         assert_eq!(address_key("10.1.2.3".parse().unwrap()), "10.1.2.3");
-        assert_eq!(address_key(v6), "2001:db8::1");
+    }
+
+    #[test]
+    fn address_key_counts_an_ipv6_address_as_its_64() {
+        let one: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:2:ffff:ffff:ffff:ffff".parse().unwrap();
+        let next: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+
+        assert_eq!(address_key(one), "2001:db8:1:2::/64");
+        assert_eq!(address_key(one), address_key(other));
+        assert_ne!(address_key(one), address_key(next));
+    }
+
+    #[test]
+    fn address_text_is_the_whole_address_with_a_mapped_one_as_ipv4() {
+        assert_eq!(address_text("::ffff:10.1.2.3".parse().unwrap()), "10.1.2.3");
+        assert_eq!(address_text("2001:db8::1".parse().unwrap()), "2001:db8::1");
     }
 
     #[test]

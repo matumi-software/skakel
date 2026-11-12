@@ -167,17 +167,23 @@ side's, so it cannot make the two codes match.
 **Limits a server applies:** 5 opens per 5 minutes per address; 60 revealed requests per 5 minutes
 for the whole server; neither is refunded, by withdrawing or by expiry. An open that never reveals
 counts against its address but not against the server's 60. At most 3 open requests per address;
-at most 10 revealed requests waiting for a person at once; a request that has not revealed within 30
-seconds is dropped; requests expire after five minutes; three wrong codes refuse a request. An open
+at most 10 revealed requests waiting for a person at once; at most 64 requests that have opened and
+not yet revealed, for the whole server; a request that has not revealed within 30 seconds is
+dropped; requests expire after five minutes; three wrong codes refuse a request. An open
 or a reveal that goes over a limit gets 429. All pairing calls together, polls included, are limited
 to 120 a minute per address, also answered with 429, so a client polls no more than once a second.
-A pairing call over plain HTTP gets 400. A body over 4 KiB gets 413, or 400 when the server only
+A revealed nonce shorter than 43 characters (the 32 bytes a client picks, as base64url) is refused
+like one that does not match the commitment, with 404, so a client with a weak nonce cannot have its
+commitment guessed offline. A pairing call over plain HTTP gets 400. A body over 4 KiB gets 413, or 400 when the server only
 finds out while reading it. Both of these limits apply before the server reads the request.
 
-An address is the whole IPv4 or IPv6 address the call came from; an IPv4-mapped IPv6 address counts
-as its IPv4 address. Every per-address limit in this document counts addresses this way.
+An address is the whole IPv4 address the call came from, an IPv4-mapped IPv6 address counted as its
+IPv4 address, or the `/64` of an IPv6 address: a host on a network owns its whole `/64` and can send
+from any address in it, so counting single IPv6 addresses would let one host spend every limit as
+often as it likes. Every per-address limit in this document counts addresses this way. What the
+server shows the app as where a request came from is still the whole address.
 
-Many addresses that each open and reveal can still spend the server's 60 for everyone. A pairing
+Many `/64`s that each open and reveal can still spend the server's 60 for everyone. A pairing
 window that a person opens on the server, outside which it takes no requests, is the planned answer;
 it is not in this version.
 
