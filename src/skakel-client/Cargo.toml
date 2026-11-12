@@ -50,7 +50,7 @@ url.workspace = true
 [dev-dependencies]
 # The tests use the test-util feature; a crate may enable a feature of itself this way.
 skakel-client = { path = ".", features = ["test-util"] }
-skakel-server = { path = "../skakel-server", version = "0.2.1", features = ["test-util"] }
+skakel-server = { path = "../skakel-server", version = "0.3.0", features = ["test-util"] }
 tokio = { workspace = true, features = ["io-util"] }
 # The test bench: a self-signed server of another version, a gRPC server that never answers, and
 # the app's own service written the way tonic generates one.

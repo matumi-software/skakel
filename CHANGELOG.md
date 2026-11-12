@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+Nothing yet. `main` is at the v0.3.0 tag.
+
+## 0.3.0 (2026-11-12)
+
+Protocol version 3. It does not talk to version 2 (Skakel 0.2.0 and 0.2.1): update both ends of a
+link together; each tells a person so through the version check. The changes below are the wire
+(`docs/protocol.md`, "Changes from version 2"), a new crate layout and breaking changes to the
+public API of every crate, so an app moves once, here. Several of them come from an architecture
+and code review of 0.2.1; 0.2.1 itself stays as released.
+
+Summary for an app:
+
+- **Crates.** `skakel-protocol`, `skakel-discovery` and `skakel-pairing` are one crate,
+  `skakel-wire` (the mapping is below). `skakel-proto`, `skakel-serial`, `skakel-client`,
+  `skakel-server`, `skakel-vcam` and `skakel-vcam-source` keep their names.
+- **Wire.** `/skakel/v3`, package `skakel.v3`, fingerprints as bytes, serial in its own package with
+  request ids, TLS 1.3 only, eight-digit pairing codes bound to the client's name, lengths counted
+  in Unicode scalar values, IPv6 discovery.
+- **Pairing is closed by default.** The app opens a pairing window while a person is at the server.
+- **Server.** Opaque tokens (no signing key), a `StreamHandler` trait, one event stream, typed
+  errors, `Certificates` for `Keys`, `#[non_exhaustive]` on events, errors and records.
+- **Client.** No reqwest and no `tonic` re-export, events and a `PinStore` instead of callbacks,
+  `AsyncRead`/`AsyncWrite` for streams and serial, secrets wiped on drop.
+
 - `skakel-server`, `skakel-client` and the wire: a server takes new pairing requests only while its
   app has opened a pairing window. Breaking for apps: pairing is **closed by default**, so an app
   calls `SkakelServer::open_pairing(duration)` (or `Pairing::open_pairing`; held to one minute up to
