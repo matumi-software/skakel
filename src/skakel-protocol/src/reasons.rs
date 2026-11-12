@@ -2,6 +2,8 @@
 //! each with the status code it goes with. A refusal carries the code and, in a
 //! `google.rpc.ErrorInfo`, the domain [`ERROR_DOMAIN`] and the reason's word.
 
+use crate::GrpcCode;
+
 /// The `ErrorInfo` domain of every reason Skakel itself gives.
 pub const ERROR_DOMAIN: &str = "skakel";
 
@@ -9,7 +11,7 @@ pub const ERROR_DOMAIN: &str = "skakel";
 pub const STREAM_TYPE_DOMAIN_PREFIX: &str = "skakel.streams.";
 
 /// The gRPC status code a stream type ends a stream with for a reason of its own: `ABORTED`.
-pub const STREAM_TYPE_CODE: i32 = 10;
+pub const STREAM_TYPE_CODE: GrpcCode = GrpcCode::Aborted;
 
 /// The most characters a reason has.
 pub const MAX_REASON_LENGTH: usize = 63;
@@ -30,6 +32,7 @@ pub fn is_reason(text: &str) -> bool {
 
 /// A reason Skakel gives for refusing or ending a call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Reason {
     /// A call started with no token, an expired one, one the server did not sign, or one from an
     /// older generation or a removed client.
@@ -60,7 +63,7 @@ pub enum Reason {
 
 impl Reason {
     /// Every reason, in the order of the protocol's table.
-    pub const ALL: [Reason; 12] = [
+    pub const ALL: &'static [Reason] = &[
         Self::TokenRefused,
         Self::TokenExpired,
         Self::Revoked,
@@ -95,18 +98,23 @@ impl Reason {
 
     /// The reason for a word, or `None` for one Skakel does not give.
     pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|reason| reason.as_str() == text)
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|reason| reason.as_str() == text)
     }
 
-    /// The gRPC status code the reason goes with, as its number: `UNAUTHENTICATED` (16),
-    /// `UNAVAILABLE` (14), `INVALID_ARGUMENT` (3), `NOT_FOUND` (5) or `FAILED_PRECONDITION` (9).
-    pub fn code(self) -> i32 {
+    /// The gRPC status code the reason goes with: `UNAUTHENTICATED`, `UNAVAILABLE`,
+    /// `INVALID_ARGUMENT`, `NOT_FOUND` or `FAILED_PRECONDITION`.
+    pub fn code(self) -> GrpcCode {
         match self {
-            Self::TokenRefused | Self::TokenExpired | Self::Revoked | Self::Rotated => 16,
-            Self::Stopping => 14,
-            Self::BadOpen | Self::BadFrame | Self::BadTarget => 3,
-            Self::NoSuchType | Self::NoSuchTarget | Self::TargetGone => 5,
-            Self::InUse => 9,
+            Self::TokenRefused | Self::TokenExpired | Self::Revoked | Self::Rotated => {
+                GrpcCode::Unauthenticated
+            }
+            Self::Stopping => GrpcCode::Unavailable,
+            Self::BadOpen | Self::BadFrame | Self::BadTarget => GrpcCode::InvalidArgument,
+            Self::NoSuchType | Self::NoSuchTarget | Self::TargetGone => GrpcCode::NotFound,
+            Self::InUse => GrpcCode::FailedPrecondition,
         }
     }
 }
@@ -123,7 +131,10 @@ mod tests {
 
     #[test]
     fn each_reason_has_the_word_and_code_of_the_protocols_table() {
-        let table: Vec<_> = Reason::ALL.iter().map(|r| (r.as_str(), r.code())).collect();
+        let table: Vec<_> = Reason::ALL
+            .iter()
+            .map(|r| (r.as_str(), r.code().number()))
+            .collect();
 
         assert_eq!(
             table,
@@ -146,7 +157,7 @@ mod tests {
 
     #[test]
     fn parse_reads_each_word_back_and_nothing_else() {
-        for reason in Reason::ALL {
+        for &reason in Reason::ALL {
             assert_eq!(Reason::parse(reason.as_str()), Some(reason));
             assert!(is_reason(reason.as_str()));
         }
@@ -171,6 +182,6 @@ mod tests {
     fn a_stream_types_domain_is_under_skakel_streams() {
         assert_eq!(stream_type_domain("serial"), "skakel.streams.serial");
         assert!(stream_type_domain("usb").starts_with(ERROR_DOMAIN));
-        assert_eq!(STREAM_TYPE_CODE, 10);
+        assert_eq!(STREAM_TYPE_CODE.number(), 10);
     }
 }

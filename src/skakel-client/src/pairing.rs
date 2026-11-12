@@ -12,7 +12,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ::http::StatusCode;
 use skakel_pairing::{
-    PairOpenRequest, PairOpened, PairPoll, PairRevealRequest, PairState, commit, compute, new_nonce,
+    PairOpenRequest, PairOpened, PairPoll, PairRevealRequest, PairState, RandomError, commit,
+    compute, new_nonce,
 };
 use skakel_protocol::{PAIR_PATH, PAIR_TOKEN_HEADER};
 use url::Url;
@@ -45,6 +46,8 @@ const MAX_CLIENT_NAME_LENGTH: usize = 80;
 pub enum PairingError {
     /// The client's name is empty once trimmed, or longer than 80 characters.
     InvalidClientName,
+    /// The operating system had no random numbers to make the pairing nonce from.
+    NoRandomness(RandomError),
     /// The server could not be reached, presented another certificate, speaks no common version, or
     /// refused the request.
     Failed(Error),
@@ -54,6 +57,7 @@ impl fmt::Display for PairingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidClientName => f.write_str("Give the client a name of 1 to 80 characters."),
+            Self::NoRandomness(error) => error.fmt(f),
             Self::Failed(error) => error.fmt(f),
         }
     }
@@ -63,6 +67,7 @@ impl std::error::Error for PairingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Failed(error) => Some(error),
+            Self::NoRandomness(error) => Some(error),
             Self::InvalidClientName => None,
         }
     }
@@ -131,13 +136,13 @@ impl PairingClient {
         let server = base_address(address)?;
         let pins = Pins::new(fingerprint)
             .map_err(|e| Error::caused(FailureKind::CertificateMismatch, e))?;
+        let nonce = new_nonce().map_err(PairingError::NoRandomness)?;
         let client = HttpClient::pinned(pins.clone());
         let timeout = options.request_timeout;
         let opened = async {
             let info = read_info_with(&client, &server, timeout).await?;
             require_version(&info.versions)?;
 
-            let nonce = new_nonce();
             let open = client
                 .post(server.join(PAIR_PATH).map_err(Error::from_cause)?)
                 .timeout(timeout)
@@ -157,7 +162,8 @@ impl PairingClient {
                 ));
             }
 
-            let code = compute(pins.fingerprint(), &nonce, &opened.server_nonce);
+            let code = compute(pins.fingerprint(), &nonce, &opened.server_nonce)
+                .ok_or_else(|| Error::of(FailureKind::CertificateMismatch))?;
             let now = options.clock.now();
             // By this client's clock: never later than five minutes from now, however far off the
             // server's answer is.

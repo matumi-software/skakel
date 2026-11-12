@@ -22,7 +22,7 @@ use tower_service::Service;
 /// Opens a pairing request from the local address `from`.
 async fn open_pairing_from(server: &skakel_server::SkakelServer, from: &str) -> Reply {
     Request::new("POST", "/skakel/v2/pair")
-        .json(&json!({ "clientName": "lab pc", "commitment": commit(&new_nonce()) }))
+        .json(&json!({ "clientName": "lab pc", "commitment": commit(&new_nonce().unwrap()) }))
         .send_from(server, from)
         .await
 }
@@ -41,7 +41,7 @@ async fn an_apps_own_server_serves_its_page_and_skakels_pairing_tokens_control_a
     assert_eq!(info.json()["name"], NAME);
 
     // Pairing, through the app's port.
-    let nonce = new_nonce();
+    let nonce = new_nonce().unwrap();
     let opened = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": "lab pc", "commitment": commit(&nonce) }))
         .send(&server)
@@ -59,7 +59,8 @@ async fn an_apps_own_server_serves_its_page_and_skakels_pairing_tokens_control_a
         &server.fingerprint(),
         &nonce,
         opened["serverNonce"].as_str().unwrap(),
-    );
+    )
+    .unwrap();
     assert_eq!(
         server.pairing().approve(id, &code).await.unwrap(),
         Approval::Approved
@@ -124,7 +125,7 @@ async fn pairing_limits_count_each_callers_address_apart() {
 #[tokio::test]
 async fn a_pairing_request_shows_the_address_it_came_from() {
     let server = start_mounted().await;
-    let nonce = new_nonce();
+    let nonce = new_nonce().unwrap();
     let opened = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": "lab pc", "commitment": commit(&nonce) }))
         .send_from(&server, "127.0.0.2")

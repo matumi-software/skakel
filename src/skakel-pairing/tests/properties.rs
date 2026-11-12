@@ -18,11 +18,19 @@ proptest! {
     /// fingerprint is written.
     #[test]
     fn the_code_is_six_digits_and_stable(fp in "[0-9A-F]{64}", c in ".{0,60}", s in ".{0,60}") {
-        let code = compute(&fp, &c, &s);
+        let code = compute(&fp, &c, &s).unwrap();
         prop_assert_eq!(code.len(), DIGITS);
         prop_assert!(code.bytes().all(|b| b.is_ascii_digit()));
         let coloured: Vec<&str> = (0..32).map(|i| &fp[i * 2..i * 2 + 2]).collect();
-        prop_assert_eq!(compute(&coloured.join(":").to_lowercase(), &c, &s), code);
+        prop_assert_eq!(compute(&coloured.join(":").to_lowercase(), &c, &s).unwrap(), code);
+    }
+
+    /// Text that is not 64 hex digits with optional colons gives no code, whatever it holds.
+    #[test]
+    fn text_that_is_not_a_fingerprint_gives_no_code(text in ".{0,100}") {
+        let valid = text.chars().all(|c| c == ':' || c.is_ascii_hexdigit())
+            && text.chars().filter(|c| *c != ':').count() == 64;
+        prop_assert_eq!(compute(&text, "c", "s").is_some(), valid);
     }
 
     /// Typed text is the code only when its digits are exactly the code.

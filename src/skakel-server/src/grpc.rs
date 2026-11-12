@@ -30,7 +30,7 @@ use crate::tokens::Principal;
 /// `ErrorInfo` with the domain `skakel` and the reason.
 pub(crate) fn refusal(reason: Reason, message: impl Into<String>) -> Status {
     Status::with_error_details(
-        Code::from_i32(reason.code()),
+        Code::from_i32(reason.code().number()),
         message,
         ErrorDetails::with_error_info(reason.as_str(), ERROR_DOMAIN, HashMap::new()),
     )

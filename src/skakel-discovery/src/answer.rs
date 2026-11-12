@@ -24,7 +24,7 @@ pub struct DiscoveryAnswer {
     /// The app the server belongs to.
     pub app: SkakelApp,
     /// The protocol versions it speaks.
-    pub versions: Vec<i32>,
+    pub versions: Vec<u32>,
 }
 
 /// Why [`create_answer`] refused: the answer would be one a client drops.
@@ -37,7 +37,7 @@ pub enum AnswerError {
     Port,
     /// The app id is not 1 to 32 of `a-z`, `0-9` and `-`.
     AppId,
-    /// There are no versions, more than 8, or one below 1.
+    /// There are no versions, more than 8, or one that is 0.
     Versions,
     /// The answer does not fit in a probe even with an empty name.
     TooLarge,
@@ -81,9 +81,7 @@ pub fn create_answer(answer: &DiscoveryAnswer) -> Result<Vec<u8>, AnswerError> {
     if !is_app_id(&answer.app.id) {
         return Err(AnswerError::AppId);
     }
-    if !(1..=MAX_VERSIONS).contains(&answer.versions.len())
-        || answer.versions.iter().any(|v| *v < 1)
-    {
+    if !(1..=MAX_VERSIONS).contains(&answer.versions.len()) || answer.versions.contains(&0) {
         return Err(AnswerError::Versions);
     }
 
@@ -123,7 +121,7 @@ pub fn try_parse_answer(datagram: &[u8]) -> Option<DiscoveryAnswer> {
         || utf16_len(&body.app.version) > MAX_APP_VERSION_LENGTH
         || !is_app_id(&body.app.id)
         || !(1..=MAX_VERSIONS).contains(&body.versions.len())
-        || body.versions.iter().any(|v| *v < 1)
+        || body.versions.contains(&0)
     {
         return None;
     }

@@ -13,17 +13,17 @@ use crate::request::HttpClient;
 /// The highest version both this client and the server speak, or `None` when there is none.
 ///
 /// `server_versions` are the versions the server listed, from discovery or `/skakel/info`.
-pub fn pick_version(server_versions: &[i32]) -> Option<u32> {
+pub fn pick_version(server_versions: &[u32]) -> Option<u32> {
     VERSIONS
         .iter()
         .copied()
-        .filter(|v| server_versions.contains(&(*v as i32)))
+        .filter(|v| server_versions.contains(v))
         .max()
 }
 
 /// The version to speak. A [`FailureKind::VersionMismatch`](crate::FailureKind::VersionMismatch)
 /// that names both sides' versions when there is none.
-pub fn require_version(server_versions: &[i32]) -> Result<u32> {
+pub fn require_version(server_versions: &[u32]) -> Result<u32> {
     pick_version(server_versions)
         .ok_or_else(|| Error::new(Failure::version_mismatch(server_versions)))
 }
@@ -72,7 +72,7 @@ fn check(info: SkakelInfo, server: &Url) -> Result<SkakelInfo> {
     if app.version.encode_utf16().count() > MAX_APP_VERSION_LENGTH
         || !is_app_id(&app.id)
         || !(1..=MAX_VERSIONS).contains(&versions.len())
-        || versions.iter().any(|v| *v < 1)
+        || versions.contains(&0)
     {
         return Err(bad_answer(
             "The info answer is missing the name, the app or the versions, or breaks their limits.",
@@ -99,7 +99,7 @@ mod tests {
     use super::*;
     use crate::failure::FailureKind;
 
-    fn info(name: &str, id: &str, version: &str, versions: Vec<i32>) -> SkakelInfo {
+    fn info(name: &str, id: &str, version: &str, versions: Vec<u32>) -> SkakelInfo {
         SkakelInfo {
             name: name.into(),
             app: SkakelApp {

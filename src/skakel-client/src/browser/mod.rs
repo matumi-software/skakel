@@ -57,7 +57,7 @@ pub struct DiscoveredServer {
     /// The app it belongs to.
     pub app: SkakelApp,
     /// The protocol versions it speaks.
-    pub versions: Vec<i32>,
+    pub versions: Vec<u32>,
     /// The other addresses and ports that answered with this fingerprint, best first. A server on
     /// several networks answers on each; a machine that copied the fingerprint shows up here too, and
     /// only a pinned connection tells them apart. More than one is reason to say that several

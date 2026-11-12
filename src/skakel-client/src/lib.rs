@@ -123,7 +123,7 @@ pub use pins::{Credentials, InvalidFingerprint, Pins};
 pub use request::{RequestBuilder, Response};
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
 pub use serial_io::SerialIo;
-pub use status::GrpcCode;
+pub use skakel_protocol::GrpcCode;
 pub use stream_io::StreamIo;
 pub use streams::{
     Frame, OpenResult, StreamClose, StreamCloseReason, StreamConnection, StreamRefusal,

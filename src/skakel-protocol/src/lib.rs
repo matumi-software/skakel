@@ -14,9 +14,11 @@
 
 mod contracts;
 pub mod fingerprints;
+mod grpc_code;
 mod reasons;
 
 pub use contracts::{SkakelApp, SkakelHello, SkakelInfo};
+pub use grpc_code::GrpcCode;
 pub use reasons::{
     ERROR_DOMAIN, MAX_REASON_LENGTH, Reason, STREAM_TYPE_CODE, STREAM_TYPE_DOMAIN_PREFIX,
     is_reason, stream_type_domain,

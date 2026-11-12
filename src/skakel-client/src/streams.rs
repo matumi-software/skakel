@@ -16,7 +16,8 @@ use tonic::{Code, Status, Streaming};
 
 use crate::failure::{Error, Failure, FailureKind, bad_answer};
 use crate::grpc::{Connection, call_failed, error_info_of, reason_of};
-use crate::status::GrpcCode;
+use crate::status::grpc_code;
+use skakel_protocol::GrpcCode;
 
 /// How long a close waits for the server to end the call.
 const CLOSE_TIMEOUT: Duration = Duration::from_millis(2500);
@@ -117,7 +118,7 @@ impl StreamClose {
         };
         Self {
             reason,
-            code: status.code().into(),
+            code: grpc_code(status.code()),
             type_reason,
             description: Some(status.message().to_owned()).filter(|m| !m.is_empty()),
         }
@@ -212,7 +213,7 @@ impl StreamRefusal {
             words => words.to_owned(),
         };
         Self {
-            code: status.code().into(),
+            code: grpc_code(status.code()),
             reason,
             message,
         }
