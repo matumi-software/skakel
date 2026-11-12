@@ -20,7 +20,7 @@ pub struct SkakelInfo {
     /// The app the server belongs to.
     pub app: SkakelApp,
     /// The protocol versions the server speaks.
-    pub versions: Vec<i32>,
+    pub versions: Vec<u32>,
 }
 
 /// What `ControlService.Hello` answers to a token that works: who the server is and whom the token
@@ -48,6 +48,13 @@ mod tests {
         assert_eq!(info.name, "pi-lab");
         assert_eq!(info.app.id, "koppel");
         assert_eq!(info.versions, [1]);
+    }
+
+    #[test]
+    fn info_versions_are_unsigned_so_a_negative_one_does_not_read() {
+        let negative = r#"{"name":"x","app":{"id":"a","version":"1"},"versions":[-1]}"#;
+
+        assert!(serde_json::from_str::<SkakelInfo>(negative).is_err());
     }
 
     #[test]

@@ -152,7 +152,7 @@ async fn answer(
                 port: announcement.port,
                 fingerprint: fingerprint.clone(),
                 app: announcement.app.clone(),
-                versions: VERSIONS.iter().map(|v| *v as i32).collect(),
+                versions: VERSIONS.to_vec(),
             });
             match made {
                 Ok(bytes) => cached = Some((fingerprint, bytes)),

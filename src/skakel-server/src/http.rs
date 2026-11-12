@@ -260,7 +260,7 @@ async fn info(State(shared): State<Arc<Shared>>) -> Json<SkakelInfo> {
     Json(SkakelInfo {
         name: shared.name.clone(),
         app: shared.app.clone(),
-        versions: VERSIONS.iter().map(|v| *v as i32).collect(),
+        versions: VERSIONS.to_vec(),
     })
 }
 

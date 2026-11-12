@@ -132,11 +132,11 @@ impl Failure {
     /// The server speaks none of this client's protocol versions, worded with both sides' versions
     /// and which one to update, such as "This server speaks Skakel 2 and this app speaks Skakel 1.
     /// Update the app."
-    pub(crate) fn version_mismatch(server_versions: &[i32]) -> Self {
+    pub(crate) fn version_mismatch(server_versions: &[u32]) -> Self {
         let Some(highest) = server_versions.iter().max() else {
             return Self::of(FailureKind::VersionMismatch);
         };
-        let ours: Vec<i32> = VERSIONS.iter().map(|v| *v as i32).collect();
+        let ours: &[u32] = VERSIONS;
         let update = if Some(highest) > ours.iter().max() {
             "the app"
         } else {
@@ -147,7 +147,7 @@ impl Failure {
             message: format!(
                 "This server speaks Skakel {} and this app speaks Skakel {}. Update {update}.",
                 list(server_versions),
-                list(&ours)
+                list(ours)
             ),
         }
     }
@@ -175,11 +175,11 @@ impl fmt::Display for Failure {
 }
 
 /// Versions as people write them: `1`, `1 and 2`, `1, 2 and 3`.
-fn list(versions: &[i32]) -> String {
-    let mut words: Vec<i32> = versions.to_vec();
+fn list(versions: &[u32]) -> String {
+    let mut words: Vec<u32> = versions.to_vec();
     words.sort_unstable();
     words.dedup();
-    let words: Vec<String> = words.iter().map(i32::to_string).collect();
+    let words: Vec<String> = words.iter().map(u32::to_string).collect();
     match words.as_slice() {
         [one] => one.clone(),
         [init @ .., last] => format!("{} and {last}", init.join(", ")),

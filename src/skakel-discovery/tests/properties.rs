@@ -22,7 +22,7 @@ fn answers() -> impl Strategy<Value = DiscoveryAnswer> {
         "[0-9A-F]{64}",
         "[a-z0-9-]{1,32}",
         texts(),
-        proptest::collection::vec(1i32..1000, 1..=MAX_VERSIONS),
+        proptest::collection::vec(1u32..1000, 1..=MAX_VERSIONS),
     )
         .prop_map(
             |(name, port, fingerprint, id, version, versions)| DiscoveryAnswer {

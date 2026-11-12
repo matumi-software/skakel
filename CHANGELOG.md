@@ -152,6 +152,18 @@ unchanged: protocol version 2 as 0.2.0 speaks it.
   probes while the server runs, so an app whose role changes at runtime answers only while it is a
   server. Stopping releases the UDP port before it returns, and both are safe to repeat. Nothing
   changes for an app that never calls them.
+- `skakel-pairing`: `new_nonce` returns a `Result` (`RandomError` when the operating system has no
+  random numbers) instead of panicking. `compute` returns an `Option`: `None` unless the fingerprint
+  is exactly 64 hex digits with optional colons, where it used to drop any other character and hash
+  the rest; the code for a valid fingerprint is unchanged. `skakel-client`: `PairingError` has a new
+  variant `NoRandomness`.
+- `skakel-protocol`: `Reason` is `#[non_exhaustive]` (an app matching it needs a wildcard arm) and
+  `Reason::ALL` is a slice. `Reason::code` and `STREAM_TYPE_CODE` are the new `GrpcCode`, which
+  moved here from `skakel-client` (which re-exports it) and has `number` and `from_number`.
+  `skakel-client` no longer has `From<tonic::Code> for GrpcCode` or the reverse.
+- Protocol versions are `u32` in `SkakelInfo::versions`, discovery's `DiscoveryAnswer::versions`,
+  `DiscoveredServer::versions`, `pick_version` and `require_version`, where they were `i32`. The JSON
+  is the same; a negative version is refused when it is read, as a 0 always was.
 
 ## 0.2.0 (2026-11-09)
 

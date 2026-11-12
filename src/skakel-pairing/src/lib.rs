@@ -32,15 +32,25 @@ use subtle::ConstantTimeEq;
 /// How many digits the code has.
 pub const DIGITS: usize = 6;
 
-/// A fresh random nonce: 32 bytes as base64url, without padding.
-///
-/// # Panics
-///
-/// When the operating system has no random numbers to give, which leaves nothing safe to do.
-pub fn new_nonce() -> String {
+/// The operating system had no random numbers to give, so there is no safe nonce to make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RandomError;
+
+impl std::fmt::Display for RandomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The operating system gave no random bytes.")
+    }
+}
+
+impl std::error::Error for RandomError {}
+
+/// A fresh random nonce: 32 bytes as base64url, without padding, or [`RandomError`] when the
+/// operating system has no random numbers to give.
+pub fn new_nonce() -> Result<String, RandomError> {
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).expect("the operating system gave no random bytes");
-    URL_SAFE_NO_PAD.encode(bytes)
+    getrandom::fill(&mut bytes).map_err(|_| RandomError)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// The commitment a client sends before revealing its nonce: the uppercase hex SHA-256 of its
@@ -59,19 +69,29 @@ pub fn matches(commitment: &str, nonce: &str) -> bool {
         .into()
 }
 
-/// The code, such as `482913`. Fingerprints compare by their hex digits alone, so it makes no
-/// difference how `fingerprint` is written.
-pub fn compute(fingerprint: &str, client_nonce: &str, server_nonce: &str) -> String {
+/// The code, such as `482913`, or `None` when `fingerprint` is not a fingerprint: exactly 64 hex
+/// digits, with or without colons between them, and nothing else. Fingerprints compare by their hex
+/// digits alone, so it makes no difference how a valid one is written (case, colons).
+pub fn compute(fingerprint: &str, client_nonce: &str, server_nonce: &str) -> Option<String> {
+    if fingerprint
+        .chars()
+        .any(|c| c != ':' && !c.is_ascii_hexdigit())
+    {
+        return None;
+    }
     let hex: String = fingerprint
         .chars()
-        .filter(char::is_ascii_hexdigit)
+        .filter(|c| *c != ':')
         .map(|c| c.to_ascii_uppercase())
         .collect();
+    if hex.len() != 64 {
+        return None;
+    }
     let hash = Sha256::digest(format!(
         "skakel-pair-v1|{hex}|{client_nonce}|{server_nonce}"
     ));
     let value = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]) % 1_000_000;
-    format!("{value:06}")
+    Some(format!("{value:06}"))
 }
 
 /// Compares a typed code with the expected one, ignoring anything but ASCII digits, in constant
@@ -93,19 +113,35 @@ mod tests {
 
     #[test]
     fn compute_gives_the_same_six_digits_however_the_fingerprint_is_written() {
-        let code = compute(FINGERPRINT, "client-nonce", "server-nonce");
+        let code = compute(FINGERPRINT, "client-nonce", "server-nonce").unwrap();
 
         assert_eq!(code.len(), 6);
         assert!(code.bytes().all(|b| b.is_ascii_digit()));
         let plain = FINGERPRINT.replace(':', "").to_ascii_lowercase();
-        assert_eq!(compute(&plain, "client-nonce", "server-nonce"), code);
+        assert_eq!(
+            compute(&plain, "client-nonce", "server-nonce").unwrap(),
+            code
+        );
+    }
+
+    #[test]
+    fn compute_refuses_text_that_is_not_a_fingerprint() {
+        // Before, any non-hex character was dropped and the rest hashed, so these gave a code.
+        let colonless = FINGERPRINT.replace(':', "");
+        assert_eq!(compute(&format!("{FINGERPRINT}!"), "c", "s"), None);
+        assert_eq!(compute(&format!("zz:{FINGERPRINT}"), "c", "s"), None);
+        assert_eq!(compute(&format!(" {colonless}"), "c", "s"), None);
+        assert_eq!(compute(&colonless[..62], "c", "s"), None);
+        assert_eq!(compute(&format!("{colonless}AB"), "c", "s"), None);
+        assert_eq!(compute("", "c", "s"), None);
+        assert_eq!(compute(":::", "c", "s"), None);
     }
 
     #[test]
     fn compute_gives_the_pinned_code() {
-        assert_eq!(compute(FINGERPRINT, "c", "s"), "749912");
+        assert_eq!(compute(FINGERPRINT, "c", "s").unwrap(), "749912");
         assert_eq!(
-            compute(FINGERPRINT, "client-nonce", "server-nonce"),
+            compute(FINGERPRINT, "client-nonce", "server-nonce").unwrap(),
             "904104"
         );
     }
@@ -117,22 +153,28 @@ mod tests {
         let hash = Sha256::digest(format!("skakel-pair-v1|{hex}|c|s"));
         let expected = u32::from_be_bytes(hash[..4].try_into().unwrap()) % 1_000_000;
 
-        assert_eq!(compute(FINGERPRINT, "c", "s"), format!("{expected:06}"));
+        assert_eq!(
+            compute(FINGERPRINT, "c", "s").unwrap(),
+            format!("{expected:06}")
+        );
     }
 
     #[test]
     fn compute_pads_a_small_code_to_six_digits() {
         // A code that starts with zeros, found by search, which must keep its zeros.
-        assert_eq!(compute(FINGERPRINT, "pad-41", "s"), "008456");
+        assert_eq!(compute(FINGERPRINT, "pad-41", "s").unwrap(), "008456");
     }
 
     #[test]
     fn compute_gives_another_code_for_another_certificate_or_nonce() {
-        let code = compute(FINGERPRINT, "a", "b");
+        let code = compute(FINGERPRINT, "a", "b").unwrap();
 
-        assert_ne!(compute(&FINGERPRINT.replace("EF", "EE"), "a", "b"), code);
-        assert_ne!(compute(FINGERPRINT, "a2", "b"), code);
-        assert_ne!(compute(FINGERPRINT, "a", "b2"), code);
+        assert_ne!(
+            compute(&FINGERPRINT.replace("EF", "EE"), "a", "b").unwrap(),
+            code
+        );
+        assert_ne!(compute(FINGERPRINT, "a2", "b").unwrap(), code);
+        assert_ne!(compute(FINGERPRINT, "a", "b2").unwrap(), code);
     }
 
     #[test]
@@ -146,18 +188,29 @@ mod tests {
 
     #[test]
     fn matches_takes_only_the_nonce_the_commitment_was_made_from() {
-        let nonce = new_nonce();
+        let nonce = new_nonce().unwrap();
         let commitment = commit(&nonce);
 
         assert!(matches(&commitment, &nonce));
         assert!(matches(&commitment.to_ascii_lowercase(), &nonce));
-        assert!(!matches(&commitment, &new_nonce()));
+        assert!(!matches(&commitment, &new_nonce().unwrap()));
         assert!(!matches("", &nonce));
     }
 
     #[test]
+    fn new_nonce_reports_a_failure_of_the_random_source_as_an_error_not_a_panic() {
+        // The type is the point: a caller has to handle it. The error says what happened.
+        let nonce: Result<String, RandomError> = new_nonce();
+        assert!(nonce.is_ok());
+        assert_eq!(
+            RandomError.to_string(),
+            "The operating system gave no random bytes."
+        );
+    }
+
+    #[test]
     fn new_nonce_is_32_bytes_of_base64url() {
-        let nonce = new_nonce();
+        let nonce = new_nonce().unwrap();
 
         assert_eq!(nonce.len(), 43);
         assert!(
@@ -165,7 +218,7 @@ mod tests {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         );
-        assert_ne!(new_nonce(), nonce);
+        assert_ne!(new_nonce().unwrap(), nonce);
     }
 
     #[test]

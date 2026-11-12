@@ -205,7 +205,7 @@ async fn discovery_announces_the_new_fingerprint_after_a_certificate_switch() {
 // ---- pairing ----
 
 async fn open_pairing(server: &skakel_server::SkakelServer, name: &str) -> (Value, String) {
-    let nonce = new_nonce();
+    let nonce = new_nonce().unwrap();
     let opened = Request::new("POST", "/skakel/v2/pair")
         .json(&json!({ "clientName": name, "commitment": commit(&nonce) }))
         .send(server)
@@ -256,7 +256,8 @@ async fn pairing_runs_open_reveal_approve_poll_and_the_credentials_sign_in() {
         &server.fingerprint(),
         &nonce,
         opened["serverNonce"].as_str().unwrap(),
-    );
+    )
+    .unwrap();
 
     let approval = server
         .pairing()
@@ -346,7 +347,7 @@ async fn three_wrong_codes_deny_and_the_poll_says_so() {
 #[tokio::test]
 async fn pairing_refuses_what_the_protocol_says_is_a_bad_request() {
     let server = start().await;
-    let good = commit(&new_nonce());
+    let good = commit(&new_nonce().unwrap());
     let cases: Vec<(Request, &str)> = vec![
         (
             Request::new("POST", "/skakel/v2/pair").form("clientName=a"),
@@ -474,7 +475,7 @@ async fn an_address_opens_five_requests_and_the_sixth_is_429_with_a_problem() {
     }
 
     let fourth = Request::new("POST", "/skakel/v2/pair")
-        .json(&json!({ "clientName": "a", "commitment": commit(&new_nonce()) }))
+        .json(&json!({ "clientName": "a", "commitment": commit(&new_nonce().unwrap()) }))
         .send(&server)
         .await;
 

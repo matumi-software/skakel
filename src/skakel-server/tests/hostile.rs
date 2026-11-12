@@ -170,7 +170,7 @@ async fn mounted() -> skakel_server::SkakelServer {
 }
 
 async fn open_from(server: &skakel_server::SkakelServer, from: IpAddr) -> (u16, serde_json::Value) {
-    let body = json!({ "clientName": "lab pc", "commitment": commit(&new_nonce()) });
+    let body = json!({ "clientName": "lab pc", "commitment": commit(&new_nonce().unwrap()) });
     let mut request = http::Request::post("/skakel/v2/pair")
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body.to_string()))

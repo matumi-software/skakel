@@ -429,6 +429,14 @@ impl Pairing {
         commitment: &str,
         from: IpAddr,
     ) -> Option<PairOpened> {
+        let server_nonce = match new_nonce() {
+            Ok(nonce) => nonce,
+            Err(error) => {
+                // Nothing safe to open a request with; the caller answers as for a full server.
+                log::error!("A pairing request was refused: {error}");
+                return None;
+            }
+        };
         let now = Instant::now();
         let key = util::address_key(from);
         let mut data = self.inner.data.lock().await;
@@ -456,7 +464,7 @@ impl Pairing {
             from: util::address_text(from),
             address_key: key,
             commitment: commitment.to_owned(),
-            server_nonce: new_nonce(),
+            server_nonce,
             poll_token: util::new_token(),
             requested: now,
             expires: now + LIFETIME,
@@ -498,11 +506,17 @@ impl Pairing {
             {
                 return Reveal::NotFound;
             }
-            let code = compute(
+            let Some(code) = compute(
                 &self.inner.state.fingerprint(),
                 client_nonce,
                 &request.server_nonce,
-            );
+            ) else {
+                // The server's own certificate has no usable fingerprint, so no code can be made.
+                log::error!(
+                    "The server's fingerprint is not 64 hex digits, so no pairing code can be made."
+                );
+                return Reveal::NotFound;
+            };
             data.forget_old_opens(now);
             if data.reveals.len() >= REVEALS_PER_WINDOW
                 || data.revealed_and_waiting(now) >= MAX_OPEN
@@ -653,7 +667,7 @@ mod tests {
         state: &ServerState,
         from: IpAddr,
     ) -> (PairOpened, String) {
-        let nonce = new_nonce();
+        let nonce = new_nonce().unwrap();
         let opened = pairing
             .open("lab pc", &commitment_of(&nonce), from)
             .await
@@ -662,7 +676,7 @@ mod tests {
             pairing.reveal(&opened.request_id, &nonce).await,
             Reveal::Revealed
         );
-        let code = compute(&state.fingerprint(), &nonce, &opened.server_nonce);
+        let code = compute(&state.fingerprint(), &nonce, &opened.server_nonce).unwrap();
         (opened, code)
     }
 
@@ -755,7 +769,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_reveal_with_the_wrong_nonce_or_twice_finds_nothing() {
         let (pairing, state) = pairing().await;
-        let nonce = new_nonce();
+        let nonce = new_nonce().unwrap();
         let opened = pairing
             .open("lab pc", &commitment_of(&nonce), addr(1))
             .await
@@ -780,7 +794,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_request_that_never_reveals_is_dropped_after_thirty_seconds() {
         let (pairing, _) = pairing().await;
-        let nonce = new_nonce();
+        let nonce = new_nonce().unwrap();
         let opened = pairing
             .open("lab pc", &commitment_of(&nonce), addr(1))
             .await
@@ -875,7 +889,7 @@ mod tests {
         for i in 0..10u8 {
             revealed(&pairing, &state, addr(i + 1)).await;
         }
-        let nonce = new_nonce();
+        let nonce = new_nonce().unwrap();
         assert!(
             pairing
                 .open("a", &commitment_of(&nonce), addr(50))
@@ -989,7 +1003,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn addresses_in_one_ipv6_64_share_the_per_address_open_budget() {
         let (pairing, _) = pairing().await;
-        let commitment = commitment_of(&new_nonce());
+        let commitment = commitment_of(&new_nonce().unwrap());
 
         for last in 1..=OPENS_PER_ADDRESS_PER_WINDOW {
             // Open requests per address are capped at three, so let each lapse unrevealed.
@@ -1022,7 +1036,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn opens_that_never_reveal_are_capped_for_the_whole_server() {
         let (pairing, _) = pairing().await;
-        let commitment = commitment_of(&new_nonce());
+        let commitment = commitment_of(&new_nonce().unwrap());
 
         for n in 0..MAX_UNREVEALED {
             let from = IpAddr::V4(Ipv4Addr::new(10, 1, (n / 200) as u8, (n % 200) as u8 + 1));
@@ -1068,7 +1082,7 @@ mod tests {
         let overview = tokio::time::timeout(Duration::from_secs(1), pairing.overview()).await;
         let other = tokio::time::timeout(
             Duration::from_secs(1),
-            pairing.open("lab pc", &commitment_of(&new_nonce()), addr(2)),
+            pairing.open("lab pc", &commitment_of(&new_nonce().unwrap()), addr(2)),
         )
         .await;
         assert!(overview.is_ok(), "overview waited for the store");
