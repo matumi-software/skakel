@@ -77,7 +77,7 @@ impl Bench {
     pub async fn server_with_token_lifetime(&mut self, lifetime: Duration) -> Server {
         let state = Arc::new(InMemoryStore::new());
         self.stores.insert("short-tokens".to_owned(), state.clone());
-        let server = start_with(state, 0, None, Some(lifetime)).await;
+        let server = start_with(state, 0, None, Some(lifetime), true).await;
         self.next_id += 1;
         let started = Server {
             id: self.next_id,
@@ -93,6 +93,34 @@ impl Bench {
             },
         );
         started
+    }
+
+    /// A server as an app builds it by default: it takes no pairing request until its app opens a
+    /// window (see [`Bench::open_pairing_window`]).
+    pub async fn server_with_pairing_closed(&mut self) -> Server {
+        let state = Arc::new(InMemoryStore::new());
+        self.stores.insert("closed".to_owned(), state.clone());
+        let server = start_with(state, 0, None, None, false).await;
+        self.next_id += 1;
+        let started = Server {
+            id: self.next_id,
+            port: server.local_addr().port(),
+            fingerprint: server.fingerprint(),
+        };
+        self.servers.insert(
+            started.id,
+            Running {
+                server,
+                store: "closed".to_owned(),
+                udp: None,
+            },
+        );
+        started
+    }
+
+    /// Opens the server's pairing window.
+    pub fn open_pairing_window(&self, server: &Server) {
+        self.running(server).open_pairing(Duration::from_secs(300));
     }
 
     /// A server that answers discovery on the UDP port.
@@ -251,7 +279,7 @@ impl Bench {
 }
 
 async fn start(store: Arc<InMemoryStore>, tcp: u16, udp: Option<u16>) -> SkakelServer {
-    start_with(store, tcp, udp, None).await
+    start_with(store, tcp, udp, None, true).await
 }
 
 async fn start_with(
@@ -259,6 +287,7 @@ async fn start_with(
     tcp: u16,
     udp: Option<u16>,
     token_lifetime: Option<Duration>,
+    pairing_open: bool,
 ) -> SkakelServer {
     let mut builder = SkakelServerBuilder::new("test-app", "1.2.3", store)
         .name("bench")
@@ -275,6 +304,10 @@ async fn start_with(
         .routes(Router::new().route("/app/whoami", get(whoami)));
     if let Some(lifetime) = token_lifetime {
         builder = builder.token_lifetime(lifetime);
+    }
+    if pairing_open {
+        // A server as the tests use it: nobody has to open a pairing window first.
+        builder = builder.pairing_always_open();
     }
     if let Some(udp) = udp {
         builder = builder

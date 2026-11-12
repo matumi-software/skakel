@@ -49,6 +49,8 @@ pub enum FailureKind {
     PairingDenied,
     /// The pairing request ran out before anyone typed the code.
     PairingExpired,
+    /// The server is not taking pairing requests: nobody has opened pairing on it.
+    PairingClosed,
     /// The call was made with arguments that cannot be sent: a path that leaves the server, a
     /// stream type with characters outside `a-z`, `0-9` and `-`, or an empty port id. A bug in the
     /// app, not something a person can mend.
@@ -73,11 +75,12 @@ impl FailureKind {
             Self::NotConnected => "notConnected",
             Self::PairingDenied => "pairingDenied",
             Self::PairingExpired => "pairingExpired",
+            Self::PairingClosed => "pairingClosed",
             Self::InvalidRequest => "invalidRequest",
         }
     }
 
-    fn message(self) -> &'static str {
+    pub(crate) fn message(self) -> &'static str {
         match self {
             Self::Unreachable => {
                 "Could not reach the server. Check the address and that the server is running."
@@ -107,6 +110,9 @@ impl FailureKind {
             Self::NotConnected => "Not connected to the server.",
             Self::PairingDenied => "The server refused the pairing request.",
             Self::PairingExpired => "Nobody typed the code on the server in time. Start again.",
+            Self::PairingClosed => {
+                "This server is not taking pairing requests. Open pairing on the server and try again."
+            }
             Self::InvalidRequest => "The request is not one this app can send.",
         }
     }

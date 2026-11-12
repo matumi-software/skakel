@@ -90,7 +90,7 @@ short `vcam`.
   following a server to a new address), the app's own gRPC calls over it, data streams, and the serial
   connection built on a stream. Storage is the app's.
 - **Server:** a server an app starts, on a port of its own or mounted on the app's listener, and
-  adds its own gRPC services, stream types and HTTPS routes to. The discovery answerer, pairing approval, OAuth tokens, revoking clients, the
+  adds its own gRPC services, stream types and HTTPS routes to. The discovery answerer, the pairing window and pairing approval, OAuth tokens, revoking clients, the
   certificate and its handover, the control and stream services, the token check in front of every
   gRPC service with the ending of a client's calls on revoke, rotate and stop, and the per-address
   limits. Storage is the app's, through a
