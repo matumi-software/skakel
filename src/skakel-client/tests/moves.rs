@@ -47,17 +47,17 @@ fn answer(port: u16, fingerprint: &str) -> DiscoveredServer {
 }
 
 fn browser_for(targets: &[u16]) -> Browser {
-    Browser::with_options(BrowserOptions {
-        port: 5240,
-        app_ids: Some(vec!["test-app".into()]),
-        probe_targets: Some(
-            targets
-                .iter()
-                .map(|udp| SocketAddr::from(([127, 0, 0, 1], *udp)))
-                .collect(),
-        ),
-        probe_interval: Duration::from_millis(300),
-    })
+    Browser::with_options(
+        BrowserOptions::new(5240)
+            .app_ids(vec!["test-app".into()])
+            .probe_targets(
+                targets
+                    .iter()
+                    .map(|udp| SocketAddr::from(([127, 0, 0, 1], *udp)))
+                    .collect(),
+            )
+            .probe_interval(Duration::from_millis(300)),
+    )
 }
 
 #[tokio::test]
@@ -72,10 +72,7 @@ async fn a_link_follows_its_server_to_another_port() {
         &first.address(),
         first.pins(),
         credentials,
-        ClientOptions {
-            browser: Some(browser.clone()),
-            ..ClientOptions::default()
-        },
+        ClientOptions::default().browser(browser.clone()),
     )
     .unwrap();
     let statuses = record_status(&link);
@@ -117,10 +114,7 @@ async fn a_link_does_not_follow_an_answer_that_copied_the_fingerprint() {
         &first.address(),
         first.pins(),
         credentials,
-        ClientOptions {
-            browser: Some(browser.clone()),
-            ..ClientOptions::default()
-        },
+        ClientOptions::default().browser(browser.clone()),
     )
     .unwrap();
     let statuses = record_status(&link);
@@ -157,10 +151,7 @@ async fn a_link_follows_its_server_past_an_address_that_copied_the_fingerprint()
         &first.address(),
         first.pins(),
         credentials,
-        ClientOptions {
-            browser: Some(browser.clone()),
-            ..ClientOptions::default()
-        },
+        ClientOptions::default().browser(browser.clone()),
     )
     .unwrap();
     let statuses = record_status(&link);
@@ -199,10 +190,7 @@ async fn a_link_that_is_refused_by_the_server_does_not_go_looking_for_another() 
         &server.address(),
         server.pins(),
         skakel_client::Credentials::new(credentials.client_id, "wrong"),
-        ClientOptions {
-            browser: Some(browser.clone()),
-            ..ClientOptions::default()
-        },
+        ClientOptions::default().browser(browser.clone()),
     )
     .unwrap();
     let statuses = record_status(&link);

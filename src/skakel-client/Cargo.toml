@@ -8,6 +8,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# What a crate's own tests, and an app's, need to stand in for the network: `Browser::add_for_test` and
+# `Link::following`. Not for production.
+test-util = []
+
 [dependencies]
 skakel-protocol.workspace = true
 skakel-discovery.workspace = true
@@ -40,6 +45,8 @@ log.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+# The tests use the test-util feature; a crate may enable a feature of itself this way.
+skakel-client = { path = ".", features = ["test-util"] }
 skakel-server = { path = "../skakel-server", version = "0.2.1", features = ["test-util"] }
 tokio = { workspace = true, features = ["io-util"] }
 # The test bench: a self-signed server of another version, a gRPC server that never answers, and

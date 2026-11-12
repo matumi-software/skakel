@@ -136,6 +136,7 @@ const EVENT_BACKLOG: usize = 64;
 
 /// Where a link stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LinkState {
     /// Not started, or stopped.
     Stopped,
@@ -153,6 +154,7 @@ pub enum LinkState {
 
 /// Where a link stands, and why when it is not connected.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LinkStatus {
     /// The state.
     pub state: LinkState,
@@ -623,8 +625,9 @@ impl Link {
         }
     }
 
-    /// The search for a server that moved, while one runs; for a test to wait on.
-    #[doc(hidden)]
+    /// The search for a server that moved, while one runs; for a test to wait on. Behind the
+    /// `test-util` feature.
+    #[cfg(feature = "test-util")]
     pub async fn following(&self) {
         loop {
             let task = {

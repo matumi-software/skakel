@@ -6,11 +6,10 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::within;
-use tonic::Code;
 use skakel_client::{
     Bytes, ClientOptions, Credentials, DataBits, ErrorCode, FailureKind, FlowControl, Frame,
     LineSettings, Link, OpenResult, Parity, Pins, SerialEvent, StopBits, StreamCloseReason,
-    StreamRefusal, StreamRefusalReason,
+    GrpcCode, StreamRefusalReason,
 };
 
 fn data(bytes: &'static [u8]) -> Option<Frame> {
@@ -67,7 +66,7 @@ async fn open_stream_opens_a_stream_that_carries_data_and_closes_normally() {
 
     let close = stream.close_info().unwrap();
     assert_eq!(close.reason, StreamCloseReason::Normal);
-    assert_eq!(close.code, Code::Ok);
+    assert_eq!(close.code, GrpcCode::Ok);
     assert_eq!(stream.recv().await, None);
 }
 
@@ -166,32 +165,32 @@ async fn open_stream_returns_a_refusal_with_its_reason_and_words() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, _) = linked(&mut bench, &server).await;
-    let cases: [(&str, &[u8], Code, StreamRefusalReason, &str); 4] = [
+    let cases: [(&str, &[u8], GrpcCode, StreamRefusalReason, &str); 4] = [
         (
             "echo",
             b"",
-            Code::InvalidArgument,
+            GrpcCode::InvalidArgument,
             StreamRefusalReason::BadTarget,
             "Say which target.",
         ),
         (
             "echo",
             b"missing",
-            Code::NotFound,
+            GrpcCode::NotFound,
             StreamRefusalReason::NoSuchTarget,
             "There is no target called missing.",
         ),
         (
             "echo",
             b"busy",
-            Code::FailedPrecondition,
+            GrpcCode::FailedPrecondition,
             StreamRefusalReason::InUse,
             "bench-2 holds busy.",
         ),
         (
             "nope",
             b"a",
-            Code::NotFound,
+            GrpcCode::NotFound,
             StreamRefusalReason::NoSuchType,
             "This server has no stream type 'nope'.",
         ),
@@ -201,13 +200,10 @@ async fn open_stream_returns_a_refusal_with_its_reason_and_words() {
         let opened = link.open_stream(stream_type, target).await.unwrap();
 
         assert!(!opened.is_open());
+        let refusal = opened.refusal().unwrap();
         assert_eq!(
-            opened.refusal(),
-            Some(&StreamRefusal {
-                code,
-                reason,
-                message: words.to_owned()
-            })
+            (refusal.code, refusal.reason, refusal.message.as_str()),
+            (code, reason, words)
         );
     }
 }
@@ -268,10 +264,7 @@ async fn open_stream_gives_up_when_the_server_does_not_answer_within_the_request
     let (link, _) = linked_with(
         &mut bench,
         &server,
-        ClientOptions {
-            request_timeout: Duration::from_secs(1),
-            ..ClientOptions::default()
-        },
+        ClientOptions::default().request_timeout(Duration::from_secs(1)),
     )
     .await;
 
@@ -326,7 +319,7 @@ async fn a_target_that_goes_away_ends_with_target_gone() {
 
     let close = within(Duration::from_secs(20), stream.closed()).await;
     assert_eq!(close.reason, StreamCloseReason::TargetGone);
-    assert_eq!(close.code, Code::NotFound);
+    assert_eq!(close.code, GrpcCode::NotFound);
     assert_eq!(close.description.as_deref(), Some("unplugged"));
     assert_eq!(
         close.message(),
@@ -351,7 +344,7 @@ async fn revoking_the_client_ends_its_streams_with_revoked() {
 
     let close = within(Duration::from_secs(20), stream.closed()).await;
     assert_eq!(close.reason, StreamCloseReason::Revoked);
-    assert_eq!(close.code, Code::Unauthenticated);
+    assert_eq!(close.code, GrpcCode::Unauthenticated);
 }
 
 #[tokio::test]
@@ -373,7 +366,7 @@ async fn a_server_that_ends_every_stream_ends_them_with_stopping() {
 
     let close = within(Duration::from_secs(20), stream.closed()).await;
     assert_eq!(close.reason, StreamCloseReason::ServerStopping);
-    assert_eq!(close.code, Code::Unavailable);
+    assert_eq!(close.code, GrpcCode::Unavailable);
 }
 
 #[tokio::test]
@@ -574,7 +567,7 @@ async fn a_port_that_reports_a_fault_ends_with_port_fault() {
 
     let close = within(Duration::from_secs(20), serial.closed()).await;
     assert_eq!(close.reason, StreamCloseReason::TypeDefined);
-    assert_eq!(close.code, Code::Aborted);
+    assert_eq!(close.code, GrpcCode::Aborted);
     assert_eq!(
         close.type_reason.as_deref(),
         Some(skakel_serial::PORT_FAULT)
@@ -595,7 +588,7 @@ async fn a_second_client_gets_in_use_and_an_unknown_port_no_such_target() {
     };
     assert_eq!(
         (busy.code, busy.reason),
-        (Code::FailedPrecondition, StreamRefusalReason::InUse)
+        (GrpcCode::FailedPrecondition, StreamRefusalReason::InUse)
     );
     assert_eq!(busy.message, "bench-2 holds busy.");
     let OpenResult::Refused(missing) = missing else {
@@ -603,7 +596,7 @@ async fn a_second_client_gets_in_use_and_an_unknown_port_no_such_target() {
     };
     assert_eq!(
         (missing.code, missing.reason),
-        (Code::NotFound, StreamRefusalReason::NoSuchTarget)
+        (GrpcCode::NotFound, StreamRefusalReason::NoSuchTarget)
     );
     assert_eq!(missing.message, "There is no port COM9.");
 }

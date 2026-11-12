@@ -40,6 +40,7 @@ const MAX_CLIENT_NAME_LENGTH: usize = 80;
 
 /// Why a pairing request could not be opened.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum PairingError {
     /// The client's name is empty once trimmed, or longer than 80 characters.
     InvalidClientName,
