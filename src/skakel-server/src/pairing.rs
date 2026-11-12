@@ -1076,7 +1076,7 @@ mod tests {
             .poll(&opened.request_id, Some(opened.poll_token.as_str()))
             .await
             .unwrap();
-        assert_eq!(poll.state, "approved");
+        assert_eq!(poll.state, PairState::Approved);
     }
 
     #[tokio::test(start_paused = true)]
