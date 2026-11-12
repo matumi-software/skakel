@@ -500,9 +500,20 @@ async fn token(
         return invalid_client();
     };
     let (access_token, expires_at) =
-        shared
+        match shared
             .state
-            .issue_token_for(&client_id, generation, shared.token_lifetime);
+            .issue_token_for(&client_id, generation, shared.token_lifetime)
+        {
+            Ok(token) => token,
+            Err(error) => {
+                // Nothing safe to make a token with: refuse, as for any server fault.
+                log::error!("A token was refused: {error}");
+                return problem(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "The server could not make a token. Try again later.",
+                );
+            }
+        };
     let expires_in = (expires_at - OffsetDateTime::now_utc())
         .whole_seconds()
         .clamp(0, ACCESS_TOKEN_LIFETIME.as_secs() as i64);

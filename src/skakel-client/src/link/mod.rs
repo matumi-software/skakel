@@ -43,8 +43,8 @@ use std::time::{Duration, Instant};
 use ::http::{Method, StatusCode};
 use skakel_proto::v2::control_service_client::ControlServiceClient;
 use skakel_proto::v2::{
-    Certificates, ClosingReason, ConnectRequest, ConnectResponse, HelloRequest,
-    NextCertificateReceived, connect_request, connect_response,
+    Certificates, ConnectRequest, ConnectResponse, HelloRequest, NextCertificateReceived,
+    connect_request, connect_response,
 };
 use skakel_serial::STREAM_TYPE;
 use skakel_wire::{
@@ -415,10 +415,7 @@ impl Link {
                     "The hello answer is missing the server or the client.",
                 ));
             }
-            Ok(SkakelHello {
-                server: hello.server,
-                client_id: hello.client_id,
-            })
+            Ok(hello.into())
         }
         .await;
         if let Err(error) = &result {

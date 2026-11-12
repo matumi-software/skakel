@@ -308,12 +308,8 @@ pub(super) async fn serve(
                     false
                 }
                 Ok(Some(ConnectResponse { message: Some(connect_response::Message::Closing(said)) })) => {
-                    let reason = match ClosingReason::try_from(said.reason) {
-                        Ok(ClosingReason::Revoked) => Reason::Revoked,
-                        Ok(ClosingReason::Rotated) => Reason::Rotated,
-                        // A reason this end does not know counts as stopping.
-                        _ => Reason::Stopping,
-                    };
+                    // A reason this end does not know counts as stopping.
+                    let reason = skakel_proto::closing_reason(said.reason);
                     log::info!("{} is closing the control call: {reason}", http::authority(address));
                     closing = Some(reason);
                     false

@@ -53,6 +53,28 @@ pub struct SkakelState {
     /// The certificate the server will present next, while a handover is under way.
     #[serde(default)]
     pub next_certificate: Option<NextCertificateRecord>,
+    /// A signing key an earlier build kept. Access tokens are no longer signed, so it is dead
+    /// weight and a private key at rest. It is read, never written, so the server can see that the
+    /// store it loaded from still holds it and save once without it.
+    #[serde(default, skip_serializing, rename = "signingKey")]
+    pub(crate) legacy_signing_key: Option<serde::de::IgnoredAny>,
+    /// The signing keys an earlier build had retired, read and dropped like `signing_key`.
+    #[serde(default, skip_serializing, rename = "retiredSigningKeys")]
+    pub(crate) legacy_retired_signing_keys: Option<serde::de::IgnoredAny>,
+}
+
+impl SkakelState {
+    /// Whether the state still carries signing keys of an earlier build.
+    pub(crate) fn held_signing_keys(&self) -> bool {
+        self.legacy_signing_key.is_some() || self.legacy_retired_signing_keys.is_some()
+    }
+
+    /// The same state without the signing keys of an earlier build.
+    pub(crate) fn without_signing_keys(mut self) -> Self {
+        self.legacy_signing_key = None;
+        self.legacy_retired_signing_keys = None;
+        self
+    }
 }
 
 /// A registered client. `Debug` leaves out the kept secret.
@@ -161,13 +183,6 @@ impl SkakelStore for InMemoryStore {
     }
 }
 
-/// Whether a saved state still has the signing keys an earlier build kept.
-fn held_signing_keys(bytes: &[u8]) -> bool {
-    serde_json::from_slice::<serde_json::Value>(bytes).is_ok_and(|value| {
-        value.get("signingKey").is_some() || value.get("retiredSigningKeys").is_some()
-    })
-}
-
 /// Keeps the state in one JSON file, written to a temporary file and renamed over the old one so
 /// a crash never leaves half a state.
 #[derive(Debug, Clone)]
@@ -192,18 +207,6 @@ impl SkakelStore for FileStore {
             };
             let state: SkakelState = serde_json::from_slice(&bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            if held_signing_keys(&bytes) {
-                // Access tokens are no longer signed, so the keys a server of an earlier build left
-                // in the file are dead weight and a private key at rest: write the file again
-                // without them. When that fails the next save drops them, so it is no reason to
-                // stop.
-                if let Err(error) = self.save(&state).await {
-                    log::warn!(
-                        "The state file {} still holds old signing keys and could not be rewritten: {error}",
-                        self.path.display()
-                    );
-                }
-            }
             Ok(Some(state))
         })
     }
@@ -221,7 +224,7 @@ impl SkakelStore for FileStore {
             let mut temporary = self.path.clone().into_os_string();
             temporary.push(format!(
                 ".{}.tmp",
-                crate::util::hex_lower(&crate::util::random::<6>())
+                crate::util::hex_lower(&crate::util::random::<6>().map_err(io::Error::other)?)
             ));
             let temporary = PathBuf::from(temporary);
 
@@ -266,6 +269,8 @@ mod tests {
                 private_key: "AA==".into(),
             },
             next_certificate: None,
+            legacy_signing_key: None,
+            legacy_retired_signing_keys: None,
         }
     }
 
@@ -281,8 +286,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_file_store_round_trips_and_makes_its_folder() {
-        let folder =
-            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        let folder = std::env::temp_dir().join(format!(
+            "skakel-store-{}",
+            crate::util::new_id("t").unwrap()
+        ));
         let store = FileStore::new(folder.join("nested").join("state.json"));
         assert_eq!(store.load().await.unwrap(), None);
 
@@ -296,8 +303,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_file_store_leaves_only_the_state_file_behind() {
-        let folder =
-            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        let folder = std::env::temp_dir().join(format!(
+            "skakel-store-{}",
+            crate::util::new_id("t").unwrap()
+        ));
         let store = FileStore::new(folder.join("state.json"));
 
         store.save(&state()).await.unwrap();
@@ -315,8 +324,10 @@ mod tests {
     #[tokio::test]
     async fn the_file_store_lets_only_its_own_account_read_the_state_even_over_an_open_file() {
         use std::os::unix::fs::PermissionsExt;
-        let folder =
-            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        let folder = std::env::temp_dir().join(format!(
+            "skakel-store-{}",
+            crate::util::new_id("t").unwrap()
+        ));
         std::fs::create_dir_all(&folder).unwrap();
         let path = folder.join("state.json");
         std::fs::write(&path, b"{}").unwrap();
@@ -345,8 +356,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_file_store_says_so_when_the_file_is_not_json() {
-        let folder =
-            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        let folder = std::env::temp_dir().join(format!(
+            "skakel-store-{}",
+            crate::util::new_id("t").unwrap()
+        ));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("state.json"), b"not json").unwrap();
 
@@ -375,36 +388,18 @@ mod tests {
         assert!(!written.contains("SECRETKEY") && !written.contains("OLDKEY"));
     }
 
-    #[tokio::test]
-    async fn the_file_store_drops_signing_keys_from_the_file_it_loads() {
-        let folder = std::env::temp_dir().join(format!(
-            "skakel-store-legacy-{}",
-            crate::util::hex_lower(&crate::util::random::<6>())
-        ));
-        std::fs::create_dir_all(&folder).unwrap();
-        let path = folder.join("state.json");
-        std::fs::write(
-            &path,
-            r#"{
-                "clients": [],
-                "signingKey": {"keyId": "skakel-1", "privateKey": "SECRETKEY", "createdAt": "2026-11-01T00:00:00Z"},
-                "retiredSigningKeys": [{"keyId": "skakel-0", "privateKey": "OLDKEY", "createdAt": "2026-10-01T00:00:00Z"}],
-                "certificate": {"certificate": "AA==", "privateKey": "AA=="}
-            }"#,
-        )
-        .unwrap();
+    #[test]
+    fn a_state_with_signing_keys_says_so_and_is_clean_without_them() {
+        let old = r#"{
+            "clients": [],
+            "signingKey": {"keyId": "skakel-1"},
+            "certificate": {"certificate": "AA==", "privateKey": "AA=="}
+        }"#;
 
-        let loaded = FileStore::new(&path).load().await.unwrap().unwrap();
+        let state: SkakelState = serde_json::from_str(old).unwrap();
 
-        let on_disk = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            !on_disk.contains("SECRETKEY") && !on_disk.contains("OLDKEY"),
-            "{on_disk}"
-        );
-        assert_eq!(
-            serde_json::from_str::<SkakelState>(&on_disk).unwrap(),
-            loaded
-        );
-        let _ = std::fs::remove_dir_all(folder);
+        assert!(state.held_signing_keys());
+        assert!(!state.without_signing_keys().held_signing_keys());
+        assert!(!super::tests::state().held_signing_keys());
     }
 }

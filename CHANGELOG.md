@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `skakel-server`: the server no longer panics when the operating system has no random bytes. A
+  request that needs them is refused and the error is logged: a pairing open is answered as for a
+  full server, the token endpoint answers 500, and `register_client` and `rotate_secret` return the
+  new `ServerError::Random`. `skakel-wire` has `pairing::random_bytes` and `RandomError::new`.
+- `skakel-server`: any `SkakelStore` that still holds the signing keys of an earlier build is saved
+  once without them when the server starts, not only `FileStore`; a failed save is logged and the
+  next save drops them. `SkakelState` carries them as a read-only field for that, so a custom store
+  that serialises the state with serde needs nothing.
+- `skakel-proto` depends on `skakel-wire` and converts between its messages and `skakel-wire`'s
+  types: `ClosingReason` and `Reason` (`From` both ways, and `closing_reason` for the number in a
+  `Closing` message), `HelloResponse` and `SkakelHello`. `SkakelHello` stays: it is what an app
+  gets from `Link::hello` and can pass on as JSON.
 - `skakel-protocol`, `skakel-discovery` and `skakel-pairing` are now one crate, `skakel-wire`. They
   released in lockstep and were each a few hundred lines of plain data, so an app took two or three
   crates for one idea. An app changes its Cargo dependency and its `use` paths (the code is moved,

@@ -5,6 +5,7 @@ use std::fmt;
 use std::io;
 
 use skakel_wire::discovery::MAX_APP_VERSION_LENGTH;
+use skakel_wire::pairing::RandomError;
 
 use crate::crypto::CryptoError;
 
@@ -33,6 +34,8 @@ pub enum ServerError {
     Options(Vec<OptionProblem>),
     /// The TCP port could not be bound.
     Bind(io::Error),
+    /// The operating system had no random bytes to make a secret, an id or a token with.
+    Random(RandomError),
 }
 
 impl fmt::Display for ServerError {
@@ -57,6 +60,7 @@ impl fmt::Display for ServerError {
                 Ok(())
             }
             Self::Bind(error) => write!(f, "could not listen: {error}"),
+            Self::Random(error) => write!(f, "{error}"),
         }
     }
 }
@@ -68,6 +72,7 @@ impl Error for ServerError {
             Self::Crypto(error) => Some(error),
             Self::State(error) => Some(error),
             Self::Tls(error) => Some(error.as_ref()),
+            Self::Random(error) => Some(error),
             _ => None,
         }
     }
@@ -164,5 +169,11 @@ impl fmt::Display for OptionProblem {
                 "Give the address the app's listener is bound to, with the port it bound, for discovery to announce.",
             ),
         }
+    }
+}
+
+impl From<RandomError> for ServerError {
+    fn from(error: RandomError) -> Self {
+        Self::Random(error)
     }
 }

@@ -429,10 +429,17 @@ impl Pairing {
         commitment: &str,
         from: IpAddr,
     ) -> Option<PairOpened> {
-        let server_nonce = match new_nonce() {
-            Ok(nonce) => nonce,
+        // Everything random the request needs, before anything is counted: with no random bytes
+        // there is nothing safe to open a request with, and the caller answers as for a full
+        // server.
+        let made = new_nonce().and_then(|nonce| {
+            let id = util::random::<16>()?;
+            let poll_token = util::new_token()?;
+            Ok((nonce, util::hex_upper(&id), poll_token))
+        });
+        let (server_nonce, request_id, poll_token) = match made {
+            Ok(made) => made,
             Err(error) => {
-                // Nothing safe to open a request with; the caller answers as for a full server.
                 log::error!("A pairing request was refused: {error}");
                 return None;
             }
@@ -459,13 +466,13 @@ impl Pairing {
 
         let wall = OffsetDateTime::now_utc();
         let request = Request {
-            id: util::hex_upper(&util::random::<16>()),
+            id: request_id,
             client_name: client_name.to_owned(),
             from: util::address_text(from),
             address_key: key,
             commitment: commitment.to_owned(),
             server_nonce,
-            poll_token: util::new_token(),
+            poll_token,
             requested: now,
             expires: now + LIFETIME,
             requested_at: wall,
@@ -1111,6 +1118,28 @@ mod tests {
         assert_eq!(
             pairing.approve(&opened.request_id, &code).await.unwrap(),
             Approval::Approved
+        );
+    }
+
+    #[tokio::test]
+    async fn no_random_bytes_refuses_a_request_as_for_a_full_server_and_counts_nothing() {
+        let (pairing, _state) = pairing().await;
+        let nonce = new_nonce().unwrap();
+
+        let refused = {
+            let _guard = crate::util::failing::random_fails();
+            pairing
+                .open("lab pc", &commitment_of(&nonce), addr(1))
+                .await
+        };
+
+        assert!(refused.is_none());
+        // Nothing was counted against the address, so it can still open its full share.
+        assert!(
+            pairing
+                .open("lab pc", &commitment_of(&nonce), addr(1))
+                .await
+                .is_some()
         );
     }
 }
