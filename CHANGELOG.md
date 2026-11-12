@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Nothing yet. `main` is at the v0.2.1 tag.
+
+## 0.2.1 (2026-11-12)
+
+This release replaces the first 0.2.1 build, which was withdrawn the same day: it carries the
+fixes of an architecture and code review on top of it, and several of them break the public API of
+the crates (listed below), so an app that took the first build moves once, here. The wire is
+unchanged: protocol version 2 as 0.2.0 speaks it.
+
 - `skakel-server`: a token or pairing request whose body stops arriving no longer holds its connection
   for as long as the client likes: the body has 10 seconds to arrive in full, and a request that
   misses that gets 400. A body over the message limit on `ControlService.Hello` now ends with
@@ -116,7 +125,6 @@
   for 30 seconds. Discovery datagrams outside the answer window are dropped before they are parsed.
   Access tokens are marked sensitive in headers, and one that cannot be a header value is refused
   when it is issued. `StreamConnection::closed` says it waits for unread frames.
-Nothing yet. `main` is at the v0.2.1 tag.
 - `skakel-pairing`: `PairPoll.state` is a `PairState` (`Waiting`, `Approved`, `Denied`, `Expired`, and
   `Unknown(String)` for a word added later) instead of a `String`; the JSON is the same words.
   `PairPoll::state` takes anything that converts into a `PairState`. `PairPoll` and `PairOpened`
@@ -128,9 +136,6 @@ Nothing yet. `main` is at the v0.2.1 tag.
   `matches_any_der`). `fingerprints::are_equal` no longer takes two strings with no hex digit, such
   as `":::"`, for equal. It compares without the constant-time step, since fingerprints are public.
 - Pairing wording now says `/skakel/v2/` where it still said `/skakel/v1/`. The wire is unchanged.
-
-## 0.2.1 (2026-11-12)
-
 - `skakel-server`: `SkakelServer::start_discovery` and `stop_discovery` start and stop answering discovery
   probes while the server runs, so an app whose role changes at runtime answers only while it is a
   server. Stopping releases the UDP port before it returns, and both are safe to repeat. Nothing
