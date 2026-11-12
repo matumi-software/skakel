@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use skakel_pairing::{
-    PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpened, PairPoll, compute, is_code,
-    matches, new_nonce,
+    PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpened, PairPoll, PairState,
+    compute, is_code, matches, new_nonce,
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -538,7 +538,7 @@ impl Pairing {
             changed = request.lapse(now);
             if request.stage == Stage::Approved {
                 let credentials = PairPoll {
-                    state: PAIR_APPROVED.to_owned(),
+                    state: PairState::Approved,
                     client_id: request.client_id.clone(),
                     client_secret: request.client_secret.take(),
                 };
@@ -669,7 +669,7 @@ mod tests {
         let token = Some(opened.poll_token.as_str());
         assert_eq!(
             pairing.poll(&opened.request_id, token).await.unwrap().state,
-            "waiting"
+            PairState::Waiting
         );
         assert_eq!(pairing.overview().await.requests.len(), 1);
 
@@ -679,7 +679,7 @@ mod tests {
         );
 
         let poll = pairing.poll(&opened.request_id, token).await.unwrap();
-        assert_eq!(poll.state, "approved");
+        assert_eq!(poll.state, PairState::Approved);
         let (id, secret) = (poll.client_id.unwrap(), poll.client_secret.unwrap());
         assert_eq!(state.validate(&id, &secret), Some(1));
         assert_eq!(state.find(&id).unwrap().name, "lab pc");
@@ -726,7 +726,7 @@ mod tests {
         let token = Some(opened.poll_token.as_str());
         assert_eq!(
             pairing.poll(&opened.request_id, token).await.unwrap().state,
-            "denied"
+            PairState::Denied
         );
         tokio::time::advance(Duration::from_secs(16)).await;
         assert!(pairing.overview().await.requests.is_empty());
@@ -742,7 +742,7 @@ mod tests {
         let token = Some(opened.poll_token.as_str());
         assert_eq!(
             pairing.poll(&opened.request_id, token).await.unwrap().state,
-            "denied"
+            PairState::Denied
         );
         assert!(!pairing.deny(&opened.request_id).await);
         assert!(!pairing.deny("nobody").await);
@@ -803,7 +803,7 @@ mod tests {
         let token = Some(opened.poll_token.as_str());
         assert_eq!(
             pairing.poll(&opened.request_id, token).await.unwrap().state,
-            "expired"
+            PairState::Expired
         );
         assert_eq!(
             pairing.approve(&opened.request_id, &code).await.unwrap(),

@@ -12,8 +12,7 @@ use std::time::{Duration, SystemTime};
 
 use reqwest::{StatusCode, Url};
 use skakel_pairing::{
-    PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpenRequest, PairOpened, PairPoll,
-    PairRevealRequest, commit, compute, new_nonce,
+    PairOpenRequest, PairOpened, PairPoll, PairRevealRequest, PairState, commit, compute, new_nonce,
 };
 use skakel_protocol::{PAIR_PATH, PAIR_TOKEN_HEADER};
 
@@ -313,9 +312,9 @@ impl PairingClient {
                 _ => {}
             }
             let poll: PairPoll = http::read_json(response).await?;
-            match poll.state.as_str() {
-                PAIR_WAITING => {}
-                PAIR_APPROVED => match (poll.client_id, poll.client_secret) {
+            match poll.state {
+                PairState::Waiting => {}
+                PairState::Approved => match (poll.client_id, poll.client_secret) {
                     (Some(id), Some(secret)) if !id.trim().is_empty() && !secret.is_empty() => {
                         self.finish();
                         log::info!("Paired with {}", self.server_name);
@@ -323,17 +322,18 @@ impl PairingClient {
                     }
                     _ => return Err(bad_answer("The poll approved without credentials.")),
                 },
-                PAIR_DENIED => {
+                PairState::Denied => {
                     self.finish();
                     return Err(Error::of(FailureKind::PairingDenied));
                 }
-                PAIR_EXPIRED => {
+                PairState::Expired => {
                     self.finish();
                     return Err(Error::of(FailureKind::PairingExpired));
                 }
                 other => {
                     return Err(bad_answer(format!(
-                        "The poll answered the state '{other}'."
+                        "The poll answered the state '{}'.",
+                        other.as_str()
                     )));
                 }
             }

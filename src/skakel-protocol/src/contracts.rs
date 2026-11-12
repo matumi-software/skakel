@@ -1,5 +1,5 @@
-//! The JSON bodies the protocol defines outside pairing, info and a refusal's problem body, and what
-//! `ControlService.Hello` answers.
+//! The JSON bodies the protocol defines outside pairing: info, and what `ControlService.Hello`
+//! answers.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,25 +32,6 @@ pub struct SkakelHello {
     pub server: String,
     /// The client the token was issued to.
     pub client_id: String,
-}
-
-/// The body of a refusal, sent as `application/problem+json` (RFC 9457). `detail` is written for a
-/// person to read.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SkakelProblem {
-    /// A URI for the kind of problem, often `about:blank` or a link to the HTTP status. `type` on
-    /// the wire.
-    #[serde(rename = "type", default)]
-    pub kind: Option<String>,
-    /// A short summary of the kind of problem.
-    #[serde(default)]
-    pub title: Option<String>,
-    /// The HTTP status code.
-    #[serde(default)]
-    pub status: Option<i32>,
-    /// What went wrong this time, for a person.
-    #[serde(default)]
-    pub detail: Option<String>,
 }
 
 #[cfg(test)]
@@ -100,45 +81,6 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<SkakelHello>(r#"{"server":"pi-lab","clientId":"c1"}"#).unwrap(),
             hello
-        );
-    }
-
-    #[test]
-    fn problem_reads_the_fields_that_are_there() {
-        let problem: SkakelProblem = serde_json::from_str(
-            r#"{"type":"about:blank","title":"Conflict","status":409,"detail":"In use"}"#,
-        )
-        .unwrap();
-
-        assert_eq!(problem.kind.as_deref(), Some("about:blank"));
-        assert_eq!(problem.status, Some(409));
-        assert_eq!(problem.detail.as_deref(), Some("In use"));
-    }
-
-    #[test]
-    fn problem_takes_fields_that_are_missing_or_null() {
-        let problem: SkakelProblem =
-            serde_json::from_str(r#"{"status":404,"title":null}"#).unwrap();
-
-        assert_eq!(
-            problem,
-            SkakelProblem {
-                status: Some(404),
-                ..SkakelProblem::default()
-            }
-        );
-    }
-
-    #[test]
-    fn problem_writes_type_for_its_kind() {
-        let problem = SkakelProblem {
-            kind: Some("about:blank".into()),
-            ..SkakelProblem::default()
-        };
-
-        assert_eq!(
-            serde_json::to_string(&problem).unwrap(),
-            r#"{"type":"about:blank","title":null,"status":null,"detail":null}"#
         );
     }
 }

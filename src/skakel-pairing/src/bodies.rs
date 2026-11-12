@@ -1,5 +1,7 @@
 //! The JSON bodies of the pairing calls.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -15,7 +17,7 @@ pub const PAIR_DENIED: &str = "denied";
 /// The request ran out of time.
 pub const PAIR_EXPIRED: &str = "expired";
 
-/// Opens a pairing request: `POST /skakel/v1/pair`.
+/// Opens a pairing request: `POST /skakel/v2/pair`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairOpenRequest {
@@ -27,8 +29,9 @@ pub struct PairOpenRequest {
     pub commitment: Option<String>,
 }
 
-/// What the server answers to an open. Only the opener ever sees the poll token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What the server answers to an open. Only the opener ever sees the poll token. `Debug` leaves
+/// the poll token and the server's nonce out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairOpened {
     /// The request's handle, in the paths that follow.
@@ -42,7 +45,7 @@ pub struct PairOpened {
     pub poll_token: String,
 }
 
-/// Reveals the client's nonce: `POST /skakel/v1/pair/{requestId}/reveal`.
+/// Reveals the client's nonce: `POST /skakel/v2/pair/{requestId}/reveal`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairRevealRequest {
@@ -51,13 +54,12 @@ pub struct PairRevealRequest {
     pub client_nonce: Option<String>,
 }
 
-/// What a poll answers: `GET /skakel/v1/pair/{requestId}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What a poll answers: `GET /skakel/v2/pair/{requestId}`. `Debug` leaves the client's secret out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairPoll {
-    /// One of [`PAIR_WAITING`], [`PAIR_APPROVED`], [`PAIR_DENIED`] and [`PAIR_EXPIRED`]. Kept as
-    /// text so a state added later still reads.
-    pub state: String,
+    /// Where the request stands. A state added later reads as [`PairState::Unknown`].
+    pub state: PairState,
     /// Once approved: the client's ID on this server.
     #[serde(default)]
     pub client_id: Option<String>,
@@ -68,12 +70,89 @@ pub struct PairPoll {
 
 impl PairPoll {
     /// A poll that carries a state and nothing else.
-    pub fn state(state: &str) -> Self {
+    pub fn state(state: impl Into<PairState>) -> Self {
         Self {
-            state: state.to_owned(),
+            state: state.into(),
             client_id: None,
             client_secret: None,
         }
+    }
+}
+
+impl fmt::Debug for PairOpened {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PairOpened")
+            .field("request_id", &self.request_id)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for PairPoll {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PairPoll")
+            .field("state", &self.state)
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<hidden>"),
+            )
+            .finish()
+    }
+}
+
+/// Where a pairing request stands, as a poll says it. On the wire it is the lowercase word of the
+/// protocol ([`PAIR_WAITING`] and the others); a word this version does not know is kept in
+/// [`PairState::Unknown`], so a state added later still reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PairState {
+    /// Waiting for a person to type the code on the server.
+    Waiting,
+    /// The code matched. The poll that sees this carries the credentials, once.
+    Approved,
+    /// A person refused it, or the code was typed wrong three times.
+    Denied,
+    /// The request ran out of time.
+    Expired,
+    /// A word this version does not know.
+    Unknown(String),
+}
+
+impl PairState {
+    /// The word the protocol writes for the state.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Waiting => PAIR_WAITING,
+            Self::Approved => PAIR_APPROVED,
+            Self::Denied => PAIR_DENIED,
+            Self::Expired => PAIR_EXPIRED,
+            Self::Unknown(word) => word,
+        }
+    }
+}
+
+impl From<&str> for PairState {
+    fn from(word: &str) -> Self {
+        match word {
+            PAIR_WAITING => Self::Waiting,
+            PAIR_APPROVED => Self::Approved,
+            PAIR_DENIED => Self::Denied,
+            PAIR_EXPIRED => Self::Expired,
+            other => Self::Unknown(other.to_owned()),
+        }
+    }
+}
+
+impl Serialize for PairState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for PairState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|word| Self::from(word.as_str()))
     }
 }
 
@@ -165,8 +244,56 @@ mod tests {
     #[test]
     fn poll_writes_the_credentials_as_null_until_approved() {
         assert_eq!(
-            serde_json::to_string(&PairPoll::state(PAIR_WAITING)).unwrap(),
+            serde_json::to_string(&PairPoll::state(PairState::Waiting)).unwrap(),
             r#"{"state":"waiting","clientId":null,"clientSecret":null}"#
+        );
+    }
+
+    #[test]
+    fn debug_leaves_out_the_secrets() {
+        let opened = PairOpened {
+            request_id: "r1".into(),
+            server_nonce: "the-server-nonce".into(),
+            expires_at: datetime!(2026-11-06 12:30:45 UTC),
+            poll_token: "the-poll-token".into(),
+        };
+        let poll = PairPoll {
+            state: PairState::Approved,
+            client_id: Some("c1".into()),
+            client_secret: Some("the-client-secret".into()),
+        };
+
+        let shown = format!("{opened:?} {poll:?}");
+
+        for secret in ["the-server-nonce", "the-poll-token", "the-client-secret"] {
+            assert!(!shown.contains(secret), "{shown}");
+        }
+        assert!(shown.contains("r1") && shown.contains("c1"), "{shown}");
+    }
+
+    #[test]
+    fn a_state_is_its_word_and_a_word_not_known_is_kept() {
+        for (state, word) in [
+            (PairState::Waiting, "waiting"),
+            (PairState::Approved, "approved"),
+            (PairState::Denied, "denied"),
+            (PairState::Expired, "expired"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&state).unwrap(),
+                format!("\"{word}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<PairState>(&format!("\"{word}\"")).unwrap(),
+                state
+            );
+        }
+        let later: PairPoll = serde_json::from_str(r#"{"state":"locked"}"#).unwrap();
+
+        assert_eq!(later.state, PairState::Unknown("locked".into()));
+        assert_eq!(
+            serde_json::to_string(&later).unwrap(),
+            r#"{"state":"locked","clientId":null,"clientSecret":null}"#
         );
     }
 
@@ -179,6 +306,7 @@ mod tests {
 
         assert_eq!(approved.client_id.as_deref(), Some("c1"));
         assert_eq!(approved.client_secret.as_deref(), Some("s3"));
-        assert_eq!(bare, PairPoll::state(PAIR_DENIED));
+        assert_eq!(bare, PairPoll::state(PairState::Denied));
+        assert_eq!(PairPoll::state(PAIR_DENIED), bare);
     }
 }

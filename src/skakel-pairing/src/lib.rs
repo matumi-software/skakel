@@ -17,7 +17,7 @@ mod bodies;
 
 pub use bodies::{
     PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpenRequest, PairOpened, PairPoll,
-    PairRevealRequest,
+    PairRevealRequest, PairState,
 };
 
 use base64::Engine;
