@@ -32,6 +32,8 @@ pub fn clean(text: &str, max_length: usize) -> String {
         }
         clean.push(c);
     }
+    // A cut inside the text can leave the space before it at the end.
+    clean.truncate(clean.trim_end().len());
     clean
 }
 
@@ -73,6 +75,15 @@ mod tests {
         );
         assert_eq!(clean("", 63), "");
         assert_eq!(clean("abc", 0), "");
+    }
+
+    #[test]
+    fn clean_leaves_no_space_at_the_end_after_a_cut() {
+        assert_eq!(clean("abc   def", 5), "abc");
+        assert_eq!(clean("abc   def", 6), "abc");
+        assert_eq!(clean("abc d", 4), "abc");
+        assert_eq!(clean("abc   def", 7), "abc   d");
+        assert_eq!(clean("abc\u{3000}\u{3000}def", 4), "abc");
     }
 
     #[test]

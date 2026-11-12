@@ -66,6 +66,17 @@
   Access tokens are marked sensitive in headers, and one that cannot be a header value is refused
   when it is issued. `StreamConnection::closed` says it waits for unread frames.
 Nothing yet. `main` is at the v0.2.1 tag.
+- `skakel-pairing`: `PairPoll.state` is a `PairState` (`Waiting`, `Approved`, `Denied`, `Expired`, and
+  `Unknown(String)` for a word added later) instead of a `String`; the JSON is the same words.
+  `PairPoll::state` takes anything that converts into a `PairState`. `PairPoll` and `PairOpened`
+  no longer print the client secret, the poll token or the server nonce through `Debug`.
+- `skakel-discovery`: `net::probe`, `net::serve_one`, `net::Found` and `net::can_answer` are gone; no
+  Skakel crate used them. `net::should_answer` stays. `AnswerError` is `#[non_exhaustive]`. `clean`
+  no longer leaves a space at the end of a name it cut.
+- `skakel-protocol`: `SkakelProblem` and `fingerprints::matches_der` are gone (use
+  `matches_any_der`). `fingerprints::are_equal` no longer takes two strings with no hex digit, such
+  as `":::"`, for equal. It compares without the constant-time step, since fingerprints are public.
+- Pairing wording now says `/skakel/v2/` where it still said `/skakel/v1/`. The wire is unchanged.
 
 ## 0.2.1 (2026-11-12)
 

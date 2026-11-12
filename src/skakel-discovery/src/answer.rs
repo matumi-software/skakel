@@ -29,6 +29,7 @@ pub struct DiscoveryAnswer {
 
 /// Why [`create_answer`] refused: the answer would be one a client drops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AnswerError {
     /// The fingerprint is not 64 hex digits.
     Fingerprint,

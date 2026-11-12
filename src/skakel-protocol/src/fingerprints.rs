@@ -4,7 +4,6 @@
 //! A certificate is its DER bytes here; parsing certificates is the TLS library's job.
 
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 
 /// How many hex digits a fingerprint has.
 pub const HEX_DIGITS: usize = 64;
@@ -40,18 +39,12 @@ pub fn normalize(text: &str) -> Option<String> {
     Some(pairs.join(":"))
 }
 
-/// True when both are the same fingerprint, by their hex digits alone, in constant time. Empty and
-/// blank text matches nothing.
+/// True when both are the same fingerprint, by their hex digits alone. Text with no hex digit at
+/// all (empty, blank, only colons) matches nothing, not even itself. Fingerprints are public, so
+/// the comparison does not need to take constant time.
 pub fn are_equal(a: &str, b: &str) -> bool {
-    if a.trim().is_empty() || b.trim().is_empty() {
-        return false;
-    }
-    digits(a).ct_eq(&digits(b)).into()
-}
-
-/// True when the certificate (its DER bytes) has the pinned fingerprint.
-pub fn matches_der(certificate: &[u8], pinned: &str) -> bool {
-    are_equal(&of_der(certificate), pinned)
+    let mut left = digits(a).peekable();
+    left.peek().is_some() && left.eq(digits(b))
 }
 
 /// True when the certificate has any of the pinned fingerprints. Empty ones match nothing.
@@ -61,12 +54,11 @@ pub fn matches_any_der<'a>(certificate: &[u8], pinned: impl IntoIterator<Item = 
 }
 
 /// The hex digits of a fingerprint, uppercase, with everything else left out.
-fn digits(fingerprint: &str) -> Vec<u8> {
+fn digits(fingerprint: &str) -> impl Iterator<Item = u8> + '_ {
     fingerprint
         .bytes()
         .filter(u8::is_ascii_hexdigit)
         .map(|b| b.to_ascii_uppercase())
-        .collect()
 }
 
 #[cfg(test)]
@@ -124,12 +116,23 @@ mod tests {
     }
 
     #[test]
+    fn are_equal_refuses_text_with_no_hex_digits() {
+        assert!(!are_equal(":::", ":::"));
+        assert!(!are_equal("zzz", "xxx"));
+        assert!(!are_equal("zzz", "zzz"));
+        assert!(!are_equal(&vec!["AB"; 32].join(":"), "::"));
+    }
+
+    #[test]
     fn matches_takes_the_certificate_s_own_fingerprint_and_no_other() {
         let certificate = certificate();
         let lower = FINGERPRINT.to_ascii_lowercase().replace(':', "");
 
-        assert!(matches_der(&certificate, &lower));
-        assert!(!matches_der(&certificate, &vec!["00"; 32].join(":")));
+        assert!(matches_any_der(&certificate, [lower.as_str()]));
+        assert!(!matches_any_der(
+            &certificate,
+            [vec!["00"; 32].join(":").as_str()]
+        ));
         assert!(matches_any_der(&certificate, ["", FINGERPRINT]));
         assert!(!matches_any_der(&certificate, [""]));
         assert!(!matches_any_der(&certificate, []));

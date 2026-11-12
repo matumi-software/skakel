@@ -5,9 +5,9 @@
 //! with a [`DiscoveryAnswer`]. A probe is padded to [`PROBE_SIZE`] and an answer is never larger
 //! than the probe, so nobody can use a server to multiply traffic aimed at someone else.
 //!
-//! The packets are plain bytes. [`net`] adds the few lines of `std::net::UdpSocket` code that both
-//! sides need, and nothing more: which network interfaces to broadcast on, the list of servers
-//! found and the limits on it belong to the client.
+//! The packets are plain bytes. [`net`] holds the rule for what a server answers. Sockets, which
+//! network interfaces to broadcast on, the list of servers found and the limits on it belong to
+//! the server and the client.
 
 mod answer;
 mod clean;
