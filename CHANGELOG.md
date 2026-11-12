@@ -33,7 +33,7 @@ Summary for an app:
   to end it. `pairing_window()` says whether it is open and for how long, and a new
   `ServerEvent::PairingWindow` tells the app when it opens or closes (the window runs out by itself).
   An unattended server keeps today's behaviour with `SkakelServerBuilder::pairing_always_open()`.
-  Outside the window `POST /skakel/v2/pair` gets 403 with the problem `reason` `pairing-closed`,
+  Outside the window `POST /skakel/v3/pair` gets 403 with the problem `reason` `pairing-closed`,
   reads no body and spends no pairing limit; requests already open carry on. The client reports it
   as the new `PairingError::Closed` and `FailureKind::PairingClosed` with the fixed wording "This
   server is not taking pairing requests. Open pairing on the server and try again." Apps with a test
