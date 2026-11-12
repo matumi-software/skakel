@@ -13,6 +13,34 @@
   clean a name the same way. `InMemoryStore::state` and `SkakelServerBuilder::token_lifetime` are
   test helpers and are there only with the new `test-util` feature. The crate forbids unsafe code and
   warns on undocumented public items.
+- `skakel-client`: breaking changes to the public API, together, so apps move once:
+  - reqwest is gone. Plain HTTPS runs over hyper's HTTP/1.1 client on the same pinned connector as
+    gRPC. `Link::request` takes a `RequestBuilder` (`header`, `body`, `json`, `timeout`) and returns
+    a `Response` (`status`, `headers`, `bytes`, `text`, `json`) of the client's own, read whole up to
+    16 MiB. `Method` and `StatusCode` are the `http` crate's, `Url` the `url` crate's.
+  - `pub use tonic` is gone: an app that builds tonic clients on `Link::channel` names `tonic` 0.14
+    itself. `StreamClose::code` and `StreamRefusal::code` are the new `GrpcCode`, not tonic's `Code`.
+  - Callbacks are gone: `on_status_changed`, `on_pins_changed` and `on_address_changed` are replaced
+    by `Link::events` (a `LinkEvent` for each change, in order), `watch_status`, `watch_address` and
+    `watch_pins` (the latest value), and `Link::set_pin_store` with a `PinStore`, which the link
+    waits for before it tells the server it has the next certificate. A store that panics counts as
+    not saved and cannot take the link down. `Browser::watch` and `SerialConnection::events` return
+    the client's own `StateWatch` and `Events` instead of tokio's receivers; `SerialConnection` also
+    has `watch_line_settings` and `watch_modem_status`, and `recv` gives `Bytes`.
+  - `StreamConnection::into_io` gives a `StreamIo`, a stream's data as tokio's `AsyncRead` and
+    `AsyncWrite`.
+  - `Clock` has a new method, `instant`, a monotonic time; token expiry, pacing and the pairing wait
+    use it, so a change of the system's clock no longer moves them.
+  - `ClientOptions` and `BrowserOptions` are `#[non_exhaustive]` with builder methods; the enums and
+    result structs an app matches on (`FailureKind`, `LinkState`, `LinkStatus`, `Frame`,
+    `StreamCloseReason`, `StreamClose`, `StreamRefusalReason`, `StreamRefusal`, `PairingError`,
+    `SerialEvent`, `SerialChange`) are `#[non_exhaustive]`, so an app needs a wildcard arm.
+  - Internals are no longer public: `Error::new`, `Error::with_source`, `Error::of`, `Failure::of`,
+    `Failure::version_mismatch`, and the `from_status` and constructor functions of `StreamClose` and
+    `StreamRefusal`. `Browser::add_for_test` and `Link::following` are behind the `test-util`
+    feature. `HandlerError` is `StoreError`.
+  - `Token` no longer prints its value in `Debug`. `#![warn(missing_docs)]`, and the crate docs have
+    a compiled example.
 - `skakel-server`: access tokens are random strings the server remembers, not signed JWTs. Clients
   never read a token, so nothing changes for them, but a server that restarts forgets its tokens
   and clients ask for new ones (they already do on `TOKEN_REFUSED`). Breaking for apps: the signing
