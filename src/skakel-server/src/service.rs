@@ -2,10 +2,9 @@
 //! listener serves and which an app can mount on a listener of its own, and the connection
 //! settings either listener applies.
 
+use crate::streams::BoxFuture;
 use std::convert::Infallible;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -70,8 +69,6 @@ impl std::fmt::Debug for SkakelService {
     }
 }
 
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-
 impl<B> Service<Request<B>> for SkakelService
 where
     B: http_body::Body<Data = Bytes> + Send + 'static,
@@ -79,7 +76,7 @@ where
 {
     type Response = Response;
     type Error = Infallible;
-    type Future = BoxFuture<Result<Response, Infallible>>;
+    type Future = BoxFuture<'static, Result<Response, Infallible>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
         Poll::Ready(Ok(()))

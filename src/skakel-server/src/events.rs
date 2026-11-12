@@ -19,7 +19,8 @@ pub enum ServerEvent {
     Keys(KeysView),
 }
 
-type Callback = Box<dyn Fn(&ServerEvent) + Send + Sync>;
+/// An app's callback for what happens on the server.
+pub(crate) type Callback = Box<dyn Fn(&ServerEvent) + Send + Sync>;
 
 /// Delivers events to the app's callbacks and to anyone who subscribed.
 pub(crate) struct Events {

@@ -8,6 +8,13 @@
   the old one; a state file left with wider permissions is replaced by a private one on the next
   save. A client id another client already has is never reused, and a state that cannot be loaded
   is never saved.
+- `skakel-server`: wrong secrets are counted per client and address, so someone who knows only a
+  client id can no longer lock that client out of tokens from everywhere (`docs/protocol.md`,
+  "Tokens"). HTTP Basic credentials are form-decoded whole: an id or secret with a literal `&` after
+  it is refused instead of read up to the `&`.
+- `skakel-server`: the limiters are swept at most every 5 seconds and hold at most 100,000 keys, so a
+  flood from many addresses costs bounded time and memory. `shutdown` waits until the running calls
+  have ended (at most 3 seconds) instead of a fixed 200 ms before it winds the connections down.
 - `skakel-server`: every per-address limit counts an IPv6 address by its `/64`, so one host cannot
   spend a limit by rotating addresses. Pairing takes at most 64 requests that have not revealed for
   the whole server, and refuses a revealed nonce shorter than 43 characters with 404, as for any

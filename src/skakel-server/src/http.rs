@@ -31,7 +31,7 @@ use time::OffsetDateTime;
 use crate::crypto::Principal;
 use crate::pairing::Reveal;
 use crate::server::Shared;
-use crate::util::{MAX_CLIENT_NAME_LENGTH, clean_client_name, utf16_len};
+use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token, clean_client_name, utf16_len};
 
 /// The largest body the token and pairing paths read.
 pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024;
@@ -89,12 +89,7 @@ fn unauthorized(detail: &str) -> Response {
 
 /// The principal of the bearer token in a request's `Authorization` header.
 pub(crate) fn authenticate_request(shared: &Shared, headers: &HeaderMap) -> Option<Principal> {
-    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    shared.state.authenticate(token.trim())
+    shared.state.authenticate(bearer_token(headers)?)
 }
 
 /// The client behind a call's bearer token.
@@ -373,14 +368,26 @@ fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
     }
     let decoded = String::from_utf8(STANDARD.decode(encoded.trim()).ok()?).ok()?;
     let (id, secret) = decoded.split_once(':')?;
+    // Each part is one form-encoded value, so a literal `&` (which would start a second field) is
+    // not one; it has to be written `%26`.
     let decode = |text: &str| -> Option<String> {
+        if text.contains('&') {
+            return None;
+        }
         let pairs: Vec<(String, String)> = serde_urlencoded::from_str(&format!("v={text}")).ok()?;
-        pairs.into_iter().next().map(|(_, value)| value)
+        let mut pairs = pairs.into_iter();
+        let (_, value) = pairs.next()?;
+        pairs.next().is_none().then_some(value)
     };
     Some((decode(id)?, decode(secret)?))
 }
 
-async fn token(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Body) -> Response {
+async fn token(
+    State(shared): State<Arc<Shared>>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
     let is_form = headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -427,14 +434,14 @@ async fn token(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Body
     if client_id.is_empty() || client_secret.is_empty() || shared.state.find(&client_id).is_none() {
         return invalid_client();
     }
-    if shared.limits.too_many_failures(&client_id) {
+    if shared.limits.too_many_failures(&client_id, remote.ip()) {
         return problem(
             StatusCode::TOO_MANY_REQUESTS,
-            "Too many failed requests for this client. Wait a minute and try again.",
+            "Too many wrong secrets for this client from this address. Wait a minute and try again.",
         );
     }
     let Some(generation) = shared.state.validate(&client_id, &client_secret) else {
-        shared.limits.count_failure(&client_id);
+        shared.limits.count_failure(&client_id, remote.ip());
         return invalid_client();
     };
     let Ok((access_token, expires_at)) =
@@ -483,4 +490,45 @@ pub(crate) fn plain_http_answer() -> Bytes {
         "HTTP/1.1 400 Bad Request\r\ncontent-type: {PROBLEM_CONTENT_TYPE}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn basic(text: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Basic {}", STANDARD.encode(text))).unwrap(),
+        );
+        headers
+    }
+
+    #[test]
+    fn basic_credentials_are_the_form_decoded_id_and_secret() {
+        assert_eq!(
+            basic_credentials(&basic("client-1:s3cret")),
+            Some(("client-1".into(), "s3cret".into()))
+        );
+        assert_eq!(
+            basic_credentials(&basic("client-1:p%40ss+word")),
+            Some(("client-1".into(), "p@ss word".into()))
+        );
+    }
+
+    #[test]
+    fn basic_credentials_with_anything_after_the_secret_are_refused() {
+        assert_eq!(basic_credentials(&basic("client-1:SECRET&junk=1")), None);
+        assert_eq!(basic_credentials(&basic("client-1&x:SECRET")), None);
+        assert_eq!(basic_credentials(&basic("client-1:SECRET&")), None);
+    }
+
+    #[test]
+    fn basic_credentials_without_a_colon_or_a_basic_scheme_are_refused() {
+        assert_eq!(basic_credentials(&basic("client-1")), None);
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer abc"));
+        assert_eq!(basic_credentials(&headers), None);
+    }
 }

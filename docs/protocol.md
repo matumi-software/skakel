@@ -199,8 +199,9 @@ A client paired with several servers holds one client ID and secret for each.
 
 - OAuth 2.0 client credentials at `POST /skakel/v2/token`, HTTPS only, as a form
   (`application/x-www-form-urlencoded`) with `grant_type=client_credentials`, `client_id` and
-  `client_secret`. A server also takes the id and secret as HTTP Basic credentials, and answers
-  `{ "access_token", "token_type": "Bearer", "expires_in" }`. Any other grant is `unsupported_grant_type`
+  `client_secret`. A server also takes the id and secret as HTTP Basic credentials (each part
+  form-encoded as RFC 6749 says, so a literal `&` in either is written `%26`; a part with more than
+  one field is refused), and answers `{ "access_token", "token_type": "Bearer", "expires_in" }`. Any other grant is `unsupported_grant_type`
   (400), a body that is not a form is `invalid_request` (400).
 - Access tokens last 30 minutes and are JWTs signed with a key whose id is in the token's `kid`
   header. Clients do not read what is inside a token, so the algorithm is the server's own. Skakel's
@@ -219,9 +220,12 @@ A client paired with several servers holds one client ID and secret for each.
   it to check credentials, and with them that gRPC works.
 
 **Limits a server applies:** 60 token requests per minute per address (see "Pairing" for what an
-address is); one over the limit gets 429. After 10 wrong secrets for one registered client within a
-minute, from any addresses, requests for that client get 429 until the minute is up, the right
-secret included. A body over 4 KiB gets 413, or 400 when the server only finds out while reading it.
+address is); one over the limit gets 429. After 10 wrong secrets for one registered client from one
+address within a minute, requests for that client from that address get 429 until the minute is up,
+the right secret included. Another address is not affected, so a wrong secret sent by someone who
+only knows a client id cannot lock that client out where it really is; secrets are 256 random bits,
+so guessing one is out of reach, and the limit only keeps a client with a stale secret from hammering
+the endpoint. A body over 4 KiB gets 413, or 400 when the server only finds out while reading it.
 The per-address limit and the cap on the body apply before the server reads the request. A failed
 request gets the OAuth error (`invalid_client`, 401), never the reason the secret was wrong.
 

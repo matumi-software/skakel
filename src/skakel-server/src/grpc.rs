@@ -2,6 +2,7 @@
 //! service, Skakel's and the app's, and ending an app's running calls when its client is revoked,
 //! its secret rotated or the server stops.
 
+use crate::streams::BoxFuture;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future::Future;
@@ -9,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, Request, Response};
 use http_body::{Body as HttpBody, Frame, SizeHint};
 use skakel_protocol::{ERROR_DOMAIN, Reason, is_grpc_content_type};
@@ -76,15 +77,10 @@ pub(crate) fn is_grpc(headers: &HeaderMap) -> bool {
 
 /// The principal of the bearer token in a call's `authorization` metadata.
 fn authenticate(shared: &Shared, headers: &HeaderMap) -> Option<Principal> {
-    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    shared.state.authenticate(token.trim())
+    shared
+        .state
+        .authenticate(crate::util::bearer_token(headers)?)
 }
-
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// A gRPC service with Skakel's token check in front. A call without a current token is refused
 /// with `TOKEN_REFUSED` before the service sees it; one with a token reaches it with a
@@ -122,7 +118,7 @@ where
 {
     type Response = Response<Body>;
     type Error = Infallible;
-    type Future = BoxFuture<Result<Response<Body>, Infallible>>;
+    type Future = BoxFuture<'static, Result<Response<Body>, Infallible>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
         self.inner.poll_ready(cx)

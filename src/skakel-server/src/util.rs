@@ -3,6 +3,9 @@
 
 use std::net::IpAddr;
 
+use axum::http::HeaderMap;
+use axum::http::header::AUTHORIZATION;
+
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
@@ -77,6 +80,13 @@ pub(crate) fn verify_secret(secret: &str, stored_hash: &str) -> bool {
         .as_slice()
         .ct_eq(&expected)
         .into()
+}
+
+/// The token in an `Authorization: Bearer <token>` header, when there is one.
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
 }
 
 /// Constant-time comparison of a presented token with the one that was handed out.
