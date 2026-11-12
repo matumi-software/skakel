@@ -175,7 +175,7 @@ to 120 a minute per address, also answered with 429, so a client polls no more t
 A revealed nonce shorter than 43 characters (the 32 bytes a client picks, as base64url) is refused
 like one that does not match the commitment, with 404, so a client with a weak nonce cannot have its
 commitment guessed offline. A pairing call over plain HTTP gets 400. A body over 4 KiB gets 413, or 400 when the server only
-finds out while reading it. Both of these limits apply before the server reads the request.
+finds out while reading it, and so does a body that has not arrived in full within 10 seconds. Both of these limits apply before the server reads the request.
 
 An address is the whole IPv4 address the call came from, an IPv4-mapped IPv6 address counted as its
 IPv4 address, or the `/64` of an IPv6 address: a host on a network owns its whole `/64` and can send
@@ -226,7 +226,7 @@ address within a minute, requests for that client from that address get 429 unti
 the right secret included. Another address is not affected, so a wrong secret sent by someone who
 only knows a client id cannot lock that client out where it really is; secrets are 256 random bits,
 so guessing one is out of reach, and the limit only keeps a client with a stale secret from hammering
-the endpoint. A body over 4 KiB gets 413, or 400 when the server only finds out while reading it.
+the endpoint. A body over 4 KiB gets 413, or 400 when the server only finds out while reading it, and so does a body that has not arrived in full within 10 seconds.
 The per-address limit and the cap on the body apply before the server reads the request. A failed
 request gets the OAuth error (`invalid_client`, 401), never the reason the secret was wrong.
 

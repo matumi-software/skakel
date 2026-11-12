@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, Request, Response};
+use axum::http::{HeaderMap, HeaderValue, Request, Response};
 use http_body::{Body as HttpBody, Frame, SizeHint};
 use skakel_protocol::{ERROR_DOMAIN, Reason, is_grpc_content_type};
 use tokio::sync::oneshot;
@@ -140,7 +140,9 @@ where
         let answer = inner.call(request);
         Box::pin(async move {
             let Some((guard, mut ended)) = session else {
-                return answer.await;
+                let Ok(mut response) = answer.await;
+                out_of_range_is_resource_exhausted(&mut response);
+                return Ok(response);
             };
             tokio::select! {
                 answer = answer => {
@@ -160,6 +162,24 @@ where
                 }
             }
         })
+    }
+}
+
+/// A call to one of Skakel's own services that tonic refused for a message over the limit before
+/// the service saw it comes back with `OUT_OF_RANGE` in its headers. Skakel's services never answer
+/// that code, and the protocol says `RESOURCE_EXHAUSTED`, so it is told as that. The streaming
+/// calls map the code themselves when they read, so this is the one unary call, `Hello`.
+fn out_of_range_is_resource_exhausted(response: &mut Response<Body>) {
+    let out_of_range = (Code::OutOfRange as i32).to_string();
+    if response
+        .headers()
+        .get("grpc-status")
+        .is_some_and(|status| status.as_bytes() == out_of_range.as_bytes())
+    {
+        response.headers_mut().insert(
+            "grpc-status",
+            HeaderValue::from(Code::ResourceExhausted as i32),
+        );
     }
 }
 
