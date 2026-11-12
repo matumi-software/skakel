@@ -64,6 +64,10 @@ const MIN_BACKOFF: Duration = Duration::from_secs(1);
 
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
+/// How long a connection has to have been up for the next pause to start from the shortest again.
+/// A server that accepts the call and ends it at once keeps the pause growing.
+const STABLE_AFTER: Duration = Duration::from_secs(30);
+
 /// Messages waiting to go out on a control call.
 const CONTROL_QUEUE: usize = 8;
 
@@ -138,6 +142,9 @@ struct Inner {
     clock: Arc<dyn Clock>,
     address: Arc<Mutex<Url>>,
     pins: Arc<Mutex<Pins>>,
+    /// The pins the app's handlers last accepted, which the app has saved. `pins` follows what the
+    /// server says at once, so connections work, and `saved_pins` is what tells that apart.
+    saved_pins: Mutex<Pins>,
     credentials: Credentials,
     http: reqwest::Client,
     tokens: TokenClient,
@@ -206,6 +213,7 @@ impl Link {
         options: ClientOptions,
     ) -> Result<Self> {
         let address = Arc::new(Mutex::new(http::base_address(address)?));
+        let saved_pins = Mutex::new(pins.clone());
         let pins = Arc::new(Mutex::new(pins));
         let pins_fn: http::PinsFn = {
             let pins = pins.clone();
@@ -231,6 +239,7 @@ impl Link {
                 clock,
                 address,
                 pins,
+                saved_pins,
                 credentials,
                 http,
                 tokens,
@@ -329,7 +338,12 @@ impl Link {
     /// Starting a started link does nothing.
     pub fn start(&self) {
         let mut run = lock(&self.inner.run);
-        if run.is_some() {
+        // A link that closed for good has no task left, so it starts again; one that is still
+        // running, in any state, does not start twice.
+        if run
+            .as_ref()
+            .is_some_and(|running| !running.task.is_finished())
+        {
             return;
         }
         let stop = CancellationToken::new();
@@ -435,25 +449,26 @@ impl Link {
     /// starting with `/`, so the token cannot leave for another host. `configure` adds the body
     /// and headers. A 401 drops the token, so the next call gets a new one.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When `path` does not start with a single `/`.
+    /// [`FailureKind::InvalidRequest`] when `path` does not start with a single `/`, has a
+    /// backslash or a control character, or would land on another host.
     pub async fn request(
         &self,
         method: Method,
         path: &str,
         configure: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response> {
-        assert!(
-            path.starts_with('/') && !path.starts_with("//") && !path.contains('\\'),
-            "A link's requests go to a path on its server, such as /app/devices."
-        );
+        if !is_server_path(path) {
+            log::warn!("A request to {path:?} was refused: not a path on the server");
+            return Err(Error::of(FailureKind::InvalidRequest));
+        }
         let address = self.address();
         let url = address.join(path).map_err(Error::from_cause)?;
-        assert!(
-            is_at(&url, &address),
-            "A link's requests stay on its server."
-        );
+        if !is_at(&url, &address) {
+            log::warn!("A request to {path:?} was refused: it would leave the server");
+            return Err(Error::of(FailureKind::InvalidRequest));
+        }
         let result = async {
             let token = self.inner.tokens.get().await?;
             let builder = self
@@ -492,18 +507,18 @@ impl Link {
     /// that needs nothing. A refusal before `opened` comes back in the result, with the server's
     /// reason and its words for it.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When `stream_type` is not one or more of `a-z`, `0-9` and `-`.
+    /// [`FailureKind::InvalidRequest`] when `stream_type` is not one or more of `a-z`, `0-9` and
+    /// `-`.
     pub async fn open_stream(
         &self,
         stream_type: &str,
         target: &[u8],
     ) -> Result<OpenResult<StreamConnection>> {
-        assert!(
-            is_stream_type(stream_type),
-            "A stream type is one or more of a-z, 0-9 and -."
-        );
+        if !is_stream_type(stream_type) {
+            return Err(Error::of(FailureKind::InvalidRequest));
+        }
         let address = self.address();
         let timeout = self.inner.options.request_timeout;
         let result = async {
@@ -545,11 +560,13 @@ impl Link {
     /// the server to say the port is open. A second client gets a refusal with
     /// [`StreamRefusalReason::InUse`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When `port_id` is empty.
+    /// [`FailureKind::InvalidRequest`] when `port_id` is empty.
     pub async fn open_serial(&self, port_id: &str) -> Result<OpenResult<SerialConnection>> {
-        assert!(!port_id.is_empty(), "Name the port.");
+        if port_id.is_empty() {
+            return Err(Error::of(FailureKind::InvalidRequest));
+        }
         match self
             .open_stream(STREAM_TYPE, &skakel_serial::target(port_id))
             .await?
@@ -631,9 +648,10 @@ impl tower_service::Service<tonic::codegen::http::Request<Body>> for LinkChannel
                     Status::unauthenticated(message)
                 }
             })?;
-            let value = format!("Bearer {}", token.value)
+            let mut value: tonic::codegen::http::HeaderValue = format!("Bearer {}", token.value)
                 .parse()
                 .map_err(|_| Status::internal("The token is not a header value."))?;
+            value.set_sensitive(true);
             request.headers_mut().insert("authorization", value);
             let mut service = connection.service();
             std::future::poll_fn(|cx| tower_service::Service::poll_ready(&mut service, cx)).await?;
@@ -645,6 +663,16 @@ impl tower_service::Service<tonic::codegen::http::Request<Body>> for LinkChannel
             Ok(response)
         })
     }
+}
+
+/// Whether `path` is a path and query on a server: one `/` first, no backslash, no control
+/// character or space that a URL parser would drop or turn into something else.
+fn is_server_path(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && !path
+            .chars()
+            .any(|c| c == '\\' || c.is_control() || c == ' ')
 }
 
 /// Calls each handler in turn. False when any failed.
@@ -681,6 +709,7 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
     let mut backoff = MIN_BACKOFF;
     while !stop.is_cancelled() {
         let address = lock(&inner.address).clone();
+        let started = inner.clock.now();
         match connect_once(&inner, &address, &stop).await {
             Ok(None) => return,
             Ok(Some(end)) => {
@@ -700,7 +729,9 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
                     end.code()
                 );
                 set_status(&inner, LinkStatus::with(LinkState::Failed, end)).await;
-                backoff = MIN_BACKOFF;
+                if since(inner.clock.now(), started) >= STABLE_AFTER {
+                    backoff = MIN_BACKOFF;
+                }
             }
             Err(error) => {
                 if stop.is_cancelled() {
@@ -736,7 +767,7 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
             }
         }
 
-        pause(&inner, backoff, &stop).await;
+        pause(&inner, jittered(backoff), &stop).await;
         if stop.is_cancelled() {
             return;
         }
@@ -751,6 +782,16 @@ fn ends_for_good(kind: FailureKind) -> bool {
         kind,
         FailureKind::Revoked | FailureKind::Rotated | FailureKind::RejectedCredentials
     )
+}
+
+/// A pause of between half of `delay` and all of it, so links to one server that restarted do not
+/// all come back in the same instant.
+fn jittered(delay: Duration) -> Duration {
+    let mut byte = [0u8; 1];
+    if getrandom::fill(&mut byte).is_err() {
+        return delay;
+    }
+    delay.mul_f64(0.5 + f64::from(byte[0]) / 510.0)
 }
 
 /// Waits before the next try. A move ends the wait at once.
@@ -1086,14 +1127,17 @@ async fn learn_certificates(
         return;
     }
 
-    let (before, after) = {
+    let after = {
         let mut pins = lock(&inner.pins);
-        let before = pins.clone();
-        let after = before.with_server_certificates(&certificates.fingerprint, next);
+        let after = pins.with_server_certificates(&certificates.fingerprint, next);
         *pins = after.clone();
-        (before, after)
+        after
     };
-    if after != before {
+    // Compared with what the app saved, not with what the link held a moment ago: a handover the
+    // app failed to save is offered to it again on the next connection, and is acknowledged only
+    // once the app has it.
+    let unsaved = *lock(&inner.saved_pins) != after;
+    if unsaved {
         log::info!(
             "The server's certificates changed: pinned {}, next {}",
             after.fingerprint(),
@@ -1104,6 +1148,7 @@ async fn learn_certificates(
             // Not saved: the server is not told, and says it again on the next connection.
             return;
         }
+        *lock(&inner.saved_pins) = after.clone();
     }
 
     if let (Some(stored), Some(said)) = (after.next_fingerprint(), next)
@@ -1130,11 +1175,8 @@ async fn learn_certificates(
 async fn presents(inner: &Inner, address: &Url, fingerprint: &str) -> bool {
     let presented = http::presented();
     let client = http::client(inner.pins_fn(), Some(presented.clone()));
-    let Ok(url) = address.join(INFO_PATH) else {
-        return false;
-    };
-    match client.get(url).timeout(PROOF_TIMEOUT).send().await {
-        Ok(_) => http::last_presented(&presented)
+    match get_info(&client, address).await {
+        Ok(()) => http::last_presented(&presented)
             .is_some_and(|p| fingerprints::are_equal(&p, fingerprint)),
         Err(error) => {
             log::info!(
@@ -1144,6 +1186,19 @@ async fn presents(inner: &Inner, address: &Url, fingerprint: &str) -> bool {
             false
         }
     }
+}
+
+/// `GET /skakel/info` on `server` over `client`, within the proof time. Any answer after the
+/// handshake the client pins is the proof; a handshake that fails or takes too long is not.
+async fn get_info(client: &reqwest::Client, server: &Url) -> std::result::Result<(), String> {
+    let url = server.join(INFO_PATH).map_err(|e| e.to_string())?;
+    client
+        .get(url)
+        .timeout(PROOF_TIMEOUT)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Starts a search for the server in the background, while the link cannot reach it. A request
@@ -1221,11 +1276,8 @@ async fn follow(inner: &Arc<Inner>, servers: &[crate::browser::DiscoveredServer]
 fn proves(inner: &Arc<Inner>, url: Url) -> impl Future<Output = bool> + use<> {
     let http = inner.http.clone();
     async move {
-        let Ok(info) = url.join(INFO_PATH) else {
-            return false;
-        };
-        match http.get(info).timeout(PROOF_TIMEOUT).send().await {
-            Ok(_) => true,
+        match get_info(&http, &url).await {
+            Ok(()) => true,
             Err(error) => {
                 log::warn!(
                     "A server with the pinned fingerprint was heard at {}, but it did not prove it holds the certificate: {error}",
@@ -1240,6 +1292,17 @@ fn proves(inner: &Arc<Inner>, url: Url) -> impl Future<Output = bool> + use<> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pause_is_between_half_of_the_delay_and_all_of_it() {
+        for _ in 0..200 {
+            let pause = jittered(Duration::from_secs(8));
+            assert!(
+                pause >= Duration::from_secs(4) && pause <= Duration::from_secs(8),
+                "{pause:?}"
+            );
+        }
+    }
 
     #[test]
     fn link_states_compare_by_state_and_failure() {

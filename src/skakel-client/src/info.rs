@@ -1,7 +1,7 @@
 //! Reading a server's `GET /skakel/info`, and picking the protocol version to speak with it.
 
 use reqwest::Url;
-use skakel_discovery::{MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, clean};
+use skakel_discovery::{MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, clean};
 use skakel_protocol::{INFO_PATH, SkakelApp, SkakelInfo, VERSIONS, is_app_id};
 
 use crate::failure::{Error, Failure, Result, bad_answer};
@@ -75,7 +75,7 @@ fn check(info: SkakelInfo, server: &Url) -> Result<SkakelInfo> {
     } = info;
     if app.version.encode_utf16().count() > MAX_APP_VERSION_LENGTH
         || !is_app_id(&app.id)
-        || versions.is_empty()
+        || !(1..=MAX_VERSIONS).contains(&versions.len())
         || versions.iter().any(|v| *v < 1)
     {
         return Err(bad_answer(
@@ -166,6 +166,7 @@ mod tests {
             info("x", "koppel", &long_version, vec![2]),
             info("x", "koppel", "1", vec![]),
             info("x", "koppel", "1", vec![0]),
+            info("x", "koppel", "1", vec![2; 9]),
         ];
 
         for case in bad {

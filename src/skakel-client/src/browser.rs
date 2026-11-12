@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 
 use reqwest::Url;
 use skakel_discovery::{
-    ANSWER_WINDOW, ENTRY_LIFETIME, MAX_ENTRIES, MAX_ENTRIES_PER_ADDRESS, PROBE_INTERVAL,
-    create_probe, try_parse_answer,
+    ANSWER_WINDOW, MAX_ENTRIES, MAX_ENTRIES_PER_ADDRESS, PROBE_INTERVAL, create_probe,
+    try_parse_answer,
 };
 use skakel_protocol::SkakelApp;
 use tokio::net::UdpSocket;
@@ -535,14 +535,19 @@ impl Inner {
     /// An answer from the network: taken only within a few seconds of a probe, as answers to it.
     fn answered(&self, server: DiscoveredServer, rank: i32) {
         let now = Instant::now();
-        {
-            let state = self.state();
-            match state.probed_at {
-                Some(at) if now.saturating_duration_since(at) <= ANSWER_WINDOW => {}
-                _ => return,
-            }
+        if !self.answers_are_due(now) {
+            return;
         }
         self.add(server, rank, now);
+    }
+
+    /// Whether `now` is within a few seconds of a probe this browser sent. A datagram outside it is
+    /// dropped before anything reads it.
+    fn answers_are_due(&self, now: Instant) -> bool {
+        matches!(
+            self.state().probed_at,
+            Some(at) if now.saturating_duration_since(at) <= ANSWER_WINDOW
+        )
     }
 
     fn sweep(&self) {
@@ -551,11 +556,6 @@ impl Inner {
             .probe_interval
             .mul_f64(3.5)
             .max(Duration::from_millis(1));
-        let lifetime = if self.options.probe_interval == PROBE_INTERVAL {
-            ENTRY_LIFETIME
-        } else {
-            lifetime
-        };
         let mut state = self.state();
         if state.entries.sweep(Instant::now(), lifetime) {
             self.publish(&mut state);
@@ -625,6 +625,10 @@ async fn listen(inner: Weak<Inner>, socket: Arc<UdpSocket>, stop: CancellationTo
         let Some(inner) = inner.upgrade() else {
             return;
         };
+        // Only answers to a probe just sent are read: anything else costs no parse.
+        if !inner.answers_are_due(Instant::now()) {
+            continue;
+        }
         let Some(answer) = try_parse_answer(&buffer[..length]) else {
             continue;
         };
@@ -733,6 +737,7 @@ fn is_virtual(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skakel_discovery::ENTRY_LIFETIME;
 
     fn fingerprint(pair: &str) -> String {
         vec![pair; 32].join(":")

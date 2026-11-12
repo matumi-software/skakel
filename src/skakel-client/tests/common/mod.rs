@@ -713,6 +713,7 @@ pub async fn within<T>(timeout: Duration, body: impl Future<Output = T>) -> T {
 pub struct CountingProxy {
     pub port: u16,
     count: Arc<AtomicUsize>,
+    failing: Arc<AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -722,9 +723,18 @@ impl CountingProxy {
         let port = listener.local_addr().unwrap().port();
         let count = Arc::new(AtomicUsize::new(0));
         let counted = count.clone();
+        let failing = Arc::new(AtomicUsize::new(0));
+        let failures = failing.clone();
         let task = tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
                 counted.fetch_add(1, Ordering::SeqCst);
+                if failures
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+                {
+                    // A connection that dies before the server sees anything.
+                    continue;
+                }
                 tokio::spawn(async move {
                     let Ok(mut outbound) = tokio::net::TcpStream::connect(("127.0.0.1", to)).await
                     else {
@@ -734,7 +744,17 @@ impl CountingProxy {
                 });
             }
         });
-        Self { port, count, task }
+        Self {
+            port,
+            count,
+            failing,
+            task,
+        }
+    }
+
+    /// Closes the next `n` connections made through it without passing them on.
+    pub fn fail_next(&self, n: usize) {
+        self.failing.store(n, Ordering::SeqCst);
     }
 
     pub fn address(&self) -> Url {

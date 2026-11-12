@@ -41,6 +41,10 @@ pub enum FailureKind {
     PairingDenied,
     /// The pairing request ran out before anyone typed the code.
     PairingExpired,
+    /// The call was made with arguments that cannot be sent: a path that leaves the server, a
+    /// stream type with characters outside `a-z`, `0-9` and `-`, or an empty port id. A bug in the
+    /// app, not something a person can mend.
+    InvalidRequest,
 }
 
 impl FailureKind {
@@ -61,6 +65,7 @@ impl FailureKind {
             Self::NotConnected => "notConnected",
             Self::PairingDenied => "pairingDenied",
             Self::PairingExpired => "pairingExpired",
+            Self::InvalidRequest => "invalidRequest",
         }
     }
 
@@ -94,6 +99,7 @@ impl FailureKind {
             Self::NotConnected => "Not connected to the server.",
             Self::PairingDenied => "The server refused the pairing request.",
             Self::PairingExpired => "Nobody typed the code on the server in time. Start again.",
+            Self::InvalidRequest => "The request is not one this app can send.",
         }
     }
 }

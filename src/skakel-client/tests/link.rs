@@ -382,6 +382,40 @@ async fn stop_closes_the_control_channel_and_says_so() {
 }
 
 #[tokio::test]
+async fn a_link_that_closed_for_good_starts_again_when_asked() {
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let credentials = bench.register(&server).await;
+    let link = Link::new(
+        &server.address(),
+        server.pins(),
+        Credentials::new(credentials.client_id, "wrong"),
+        ClientOptions::default(),
+    )
+    .unwrap();
+    let statuses = record_status(&link);
+    link.start();
+    statuses.wait(|s| s.state == LinkState::Closed).await;
+
+    link.start();
+
+    statuses
+        .wait_count(2, |s| s.state == LinkState::Closed)
+        .await;
+    assert_eq!(
+        states(&statuses),
+        [
+            LinkState::Connecting,
+            LinkState::Closed,
+            LinkState::Connecting,
+            LinkState::Closed
+        ],
+        "the second start ran"
+    );
+    link.stop().await;
+}
+
+#[tokio::test]
 async fn a_link_that_was_stopped_can_start_again() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
@@ -425,13 +459,22 @@ async fn request_sends_the_token_over_the_pinned_connection() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "path on its server")]
-async fn request_refuses_a_path_that_would_leave_the_server() {
+async fn request_refuses_a_path_that_would_leave_the_server_with_an_error_not_a_panic() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, _) = linked(&mut bench, &server).await;
 
-    let _ = link.request(Method::GET, "//evil.example/x", |r| r).await;
+    for path in [
+        "//evil.example/x",
+        "/\t/evil.example/x",
+        "/\n/evil.example",
+        "/\\evil.example",
+        "evil",
+        "",
+    ] {
+        let error = link.request(Method::GET, path, |r| r).await.unwrap_err();
+        assert_eq!(error.kind(), FailureKind::InvalidRequest, "{path:?}");
+    }
 }
 
 #[tokio::test]

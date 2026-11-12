@@ -334,7 +334,9 @@ impl StreamConnection {
         self.closed.borrow().clone()
     }
 
-    /// Waits until the stream has ended, and says how.
+    /// Waits until the stream has ended, and says how. The server's status comes after the frames
+    /// it sent on the call (HTTP/2 delivers them in order), so while the app leaves frames
+    /// unread and the buffer is full, this does not return: read them, or [`close`](Self::close).
     pub async fn closed(&self) -> StreamClose {
         let mut closed = self.closed.clone();
         match closed.wait_for(Option::is_some).await {
@@ -384,10 +386,14 @@ async fn read(
     let _ = closed.send(Some(close));
 }
 
-/// A request that carries `token` as its bearer token.
+/// A request that carries `token` as its bearer token, marked sensitive so it stays out of logs.
+/// A token that is not a header value never gets here: the token client refuses it when it is
+/// issued.
 pub(crate) fn with_token<T>(message: T, token: &str) -> tonic::Request<T> {
     let mut request = tonic::Request::new(message);
-    if let Ok(value) = format!("Bearer {token}").parse() {
+    if let Ok(mut value) = format!("Bearer {token}").parse::<tonic::metadata::AsciiMetadataValue>()
+    {
+        value.set_sensitive(true);
         request.metadata_mut().insert("authorization", value);
     }
     request
