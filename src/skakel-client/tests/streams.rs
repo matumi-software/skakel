@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use common::within;
 use skakel_client::{
     Bytes, ClientOptions, Credentials, DataBits, ErrorCode, FailureKind, FlowControl, Frame,
-    LineSettings, Link, OpenResult, Parity, Pins, SerialEvent, StopBits, StreamCloseReason,
-    GrpcCode, StreamRefusalReason,
+    GrpcCode, LineSettings, Link, OpenResult, Parity, Pins, SerialEvent, StopBits,
+    StreamCloseReason, StreamRefusalReason,
 };
 
 fn data(bytes: &'static [u8]) -> Option<Frame> {

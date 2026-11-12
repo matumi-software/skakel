@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use common::greeter::{self, GreetRequest, WatchRequest};
 use common::{Recorder, free_tcp, within};
-use tonic::{Code, Request};
 use skakel_client::{
     ClientOptions, Credentials, FailureKind, Link, LinkState, LinkStatus, Method, Pins, Url,
 };
+use tonic::{Code, Request};
 
 pub fn record_status(link: &Link) -> Recorder<LinkStatus> {
     common::record_status(link)
