@@ -49,7 +49,7 @@ into the media source's activation object.
 | Width | `cf28fa9f-2299-4faa-8cb9-a39776b685de` | UINT32 | even, 16 to 4096 |
 | Height | `b32ef9c4-4e8f-4d60-8df9-d6e8ecee1900` | UINT32 | even, 16 to 4096 |
 | Frame rate | `6818edaf-afd8-4a30-8852-945669ae9cb0` | UINT64 | numerator in the high 32 bits, denominator in the low, as `MF_MT_FRAME_RATE`; 1 to 120 a second |
-| Producer SID | `0a7bd1e8-c693-4bff-8f51-4d15b4b7606a` | string | the producer's user, `S-1-5-...` |
+| Producer SID | `0a7bd1e8-c693-4bff-8f51-4d15b4b7606a` | string | the producer's user: the SID of one account, `S-1-<authority>` and 4 to 15 numeric sub-authorities (`S-1-5-21-a-b-c-rid`). A group's SID such as Everyone (`S-1-1-0`) or `BUILTIN\Users` has fewer and counts as no SID |
 | Layout version | `52a2c5ab-38fe-4d3e-aa11-8045bb97aaf7` | UINT32 | `1` |
 
 Without a usable size and rate the media source runs at 1280x720, 30 fps. Without a usable camera
@@ -80,11 +80,12 @@ needs `SeCreateGlobalPrivilege`, which the Frame Server's service accounts have 
 not; it also means nobody but a service or an administrator can create it first. Its DACL:
 
 ```
-D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;LS)(A;;GRGW;;;<producer SID>)
+D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;LS)(A;;GRGW;;;<producer SID>)
 ```
 
-System, administrators and Local Service (the Frame Server's account) get full access; the producer's
-user gets read and write. Without a valid producer SID attribute, `IU` (interactive users) takes its
+System and administrators get full access; Local Service (the Frame Server's account) and the
+producer's user get read and write. Local Service maps the memory and nothing more: full access
+would let any Local Service process change the DACL and the owner. Without a valid producer SID attribute, `IU` (interactive users) takes its
 place.
 
 **The producer opens it** with read and write access. Until an app opens the camera it does not
@@ -92,7 +93,20 @@ exist, and the producer drops frames (`push_frame` returns false) and looks for 
 at most every 250 ms. Once the producer holds it open, it stays alive even when the media source lets
 go, and the next media source opens the same one; the producer never needs to reconnect.
 
-A media source that finds the section existing opens it read-only and checks the header. If its
+A media source that finds the section existing opens it read-only (with `READ_CONTROL`) and reads its
+DACL first. It uses the section only when the DACL holds no SID but SYSTEM, Administrators, Local
+Service and the producer's (or Interactive when the camera names no producer), the producer's among
+them. A camera is made with attributes any user can set, so without this a user could create a
+camera with another user's id, name themselves as the producer, and show that user's frames. A
+section that fails the check is not used and the camera shows its idle frame. What this does not
+stop: a user who computes another user's camera id (it is derived from the SID and the name, both
+guessable) and starts a camera with it first creates the section with their own DACL, and the
+other user's producer is then refused (`PermissionDenied`) until that camera stops. That is a
+denial of service for one camera, not a disclosure. Closing it needs the camera id to come from
+who the activator is, which Frame Server does not tell the source. Memory is another cost: a
+camera's section is up to about 100 MB (4096x4096), and a user can make several.
+
+Then it checks the header. If its
 format differs from the camera's, the source shows its idle frame and leaves the memory alone.
 
 ### Layout
@@ -244,8 +258,10 @@ skakel-vcam-install uninstall
 skakel-vcam-install status
 ```
 
-**Install** reads the DLL's version from its export `SkakelVirtualCameraVersion`, copies it to
-`%ProgramFiles%\Skakel\VirtualCamera\skakel_vcam_source-<version>.dll`, and registers:
+**Install** copies the DLL into `%ProgramFiles%\Skakel\VirtualCamera` (which only administrators can
+write) under a temporary name, reads the version from its export `SkakelVirtualCameraVersion` by
+loading that copy, so the bytes that are checked are the bytes that are installed, renames it to
+`skakel_vcam_source-<version>.dll`, and registers:
 
 ```
 HKLM\Software\Classes\CLSID\{8138410C-B0A8-4CBC-9E0E-5920362ED550}
@@ -268,7 +284,10 @@ because they refer to the CLSID, not the file; each picks up the new version the
 starts. A newer source must keep reading layout version 1, or the version goes up here and both
 producers with it.
 
-**Uninstall** removes the CLSID and the files. Cameras users created stay listed until each user's
+**Uninstall** removes the CLSID and the files, but only when the CLSID points into the install folder.
+A registration that points elsewhere (`regsvr32` on a build, another app's installer) is left alone
+and reported; remove it with `regsvr32 /u` on that file. A file that can neither be deleted nor
+scheduled for deletion does not stop the others; it is reported. Cameras users created stay listed until each user's
 app removes its own (`remove`, `Remove`); without the source they no longer start.
 
 Several apps may ship the media source. They share one CLSID and one folder, so the last install
@@ -293,6 +312,26 @@ redistributable on the machine.
 The media source writes what it does to the debugger output, prefixed `[skakel-vcam <pid>]`;
 DebugView, run as administrator with "Capture Global Win32" on, shows it from the Frame Server's
 processes. Microsoft's sample's `Debug-FrameServer.ps1` shows how to attach a debugger to them.
+
+## Hand tests
+
+Builds and `cargo test` never register or create a camera. What needs a real camera is tested by
+hand, on a Windows 11 machine you can change, as administrator for the first two:
+
+1. `skakel-vcam-install install <dll>`, then `status`: the CLSID points at the versioned file in
+   Program Files. Install the same version again: nothing changes. `uninstall`: the CLSID and files
+   are gone. Register the DLL with `regsvr32` from a build folder, then `uninstall`: it is refused
+   and the registration stays.
+2. Create a camera with the test pattern example (`cargo run --example test_pattern`), open it in the
+   Camera app, then close the app and open it again: the second open must still show frames (the
+   source finds the section existing and the DACL check passes). Restart the Frame Server (end the
+   `Windows Camera Frame Server` service) with the producer still running and open the camera again.
+3. With a second Windows user: from that user, create a camera named as the first user's with the
+   first user's id (set the attributes by hand) and the second user's SID: its source must log
+   `cannot create Global\Skakel.VirtualCamera.<id>: ... PermissionDenied` and show the idle frame,
+   never the first user's frames. Look in DebugView with "Capture Global Win32" on.
+4. Open a camera whose buffer is bottom-up or unusual (Teams, Zoom, OBS, the Camera app) and confirm
+   frames show; a refused buffer logs a failed frame and does not take the Frame Server down.
 
 ## Known risks
 
