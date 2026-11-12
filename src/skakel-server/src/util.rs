@@ -218,3 +218,47 @@ mod tests {
         assert_eq!(address_text("2001:db8::1".parse().unwrap()), "2001:db8::1");
     }
 }
+
+#[cfg(test)]
+mod properties {
+    use std::net::{IpAddr, Ipv6Addr};
+
+    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        /// Every address of one IPv6 `/64` counts under one key, and an address of another `/64`
+        /// under another, so rotating the low 64 bits spends nothing new.
+        #[test]
+        fn an_ipv6_64_is_one_key(high in any::<u64>(), a in any::<u64>(), b in any::<u64>(), other in any::<u16>()) {
+            // An address that is not IPv4-mapped (::ffff:0:0/96), so the /64 rule applies.
+            let make = |high: u64, low: u64| IpAddr::V6(Ipv6Addr::from(((u128::from(high) | 1 << 63) << 64) | u128::from(low)));
+            prop_assert_eq!(address_key(make(high, a)), address_key(make(high, b)));
+            let moved = make(high ^ (u64::from(other) | 1), a);
+            prop_assert_ne!(address_key(make(high, a)), address_key(moved));
+        }
+
+        /// An IPv4-mapped address counts as the IPv4 address it holds.
+        #[test]
+        fn a_mapped_address_is_its_ipv4_address(octets in any::<[u8; 4]>()) {
+            let v4 = std::net::Ipv4Addr::from(octets);
+            prop_assert_eq!(address_key(IpAddr::V6(v4.to_ipv6_mapped())), address_key(IpAddr::V4(v4)));
+        }
+
+        /// A bearer token is read from any header value or refused, never a panic.
+        #[test]
+        fn a_bearer_header_is_read_or_refused(value in proptest::collection::vec(32u8..127, 0..120)) {
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, HeaderValue::from_bytes(&value).unwrap());
+            let _ = bearer_token(&headers);
+        }
+
+        /// The length in UTF-16 units is the standard library's own count.
+        #[test]
+        fn utf16_length_is_the_encoders(text in ".{0,100}") {
+            prop_assert_eq!(utf16_len(&text), text.encode_utf16().count());
+        }
+    }
+}

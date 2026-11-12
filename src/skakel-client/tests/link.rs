@@ -12,7 +12,7 @@ use skakel_client::{
 };
 use tonic::{Code, Request};
 
-pub fn record_status(link: &Link) -> Recorder<LinkStatus> {
+fn record_status(link: &Link) -> Recorder<LinkStatus> {
     common::record_status(link)
 }
 

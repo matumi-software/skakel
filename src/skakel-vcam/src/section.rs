@@ -257,10 +257,12 @@ impl Section {
         unsafe { Region::new(self.view.Value.cast(), self.len) }
     }
 
+    /// The length of the mapping in bytes.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// True for a mapping of no bytes.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }

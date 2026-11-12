@@ -54,21 +54,28 @@ pub enum Error {
     SharedMemory(layout::HeaderError),
     /// The camera exists with another size or rate. Remove it and create it again.
     CameraMismatch {
+        /// What the camera is.
         camera: layout::Format,
+        /// What was asked for.
         requested: layout::Format,
     },
     /// A camera call failed; says which.
     Camera {
+        /// What was being done.
         action: &'static str,
+        /// What went wrong.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// The installer needs to run elevated.
     NotElevated,
+    /// A file or the folder could not be read or written.
     Io(std::io::Error),
+    /// A Windows call failed.
     #[cfg(windows)]
     Windows(windows::core::Error),
 }
 
+/// A result of this crate, with its [`Error`] unless another is given.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 impl fmt::Display for Error {

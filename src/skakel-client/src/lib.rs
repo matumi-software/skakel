@@ -85,6 +85,7 @@
 //! hyper, rustls or reqwest, appears in the API. [`Url`], [`Method`] and [`StatusCode`] are the
 //! `url` and `http` crates' types.
 
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod browser;

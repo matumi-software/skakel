@@ -12,6 +12,8 @@
 //! that [`LineSettings::is_valid`] refuses is one a server answers with `unsupported`. A message of
 //! a kind this end does not know is an error the reader ignores.
 
+#![forbid(unsafe_code)]
+
 mod messages;
 mod settings;
 

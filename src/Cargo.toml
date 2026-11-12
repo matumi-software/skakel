@@ -10,6 +10,12 @@ authors = ["Matumi Software"]
 license = "MIT"
 repository = "https://github.com/matumi-software/skakel"
 
+[workspace.lints.rust]
+# Every public item of a library crate says what it is for.
+missing_docs = "warn"
+# An unsafe fn's body is not unsafe by itself: each unsafe operation in it is marked.
+unsafe_op_in_unsafe_fn = "deny"
+
 [workspace.dependencies]
 skakel-protocol = { path = "skakel-protocol", version = "0.2.1" }
 skakel-proto = { path = "skakel-proto", version = "0.2.1" }
@@ -60,3 +66,7 @@ tonic-prost-build = "0.14.9"
 # repository as tonic).
 tonic-types = "0.14.9"
 protox = "0.10.0"
+
+# Property tests of the parsers and encoders (a dev-dependency only, MIT OR Apache-2.0). The
+# default features add forking and timeouts, which the tests do not use.
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }

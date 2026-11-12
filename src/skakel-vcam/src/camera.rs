@@ -23,7 +23,9 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(250);
 pub struct CameraOptions {
     /// The name apps list. Windows adds "Windows Virtual Camera" to it in some places.
     pub friendly_name: String,
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
     /// Frames a second, 1 to 120.
     pub fps: u32,
@@ -131,6 +133,7 @@ impl VirtualCamera {
         &self.id
     }
 
+    /// The options the camera was made with.
     pub fn options(&self) -> &CameraOptions {
         &self.options
     }

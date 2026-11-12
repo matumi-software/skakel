@@ -9,6 +9,8 @@
 //! network interfaces to broadcast on, the list of servers found and the limits on it belong to
 //! the server and the client.
 
+#![forbid(unsafe_code)]
+
 mod answer;
 mod clean;
 mod escape;

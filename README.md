@@ -46,6 +46,13 @@ The crates are not on crates.io. An app takes them from this repository, pinned 
 skakel-client = { git = "https://github.com/matumi-software/skakel", rev = "<commit>" }
 ```
 
+## Rust version
+
+Skakel needs Rust 1.99 (`rust-version` in `src/Cargo.toml`), the stable release when 0.2.1 was cut,
+and edition 2024. CI builds and tests on the latest stable, which is the declared version, so there is no
+separate job for an older toolchain. When stable moves past the declared version and the code does not
+need the newer one, CI gains a job on the declared version, so the claim stays true.
+
 ## Virtual camera
 
 A camera that Teams, Zoom, browsers and the Camera app list by name, fed with frames by an app, on

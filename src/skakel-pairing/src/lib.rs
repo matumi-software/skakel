@@ -13,6 +13,8 @@
 //! million. That holds per request, not overall, so the server also limits how many requests it
 //! takes. The code is never sent.
 
+#![forbid(unsafe_code)]
+
 mod bodies;
 mod name;
 

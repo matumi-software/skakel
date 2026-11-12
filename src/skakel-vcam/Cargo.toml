@@ -12,6 +12,9 @@ repository.workspace = true
 name = "skakel-vcam-install"
 path = "src/bin/install.rs"
 
+[lints]
+workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",

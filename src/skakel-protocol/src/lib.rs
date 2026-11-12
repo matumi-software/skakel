@@ -10,6 +10,8 @@
 //! Every body and message is UTF-8 JSON with camelCase names, written by serde, and read
 //! exactly as written. An absent optional field is written as `null`, and read either way.
 
+#![forbid(unsafe_code)]
+
 mod contracts;
 pub mod fingerprints;
 mod reasons;

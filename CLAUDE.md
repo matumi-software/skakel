@@ -26,8 +26,8 @@ cd src && cargo build && cargo test && cargo clippy --all-targets -- -D warnings
 ```
 
 The workflow in `.github/workflows/ci.yml` runs the same four commands with `--locked` on Linux and
-Windows for every pull request and every push to `main`, and `cargo deny check` against
-`src/deny.toml`. All of it must pass before a pull request merges, and the pull request ruleset
+Windows for every pull request and every push to `main`, and `cargo doc --no-deps --locked` with
+rustdoc warnings denied, and `cargo deny check` against `src/deny.toml`. All of it must pass before a pull request merges, and the pull request ruleset
 requires it. The test `skakel-protocol/tests/parts.rs` fails when a crate depends on a Skakel crate
 that `docs/parts.md` does not allow. Dependencies are updated by hand: no bot proposes updates.
 
@@ -54,7 +54,11 @@ that `docs/parts.md` does not allow. Dependencies are updated by hand: no bot pr
   that app's. The one exception is a platform piece more than one app needs and that carries no app
   behaviour of its own, such as the virtual camera: it lives here so it is written once.
 - Rust: edition 2024, `cargo fmt` and `cargo clippy -D warnings` clean. Each crate's metadata comes
-  from the workspace. Tests are named `does_thing` in a `tests` module or under `tests/`.
+  from the workspace, and so do its lints (`[lints] workspace = true`: public items are documented,
+  and crates with no `unsafe` also say `#![forbid(unsafe_code)]`). Tests are named `does_thing` in a
+  `tests` module or under `tests/`. The property tests use proptest, and the wire descriptor golden
+  (`skakel-proto/tests/descriptor.golden`) changes only with a protocol change: regenerate it with
+  `SKAKEL_UPDATE_GOLDEN=1 cargo test -p skakel-proto --test descriptor` and review the diff.
 
 ## Git
 
