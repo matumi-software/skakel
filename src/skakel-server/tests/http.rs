@@ -257,8 +257,10 @@ async fn pairing_runs_open_reveal_approve_poll_and_the_credentials_sign_in() {
     assert_eq!(overview.requests.len(), 1);
     assert_eq!(overview.requests[0].client_name, "lab pc");
     assert_eq!(overview.requests[0].from, "127.0.0.1");
+    // The code is made from the name as the client sent it, not as the server keeps it.
     let code = compute(
         &server.fingerprint(),
+        "  lab\u{202e} pc ",
         &nonce,
         opened["serverNonce"].as_str().unwrap(),
     )
@@ -293,6 +295,32 @@ async fn pairing_runs_open_reveal_approve_poll_and_the_credentials_sign_in() {
         ("rust-bench", id)
     );
     assert_eq!(server.clients().name_of(id).as_deref(), Some("lab pc"));
+}
+
+#[tokio::test]
+async fn the_code_is_made_from_the_name_as_sent_not_the_name_as_kept() {
+    // A code worked out from the cleaned name is not the code: the client's screen shows the one
+    // made from what it sent, so a name swapped on the way gives a code that does not match.
+    let server = start().await;
+    let (opened, nonce) = open_pairing(&server, "  lab\u{202e} pc ").await;
+    assert_eq!(reveal(&server, &opened, &nonce).await.status, 204);
+    let overview = server.pairing().overview().await;
+    assert_eq!(overview.requests[0].client_name, "lab pc");
+    let from_the_kept_name = compute(
+        &server.fingerprint(),
+        "lab pc",
+        &nonce,
+        opened["serverNonce"].as_str().unwrap(),
+    )
+    .unwrap();
+
+    let approval = server
+        .pairing()
+        .approve(&overview.requests[0].id, &from_the_kept_name)
+        .await
+        .unwrap();
+
+    assert_eq!(approval, Approval::WrongCode);
 }
 
 #[tokio::test]

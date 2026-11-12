@@ -72,7 +72,7 @@ short `vcam`.
   or ended, with their status codes. In `skakel_wire::discovery`: the UDP packet (the probe, the
   answer, building and reading them, the limits a client applies to an answer, and the cleaning of
   the name and app version a server announces). In `skakel_wire::pairing`: what both ends compute
-  and send (the nonce, the commitment, the six-digit code, the JSON bodies of the pairing calls
+  and send (the nonce, the commitment, the eight-digit code, the JSON bodies of the pairing calls
   with their states, and the cleaning of a client's name, `clean_client_name`, which a server
   applies and an app may apply before it shows one).
 - **Proto:** the Rust code generated from the `.proto` files in `src/proto` (protocol version 2's

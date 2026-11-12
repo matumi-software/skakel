@@ -57,6 +57,7 @@ async fn an_apps_own_server_serves_its_page_and_skakels_pairing_tokens_control_a
     assert_eq!(overview.requests[0].from, "127.0.0.1");
     let code = compute(
         &server.fingerprint(),
+        "lab pc",
         &nonce,
         opened["serverNonce"].as_str().unwrap(),
     )

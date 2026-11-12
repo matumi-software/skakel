@@ -7,7 +7,7 @@
 //! - [`Browser`] finds servers on the local network.
 //! - [`read_info`], [`pick_version`] and [`require_version`] read a server's info and choose the
 //!   protocol version to speak.
-//! - [`PairingClient`] pairs with a server by the six-digit code a person compares.
+//! - [`PairingClient`] pairs with a server by the eight-digit code a person compares.
 //! - [`Link`] is the client's link to one server: pinned HTTPS and gRPC, tokens, the control channel
 //!   with its renewal and the certificate handover, following the server when it moves, the app's
 //!   own gRPC calls ([`Link::channel`]) and HTTPS requests, and data streams, each on a connection of

@@ -11,7 +11,6 @@
 
 mod answer;
 mod clean;
-mod escape;
 pub mod net;
 
 pub use answer::{
@@ -24,14 +23,14 @@ use std::time::Duration;
 /// A probe's size, and the most an answer may take.
 pub const PROBE_SIZE: usize = 512;
 
-/// The most characters of a server name a client keeps. Characters are UTF-16 code units, as
-/// everywhere in the protocol, so an emoji counts for two.
+/// The most characters of a server name a client keeps. Characters are Unicode scalar values, as
+/// everywhere in the protocol, so an emoji counts for one.
 pub const MAX_NAME_LENGTH: usize = 63;
 
 /// The most characters an app id has.
 pub const MAX_APP_ID_LENGTH: usize = crate::MAX_APP_ID_LENGTH;
 
-/// The most characters of an app version a client keeps (UTF-16 code units).
+/// The most characters of an app version a client keeps (Unicode scalar values).
 pub const MAX_APP_VERSION_LENGTH: usize = 32;
 
 /// The most protocol versions an answer lists.

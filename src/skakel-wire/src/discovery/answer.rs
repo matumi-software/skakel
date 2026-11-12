@@ -4,10 +4,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::clean::{clean, utf16_len};
+use super::clean::clean;
 use super::{
     ANSWER_LINE, MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, PROBE_LINE, PROBE_SIZE,
-    escape,
 };
 use crate::{SkakelApp, fingerprints, is_app_id};
 
@@ -96,11 +95,13 @@ pub fn create_answer(answer: &DiscoveryAnswer) -> Result<Vec<u8>, AnswerError> {
         versions: answer.versions.clone(),
     };
     loop {
-        let json = escape::to_vec(&body);
+        // Plain JSON: `serde_json` writes non-ASCII text as UTF-8 and escapes only what JSON must.
+        let json = serde_json::to_vec(&body).map_err(|_| AnswerError::TooLarge)?;
         if ANSWER_LINE.len() + json.len() <= PROBE_SIZE {
             return Ok([ANSWER_LINE, &json].concat());
         }
-        // Only a name full of characters that take many bytes each gets here.
+        // Only a name full of characters that take many bytes each gets here. `pop` takes one
+        // scalar value, so the name is never cut through a character.
         if body.name.pop().is_none() {
             return Err(AnswerError::TooLarge);
         }
@@ -117,8 +118,8 @@ pub fn try_parse_answer(datagram: &[u8]) -> Option<DiscoveryAnswer> {
     let body: DiscoveryAnswer = serde_json::from_slice(json).ok()?;
     let fingerprint = fingerprints::normalize(&body.fingerprint)?;
     if body.port == 0
-        || utf16_len(&body.name) > MAX_NAME_LENGTH
-        || utf16_len(&body.app.version) > MAX_APP_VERSION_LENGTH
+        || body.name.chars().count() > MAX_NAME_LENGTH
+        || body.app.version.chars().count() > MAX_APP_VERSION_LENGTH
         || !is_app_id(&body.app.id)
         || !(1..=MAX_VERSIONS).contains(&body.versions.len())
         || body.versions.contains(&0)
@@ -196,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn create_answer_cleans_normalises_and_escapes() {
+    fn create_answer_cleans_normalises_and_writes_utf8() {
         let given = DiscoveryAnswer {
             name: "  pi\u{202E}lab \u{1F600}\n".into(),
             port: 65535,
@@ -208,7 +209,7 @@ mod tests {
             versions: vec![1, 2, 3, 4, 5, 6, 7, 8],
         };
         let expected = format!(
-            "SKAKEL-SERVER/1\n{{\"name\":\"pilab \\uD83D\\uDE00\",\"port\":65535,{},\"app\":{{\"id\":\"a-1\",\"version\":\"1.0\"}},\"versions\":[1,2,3,4,5,6,7,8]}}",
+            "SKAKEL-SERVER/1\n{{\"name\":\"pilab \u{1F600}\",\"port\":65535,{},\"app\":{{\"id\":\"a-1\",\"version\":\"1.0\"}},\"versions\":[1,2,3,4,5,6,7,8]}}",
             fingerprint_json()
         );
 
@@ -222,7 +223,7 @@ mod tests {
         let cases = [
             ("a", 63, 322),
             ("\u{E9}", 63, 417),
-            ("\u{1F600}", 7, 503),
+            ("\u{1F600}", 39, 511),
             ("\"", 63, 417),
         ];
 
@@ -334,15 +335,21 @@ mod tests {
     }
 
     #[test]
-    fn try_parse_answer_counts_a_name_in_utf16_units() {
-        // 32 emoji are 64 UTF-16 units, one over the limit, though only 32 characters.
-        let name = "\u{1F600}".repeat(32);
-        let datagram = format!(
-            "SKAKEL-SERVER/1\n{}",
-            serde_json::to_string(&answer(&name, "1", "koppel")).unwrap()
-        );
+    fn try_parse_answer_counts_a_name_in_scalar_values() {
+        // An emoji is one scalar value (two UTF-16 units, four bytes): 63 are the limit, 64 over.
+        let datagram = |name: &str| {
+            format!(
+                "SKAKEL-SERVER/1\n{}",
+                serde_json::to_string(&answer(name, "1", "koppel")).unwrap()
+            )
+        };
 
-        assert_eq!(try_parse_answer(datagram.as_bytes()), None);
+        let at_the_limit = try_parse_answer(datagram(&"\u{1F600}".repeat(63)).as_bytes());
+        assert_eq!(at_the_limit.unwrap().name.chars().count(), 63);
+        assert_eq!(
+            try_parse_answer(datagram(&"\u{1F600}".repeat(64)).as_bytes()),
+            None
+        );
     }
 
     #[test]

@@ -59,7 +59,7 @@ Skakel server". gRPC messages have limits of their own (see "One port for HTTPS 
 2. A probe is exactly 512 bytes: the line `SKAKEL-DISCOVER/1\n`, then zero padding.
 3. A server answers only a probe of at least 512 bytes that starts with that line, and never with
    more bytes than the probe had, so it cannot be used to multiply traffic. A server cuts its name
-   to 63 characters and its app version to 32, and shortens the name further if that is what it
+   to 63 characters and its app version to 32 (Unicode scalar values, an emoji counts for one), and shortens the name further if that is what it
    takes for the answer to fit in 512 bytes.
 4. The answer goes to the address and port the probe came from: the line `SKAKEL-SERVER/1\n`, then
    JSON (UTF-8, camelCase). A probe from port 0, or from an address that is not a single host
@@ -124,18 +124,20 @@ or an app version over 32 characters makes the answer one the client cannot use.
 
 ## Pairing
 
-A client gets its credentials by pairing. A person compares a six-digit code shown on the client
+A client gets its credentials by pairing. A person compares an eight-digit code shown on the client
 with the one they type on the server. Every call goes over HTTPS pinned to the fingerprint from
 discovery, with no token.
 
 1. The client picks a random 32-byte nonce, written as base64url, and sends a commitment, the
-   uppercase hex SHA-256 of the nonce's UTF-8 bytes:
+   uppercase hex SHA-256 of the tag `skakel-commit-v2` and the nonce's UTF-8 bytes, each after its
+   length (see below):
 
    `POST /skakel/v2/pair` with `{ "clientName": "...", "commitment": "<64 hex digits>" }`
 
-   `clientName` is 1 to 80 characters once the server has taken out Unicode control and format
-   characters (categories Cc and Cf: line breaks, NUL, direction overrides, zero-width characters)
-   and trimmed it; that is the name it keeps. The server answers
+   `clientName` is 1 to 80 characters (Unicode scalar values) once the server has taken out Unicode
+   control and format characters (categories Cc and Cf: line breaks, NUL, direction overrides,
+   zero-width characters) and trimmed it; that is the name it keeps and shows. The code below is
+   made from the name exactly as the client sent it. The server answers
    `{ "requestId", "serverNonce", "expiresAt", "pollToken" }`. Only the opener gets the poll token.
    A body that breaks these rules gets 400.
 2. The client reveals its nonce: `POST /skakel/v2/pair/{requestId}/reveal` with
@@ -144,10 +146,15 @@ discovery, with no token.
 3. Both ends derive the code:
 
    ```
-   hex   = the fingerprint's hex digits, uppercase, no separators
-   hash  = SHA-256( UTF-8( "skakel-pair-v1|" + hex + "|" + clientNonce + "|" + serverNonce ) )
-   code  = (the first 4 bytes of hash as a big-endian uint32) mod 1,000,000, as 6 digits
+   lp(x) = a 4-byte big-endian length of x, then the bytes of x
+   fp    = the certificate's SHA-256 fingerprint, the 32 bytes
+   hash  = SHA-256( lp("skakel-pair-v2") + lp(fp) + lp(UTF-8(clientName sent in the open call))
+                    + lp(UTF-8(clientNonce)) + lp(UTF-8(serverNonce)) )
+   code  = (the first 8 bytes of hash as a big-endian uint64) mod 100,000,000, as 8 digits
    ```
+
+   The commitment is `SHA-256( lp("skakel-commit-v2") + lp(UTF-8(clientNonce)) )`. Every part
+   carries its length, so where one part ends and the next begins is never open to doubt.
 
 4. The person types the code on the server, in the app's own screen. A match registers the client.
 5. The client polls `GET /skakel/v2/pair/{requestId}` with the header `X-Pair-Token: <pollToken>`
@@ -158,11 +165,14 @@ discovery, with no token.
    204. An unknown request or a wrong token gets 404 on both. The token is compared in constant
    time.
 
-The `v1` in `skakel-pair-v1` is the derivation's own version, as `/1` is discovery's, and it
-stays as it is in protocol version 2.
+The `v2` in `skakel-pair-v2` and `skakel-commit-v2` is the derivation's own version, as `/1` is
+discovery's. It is `v2` here because protocol version 3 changed the derivation (version 2 used
+`skakel-pair-v1`, joined text and 6 digits).
 
 A man in the middle has its own certificate and has to fix each nonce before seeing the other
-side's, so it cannot make the two codes match.
+side's, so it cannot make the two codes match: for each request it gets one guess in a hundred
+million. The name is part of the code, so a man in the middle that shows the person a different
+name than the client sent makes the codes differ.
 
 **Limits a server applies:** 5 opens per 5 minutes per address; 60 revealed requests per 5 minutes
 for the whole server; neither is refunded, by withdrawing or by expiry. An open that never reveals

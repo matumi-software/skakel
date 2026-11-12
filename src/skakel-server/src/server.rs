@@ -243,7 +243,7 @@ impl SkakelServerBuilder {
             problems.push(OptionProblem::AppId);
         }
         if self.app_version.trim().is_empty()
-            || self.app_version.encode_utf16().count() > MAX_APP_VERSION_LENGTH
+            || self.app_version.chars().count() > MAX_APP_VERSION_LENGTH
         {
             problems.push(OptionProblem::AppVersion);
         }
