@@ -10,11 +10,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, SystemTime};
 
-use reqwest::{StatusCode, Url};
+use ::http::StatusCode;
 use skakel_pairing::{
     PairOpenRequest, PairOpened, PairPoll, PairRevealRequest, PairState, commit, compute, new_nonce,
 };
 use skakel_protocol::{PAIR_PATH, PAIR_TOKEN_HEADER};
+use url::Url;
 
 use crate::clock::{Clock, since};
 use crate::failure::{Error, FailureKind, Result, bad_answer};
@@ -22,6 +23,7 @@ use crate::http::{self, base_address};
 use crate::info::{read_info_with, require_version};
 use crate::options::ClientOptions;
 use crate::pins::{Credentials, Pins};
+use crate::request::HttpClient;
 
 /// How long past its expiry a request is still polled, for a clock that differs from the server's.
 const EXPIRY_GRACE: Duration = Duration::from_secs(30);
@@ -79,7 +81,7 @@ const FINISHED: u8 = 1;
 /// An open pairing request. Dropping one that is still waiting withdraws it, in the background; use
 /// [`withdraw`](Self::withdraw) to wait for that.
 pub struct PairingClient {
-    http: reqwest::Client,
+    http: HttpClient,
     address: Url,
     pins: Pins,
     server_name: String,
@@ -124,7 +126,7 @@ impl PairingClient {
         let server = base_address(address)?;
         let pins = Pins::new(fingerprint)
             .map_err(|e| Error::caused(FailureKind::CertificateMismatch, e))?;
-        let client = http::client_for(pins.clone());
+        let client = HttpClient::pinned(pins.clone());
         let timeout = options.request_timeout;
         let opened = async {
             let info = read_info_with(&client, &server, timeout).await?;
@@ -139,9 +141,8 @@ impl PairingClient {
                     commitment: Some(commit(&nonce)),
                 })
                 .send()
-                .await
-                .map_err(Error::from_cause)?;
-            let opened: PairOpened = http::read_json(open).await?;
+                .await?;
+            let opened: PairOpened = open.read_json()?;
             if opened.server_nonce.is_empty()
                 || !is_id(&opened.request_id)
                 || !is_id(&opened.poll_token)
@@ -178,15 +179,14 @@ impl PairingClient {
                     client_nonce: Some(nonce),
                 })
                 .send()
-                .await
-                .map_err(Error::from_cause);
+                .await;
             let revealed = match revealed {
                 Ok(revealed) if revealed.status() == StatusCode::NOT_FOUND => {
                     // Dropped: it took too long to reveal, or the server restarted.
                     pairing.withdraw().await;
                     return Err(Error::of(FailureKind::PairingExpired));
                 }
-                Ok(revealed) => http::ensure_success(&revealed),
+                Ok(revealed) => revealed.ensure_success(),
                 Err(error) => Err(error),
             };
             if let Err(error) = revealed {
@@ -311,7 +311,7 @@ impl PairingClient {
                 }
                 _ => {}
             }
-            let poll: PairPoll = http::read_json(response).await?;
+            let poll: PairPoll = response.read_json()?;
             match poll.state {
                 PairState::Waiting => {}
                 PairState::Approved => match (poll.client_id, poll.client_secret) {
@@ -383,7 +383,7 @@ impl Drop for PairingClient {
 }
 
 async fn withdraw(
-    http: &reqwest::Client,
+    http: &HttpClient,
     address: &Url,
     request_id: &str,
     poll_token: &str,

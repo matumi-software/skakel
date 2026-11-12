@@ -16,7 +16,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use reqwest::Url;
+use url::Url;
 
 use crate::browser::DiscoveredServer;
 use crate::clock::{Clock, since};

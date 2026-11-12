@@ -455,7 +455,7 @@ async fn request_sends_the_token_over_the_pinned_connection() {
         .unwrap();
 
     assert!(response.status().is_success());
-    assert_eq!(response.text().await.unwrap(), credentials.client_id);
+    assert_eq!(response.text(), credentials.client_id);
 }
 
 #[tokio::test]

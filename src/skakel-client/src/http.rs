@@ -2,24 +2,24 @@
 //! fine; that is the point of pinning. The pins are read at each handshake, so a client made before
 //! a handover trusts the new certificate once the link learned it.
 //!
-//! A Skakel server is on the local network, so the client never goes through a proxy: a system proxy
-//! would see every request's address, and could not reach most LAN addresses anyway. A redirect is
-//! not followed, and no connection is kept for another request, so one made under a pin the link has
-//! since dropped never stays in use.
+//! The plain HTTPS client is in [`crate::request`]; this has the pins' TLS, the connector both it
+//! and the gRPC connections use, and the address helpers.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use reqwest::Url;
-use reqwest::redirect::Policy;
+use std::net::{IpAddr, SocketAddr};
+
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{WebPkiSupportedAlgorithms, ring};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
-use serde::de::DeserializeOwned;
 use skakel_protocol::fingerprints;
+use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
+use url::{Host, Url};
 
-use crate::failure::{Error, FailureKind, StatusError, bad_answer};
+use crate::failure::{Error, FailureKind};
 use crate::pins::Pins;
 
 /// How long opening a TCP connection may take.
@@ -119,25 +119,38 @@ pub(crate) fn tls_config(pins: PinsFn, presented: Option<Presented>) -> rustls::
         .with_no_client_auth()
 }
 
-/// An HTTP client over the pins. `presented`, when given, is told the fingerprint of each
-/// certificate a handshake trusted.
-pub(crate) fn client(pins: PinsFn, presented: Option<Presented>) -> reqwest::Client {
-    let config = tls_config(pins, presented);
-    reqwest::Client::builder()
-        .tls_backend_preconfigured(config)
-        .no_proxy()
-        .redirect(Policy::none())
-        .pool_max_idle_per_host(0)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .https_only(true)
-        .http1_only()
-        .build()
-        .expect("a client with this configuration always builds")
-}
-
-/// An HTTP client pinned to fixed pins.
-pub(crate) fn client_for(pins: Pins) -> reqwest::Client {
-    client(Arc::new(move || pins.clone()), None)
+/// Opens a TCP connection to `address` within ten seconds and runs TLS over it with `config`. The
+/// handshake trusts the pins in `config` and nothing else, so what comes back is a connection to a
+/// holder of a pinned certificate.
+pub(crate) async fn connect_tls(
+    address: &Url,
+    config: Arc<rustls::ClientConfig>,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, Error> {
+    let port = address.port_or_known_default().unwrap_or(443);
+    let (host, ip) = match address.host() {
+        Some(Host::Ipv4(ip)) => (ip.to_string(), Some(IpAddr::V4(ip))),
+        Some(Host::Ipv6(ip)) => (ip.to_string(), Some(IpAddr::V6(ip))),
+        Some(Host::Domain(name)) => (name.to_owned(), None),
+        None => return Err(Error::of(FailureKind::Unreachable)),
+    };
+    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, async {
+        match ip {
+            Some(ip) => TcpStream::connect(SocketAddr::new(ip, port)).await,
+            None => TcpStream::connect((host.as_str(), port)).await,
+        }
+    })
+    .await
+    .map_err(Error::from_cause)?
+    .map_err(Error::from_cause)?;
+    let _ = tcp.set_nodelay(true);
+    let name = match ip {
+        Some(ip) => ServerName::IpAddress(ip.into()),
+        None => ServerName::try_from(host).map_err(Error::from_cause)?,
+    };
+    TlsConnector::from(config)
+        .connect(name, tcp)
+        .await
+        .map_err(Error::from_cause)
 }
 
 /// A server's base address: HTTPS, scheme, host and port only.
@@ -174,43 +187,6 @@ pub(crate) fn authority(address: &Url) -> String {
         address.host_str().unwrap_or_default().to_ascii_lowercase(),
         address.port_or_known_default().unwrap_or(443)
     )
-}
-
-/// The whole body, or an error when it is longer than the client reads.
-pub(crate) async fn read_limited(mut response: reqwest::Response) -> Result<Vec<u8>, Error> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err(bad_answer("The answer is longer than the client reads."));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(Error::from_cause)? {
-        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err(bad_answer("The answer is longer than the client reads."));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
-/// An error unless the status is 2xx.
-pub(crate) fn ensure_success(response: &reqwest::Response) -> Result<(), Error> {
-    let status = response.status();
-    if status.is_success() {
-        Ok(())
-    } else {
-        Err(Error::from_cause(StatusError(status.as_u16())))
-    }
-}
-
-/// The body of a successful answer as JSON.
-pub(crate) async fn read_json<T: DeserializeOwned>(
-    response: reqwest::Response,
-) -> Result<T, Error> {
-    ensure_success(&response)?;
-    let body = read_limited(response).await?;
-    serde_json::from_slice(&body).map_err(Error::from_cause)
 }
 
 #[cfg(test)]

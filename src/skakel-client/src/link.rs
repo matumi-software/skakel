@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
-use reqwest::{Method, StatusCode, Url};
+use ::http::{Method, StatusCode};
 use skakel_proto::v2::control_service_client::ControlServiceClient;
 use skakel_proto::v2::{
     Certificates, ClosingReason, ConnectRequest, ConnectResponse, HelloRequest,
@@ -42,6 +42,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::body::Body;
 use tonic::{Status, Streaming};
+use url::Url;
 
 use crate::browser::{Browser, Protection};
 use crate::clock::{Clock, since};
@@ -52,9 +53,13 @@ use crate::info::{read_info_with, require_version};
 use crate::moves::{PROOF_TIMEOUT, ServerMoves};
 use crate::options::ClientOptions;
 use crate::pins::{Credentials, Pins};
+use crate::request::{HttpClient, RequestBuilder, Response};
 use crate::serial::SerialConnection;
 use crate::streams::{self, OpenResult, StreamConnection, StreamRefusalReason, with_token};
 use crate::tokens::{Token, TokenClient};
+
+/// The most of an answer from the app's own HTTPS endpoints that is read: 16 MiB.
+const MAX_APP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// How long before a token runs out the control call is renewed with a fresh one.
 const REFRESH_AHEAD: Duration = Duration::from_secs(30);
@@ -146,7 +151,7 @@ struct Inner {
     /// server says at once, so connections work, and `saved_pins` is what tells that apart.
     saved_pins: Mutex<Pins>,
     credentials: Credentials,
-    http: reqwest::Client,
+    http: HttpClient,
     tokens: TokenClient,
     moves: ServerMoves,
     browser: Option<Browser>,
@@ -219,7 +224,7 @@ impl Link {
             let pins = pins.clone();
             Arc::new(move || lock(&pins).clone())
         };
-        let http = http::client(pins_fn.clone(), None);
+        let http = HttpClient::new(pins_fn.clone(), None);
         let clock = options.clock.clone();
         let tokens = TokenClient::new(
             http.clone(),
@@ -457,8 +462,8 @@ impl Link {
         &self,
         method: Method,
         path: &str,
-        configure: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response> {
+        configure: impl FnOnce(RequestBuilder) -> RequestBuilder,
+    ) -> Result<Response> {
         if !is_server_path(path) {
             log::warn!("A request to {path:?} was refused: not a path on the server");
             return Err(Error::of(FailureKind::InvalidRequest));
@@ -471,13 +476,12 @@ impl Link {
         }
         let result = async {
             let token = self.inner.tokens.get().await?;
-            let builder = self
-                .inner
-                .http
-                .request(method, url)
+            let builder = configure(RequestBuilder::for_link(method, url))
+                .with_client(&self.inner.http)
                 .timeout(self.inner.options.request_timeout)
-                .bearer_auth(&token.value);
-            let response = configure(builder).send().await.map_err(Error::from_cause)?;
+                .max_response(MAX_APP_RESPONSE_BYTES)
+                .bearer(&token.value);
+            let response = builder.send().await?;
             if response.status() == StatusCode::UNAUTHORIZED {
                 self.inner.tokens.forget(&token.value).await;
             }
@@ -1174,7 +1178,7 @@ async fn learn_certificates(
 /// `fingerprint`. Within five seconds, as a move's proof.
 async fn presents(inner: &Inner, address: &Url, fingerprint: &str) -> bool {
     let presented = http::presented();
-    let client = http::client(inner.pins_fn(), Some(presented.clone()));
+    let client = HttpClient::new(inner.pins_fn(), Some(presented.clone()));
     match get_info(&client, address).await {
         Ok(()) => http::last_presented(&presented)
             .is_some_and(|p| fingerprints::are_equal(&p, fingerprint)),
@@ -1190,7 +1194,7 @@ async fn presents(inner: &Inner, address: &Url, fingerprint: &str) -> bool {
 
 /// `GET /skakel/info` on `server` over `client`, within the proof time. Any answer after the
 /// handshake the client pins is the proof; a handshake that fails or takes too long is not.
-async fn get_info(client: &reqwest::Client, server: &Url) -> std::result::Result<(), String> {
+async fn get_info(client: &HttpClient, server: &Url) -> std::result::Result<(), String> {
     let url = server.join(INFO_PATH).map_err(|e| e.to_string())?;
     client
         .get(url)

@@ -418,9 +418,6 @@ pub(crate) fn is_unreachable(error: &Error) -> bool {
         return false;
     }
     chain(source).iter().any(|e| {
-        if let Some(reqwest) = e.downcast_ref::<reqwest::Error>() {
-            return reqwest.is_connect() || reqwest.is_timeout();
-        }
         if let Some(io) = e.downcast_ref::<io::Error>() {
             return matches!(
                 io.kind(),

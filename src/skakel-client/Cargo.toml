@@ -19,7 +19,6 @@ serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-reqwest.workspace = true
 rustls.workspace = true
 prost.workspace = true
 getrandom.workspace = true
@@ -27,8 +26,10 @@ tonic = { workspace = true, features = ["codegen"] }
 tonic-types.workspace = true
 # gRPC connections of the client's own, one TCP connection each, pinned: tonic's generated clients
 # run over hyper's HTTP/2 client on a tokio-rustls stream. All of them are already in the tree
-# through reqwest (MIT, MIT OR Apache-2.0).
-hyper = { version = "1.12.0", features = ["client", "http2"] }
+# through tonic and rustls (MIT, MIT OR Apache-2.0). The plain HTTPS calls (info, pairing, tokens and
+# the app's own endpoints) run over hyper's HTTP/1.1 client on the same pinned connector.
+http = "1.3.1"
+hyper = { version = "1.12.0", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 http-body-util = "0.1.5"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }

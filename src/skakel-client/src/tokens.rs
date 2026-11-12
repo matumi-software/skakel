@@ -4,15 +4,15 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use reqwest::Url;
 use serde::Deserialize;
 use skakel_protocol::{ACCESS_TOKEN_LIFETIME, TOKEN_PATH};
 use tokio::sync::Mutex;
+use url::Url;
 
 use crate::clock::{Clock, since};
 use crate::failure::{Error, TokenRequestError, bad_answer};
-use crate::http;
 use crate::pins::Credentials;
+use crate::request::HttpClient;
 
 /// A token is renewed this long before it expires, so one handed out still has time to be used.
 pub(crate) const RENEW_BEFORE: Duration = Duration::from_secs(60);
@@ -32,7 +32,7 @@ pub(crate) struct Token {
 }
 
 pub(crate) struct TokenClient {
-    http: reqwest::Client,
+    http: HttpClient,
     server: Box<dyn Fn() -> Url + Send + Sync>,
     credentials: Credentials,
     clock: Arc<dyn Clock>,
@@ -49,7 +49,7 @@ struct TokenResponse {
 
 impl TokenClient {
     pub fn new(
-        http: reqwest::Client,
+        http: HttpClient,
         server: impl Fn() -> Url + Send + Sync + 'static,
         credentials: Credentials,
         clock: Arc<dyn Clock>,
@@ -87,12 +87,11 @@ impl TokenClient {
                 ("client_secret", self.credentials.client_secret.as_str()),
             ])
             .send()
-            .await
-            .map_err(Error::from_cause)?;
+            .await?;
         let status = response.status();
-        let body = http::read_limited(response).await?;
+        let body = response.bytes();
         // The JSON body, or nothing when there is none or it is not JSON, such as a proxy's error page.
-        let parsed: Option<TokenResponse> = serde_json::from_slice(&body).ok();
+        let parsed: Option<TokenResponse> = serde_json::from_slice(body).ok();
         if !status.is_success() {
             let error = parsed
                 .and_then(|p| p.error)
@@ -113,7 +112,7 @@ impl TokenClient {
 
         // It goes in a header on every call, so one that cannot is refused here, once, not dropped
         // later without a word.
-        if reqwest::header::HeaderValue::from_str(&format!("Bearer {value}")).is_err() {
+        if ::http::HeaderValue::from_str(&format!("Bearer {value}")).is_err() {
             return Err(bad_answer("The access token cannot be sent in a header."));
         }
         let fresh = Token {
