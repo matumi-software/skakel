@@ -44,6 +44,7 @@ impl<T: SkakelStore> SkakelStore for std::sync::Arc<T> {
 /// Skakel 0.1 kept, which held its certificates as PFX, so that state does not load here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SkakelState {
     /// The registered clients.
     pub clients: Vec<ClientRecord>,
@@ -57,6 +58,7 @@ pub struct SkakelState {
 /// A registered client. `Debug` leaves out the kept secret.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ClientRecord {
     /// The client's id, such as `client-3fa9c01b2e`.
     pub id: String,
@@ -77,6 +79,7 @@ pub struct ClientRecord {
 /// A certificate and its private key. `Debug` leaves out the private key.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CertificateRecord {
     /// The certificate, DER as base64.
     pub certificate: String,
@@ -109,6 +112,7 @@ impl std::fmt::Debug for CertificateRecord {
 /// A certificate prepared for a handover.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct NextCertificateRecord {
     /// The next certificate and its key.
     pub certificate: CertificateRecord,
@@ -133,15 +137,20 @@ impl InMemoryStore {
         Self::default()
     }
 
-    /// What was saved last.
+    /// What was saved last. For tests: it is there with the `test-util` feature.
+    #[cfg(any(test, feature = "test-util"))]
     pub fn state(&self) -> Option<SkakelState> {
+        self.snapshot()
+    }
+
+    fn snapshot(&self) -> Option<SkakelState> {
         self.state.lock().expect("store lock").clone()
     }
 }
 
 impl SkakelStore for InMemoryStore {
     fn load(&self) -> StoreFuture<'_, Option<SkakelState>> {
-        Box::pin(async move { Ok(self.state()) })
+        Box::pin(async move { Ok(self.snapshot()) })
     }
 
     fn save<'a>(&'a self, state: &'a SkakelState) -> StoreFuture<'a, ()> {

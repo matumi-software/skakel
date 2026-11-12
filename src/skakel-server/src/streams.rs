@@ -54,6 +54,7 @@ pub enum StreamMessage {
 
 /// What a handler is asked to open.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StreamRequest {
     /// The stream type, from the `open` frame.
     pub stream_type: String,
@@ -70,11 +71,21 @@ pub struct StreamRequest {
 
 type Run = Box<dyn FnOnce(StreamSession) -> BoxFuture<'static, ()> + Send>;
 
+/// What [`StreamOpen::accept`] makes: the work to run on an accepted stream. An app does not build
+/// one itself, so it can only accept a stream through [`StreamOpen::accept`].
+///
+/// ```compile_fail
+/// let _ = skakel_server::Accepted(Box::new(|_| Box::pin(async {})));
+/// ```
+pub struct Accepted(Run);
+
 /// A handler's answer to a request to open a stream. Each refusal ends the call before `opened`,
 /// with the words for a person.
+#[non_exhaustive]
 pub enum StreamOpen {
-    /// Accept: the server sends `opened` and runs this with the session.
-    Accept(Run),
+    /// Accept: the server sends `opened` and runs this with the session. Made by
+    /// [`StreamOpen::accept`].
+    Accept(Accepted),
     /// `NO_SUCH_TARGET`: there is no such target (a port, a device).
     NotFound(String),
     /// `IN_USE`: the target is in use; the words may say who holds it.
@@ -91,7 +102,7 @@ impl StreamOpen {
         F: FnOnce(StreamSession) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        Self::Accept(Box::new(move |session| Box::pin(run(session))))
+        Self::Accept(Accepted(Box::new(move |session| Box::pin(run(session)))))
     }
 }
 
@@ -386,7 +397,7 @@ impl StreamService for Streams {
             StreamOpen::NotFound(message) => return Err(refusal(Reason::NoSuchTarget, message)),
             StreamOpen::InUse(message) => return Err(refusal(Reason::InUse, message)),
             StreamOpen::BadTarget(message) => return Err(refusal(Reason::BadTarget, message)),
-            StreamOpen::Accept(run) => run,
+            StreamOpen::Accept(Accepted(run)) => run,
         };
 
         let (guard, ended) = self

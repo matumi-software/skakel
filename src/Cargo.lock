@@ -1589,6 +1589,7 @@ dependencies = [
  "sha2",
  "subtle",
  "time",
+ "unicode-general-category",
 ]
 
 [[package]]
@@ -1644,6 +1645,7 @@ dependencies = [
  "skakel-pairing",
  "skakel-proto",
  "skakel-protocol",
+ "skakel-server",
  "subtle",
  "time",
  "tokio",
@@ -1653,7 +1655,6 @@ dependencies = [
  "tonic-prost",
  "tonic-types",
  "tower-service",
- "unicode-general-category",
 ]
 
 [[package]]

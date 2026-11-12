@@ -1,7 +1,8 @@
 //! Serve Skakel clients, protocol version 2: discovery answers, pairing approval, OAuth tokens,
 //! revoking clients, the control channel and data streams over gRPC, and the certificate with its
-//! handover. The wire format is in `docs/protocol.md` at the repository root and the parts are in
-//! `docs/parts.md`.
+//! handover. The wire format is in [`docs/protocol.md`](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md)
+//! and the parts are in [`docs/parts.md`](https://github.com/matumi-software/skakel/blob/main/docs/parts.md),
+//! both at the root of the repository.
 //!
 //! An app builds a server with [`SkakelServerBuilder`], gives it a [`SkakelStore`] to keep its
 //! state in, adds its own gRPC services ([`SkakelServerBuilder::grpc_service`]), stream types
@@ -100,6 +101,9 @@
 //! is a route that takes [`ClientPrincipal`] but is not served by Skakel, where there is no server
 //! to tell; the first such request logs an error through the `log` crate.
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
 mod control;
 mod crypto;
 mod discovery;
@@ -118,6 +122,7 @@ mod streams;
 mod tokens;
 mod util;
 
+pub use crypto::CryptoError;
 pub use error::ServerError;
 pub use events::ServerEvent;
 pub use http::ClientPrincipal;
@@ -130,8 +135,7 @@ pub use store::{
     SkakelStore, StoreFuture,
 };
 pub use streams::{
-    BoxFuture, StreamClosed, StreamEnd, StreamHandler, StreamMessage, StreamOpen, StreamRequest,
-    StreamSession, StreamWriter,
+    Accepted, BoxFuture, StreamClosed, StreamEnd, StreamHandler, StreamMessage, StreamOpen,
+    StreamRequest, StreamSession, StreamWriter,
 };
 pub use tokens::Principal;
-pub use util::clean_client_name;

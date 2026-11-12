@@ -49,6 +49,7 @@ pub(crate) const MIN_NONCE_LENGTH: usize = 43;
 
 /// A request waiting for a person, or lately refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PairingRequest {
     /// The id the app passes to [`Pairing::approve`].
     pub id: String,
@@ -68,6 +69,7 @@ pub struct PairingRequest {
 
 /// The requests a person can see, and whether the server takes any more for now.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PairingOverview {
     /// Revealed requests waiting, and refused ones for a few seconds, newest first.
     pub requests: Vec<PairingRequest>,
@@ -77,6 +79,7 @@ pub struct PairingOverview {
 
 /// What came of typing a code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Approval {
     /// There is no such request, or it is no longer waiting.
     NotWaiting,
@@ -88,6 +91,7 @@ pub enum Approval {
 
 /// How a request ended, for the app's log.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PairingDecision {
     /// The request.
     pub request_id: String,

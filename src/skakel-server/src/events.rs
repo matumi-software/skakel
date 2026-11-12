@@ -8,6 +8,7 @@ use crate::state::{ClientView, KeysView};
 
 /// Something that changed on the server.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ServerEvent {
     /// The requests waiting for a person changed: one arrived, one ended, the budget ran out.
     Pairing(PairingOverview),

@@ -190,8 +190,8 @@ impl SkakelServerBuilder {
     }
 
     /// How long the access tokens it issues last, at most the protocol's 30 minutes. For tests of
-    /// what happens when a token runs out.
-    #[doc(hidden)]
+    /// what happens when a token runs out: it is there with the `test-util` feature.
+    #[cfg(any(test, feature = "test-util"))]
     pub fn token_lifetime(mut self, lifetime: Duration) -> Self {
         self.token_lifetime = lifetime;
         self
