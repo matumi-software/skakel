@@ -11,7 +11,7 @@ the network, is the first app built on it.
 
 ## Status
 
-Version 0.2.1, Rust only. Protocol version 3 is specified in
+Version 0.3.0, Rust only. Protocol version 3 is specified in
 [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), with its
 wire format in `.proto` files under `src/proto/skakel/` (`v3` for the control and stream services, `streams/serial/v1` for the serial stream type). The server and the client speak it:
 gRPC for the control channel, the app's own calls and the data streams, beside HTTPS for info,
@@ -46,7 +46,7 @@ skakel-client = { git = "https://github.com/matumi-software/skakel", rev = "<com
 
 ## Rust version
 
-Skakel needs Rust 1.99 (`rust-version` in `src/Cargo.toml`), the stable release when 0.2.1 was cut,
+Skakel needs Rust 1.99 (`rust-version` in `src/Cargo.toml`), the stable release when 0.3.0 was cut,
 and edition 2024. CI builds and tests on the latest stable, which is the declared version, so there is no
 separate job for an older toolchain. When stable moves past the declared version and the code does not
 need the newer one, CI gains a job on the declared version, so the claim stays true.

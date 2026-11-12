@@ -3,7 +3,7 @@ resolver = "3"
 members = ["skakel-client", "skakel-proto", "skakel-serial", "skakel-server", "skakel-vcam", "skakel-vcam-source", "skakel-wire"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.99"
 authors = ["Matumi Software"]
@@ -17,9 +17,9 @@ missing_docs = "warn"
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.dependencies]
-skakel-wire = { path = "skakel-wire", version = "0.2.1" }
-skakel-proto = { path = "skakel-proto", version = "0.2.1" }
-skakel-vcam = { path = "skakel-vcam", version = "0.2.1" }
+skakel-wire = { path = "skakel-wire", version = "0.3.0" }
+skakel-proto = { path = "skakel-proto", version = "0.3.0" }
+skakel-vcam = { path = "skakel-vcam", version = "0.3.0" }
 # Microsoft's Windows bindings (MIT OR Apache-2.0). `windows-core` is named directly because the
 # `#[implement]` macro expands to paths in it.
 windows = "0.62.2"
@@ -40,7 +40,7 @@ time = { version = "0.3.55", features = ["serde-well-known", "parsing", "formatt
 unicode-general-category = "1.1.0"
 
 # The client (all MIT, Apache-2.0 or ISC, checked with `cargo info`, and the tree with `cargo metadata`).
-skakel-serial = { path = "skakel-serial", version = "0.2.1" }
+skakel-serial = { path = "skakel-serial", version = "0.3.0" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-util = "0.7"
 # Wipes a secret when it is dropped (RustCrypto; MIT or Apache-2.0, depends on nothing here).
@@ -54,7 +54,7 @@ socket2 = "0.6.5"
 log = "0.4"
 url = "2.5.8"
 
-# Protocol version 2's gRPC code, generated from the .proto files in `proto/` by skakel-proto's
+# Protocol version 3's gRPC code, generated from the .proto files in `proto/` by skakel-proto's
 # build script. prost (Apache-2.0) writes and reads the messages, tonic (MIT) the services, and
 # protox (MIT OR Apache-2.0) compiles the .proto files in Rust, so no protoc is needed. Everything
 # they pull in is MIT, Apache-2.0, Unlicense or Unicode-3.0, checked with `cargo metadata`, except
