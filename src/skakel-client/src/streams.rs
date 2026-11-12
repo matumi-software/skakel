@@ -345,6 +345,21 @@ impl StreamConnection {
         }
     }
 
+    /// The parts a byte-stream view needs: a sender for what goes out and the receiver of what
+    /// comes in, which this connection then no longer reads.
+    pub(crate) fn take_io_parts(
+        &mut self,
+    ) -> (Option<mpsc::Sender<OpenRequest>>, mpsc::Receiver<Frame>) {
+        let incoming = std::mem::replace(self.incoming.get_mut(), mpsc::channel(1).1);
+        let frames = lock(&self.frames).clone();
+        (frames, incoming)
+    }
+
+    /// Ends the client's side of the call without waiting for the server.
+    pub(crate) fn end_sending(&self) {
+        lock(&self.frames).take();
+    }
+
     /// Ends the client's side of the stream and waits briefly for the server to send what it still
     /// has and end the call. Never fails for a stream that is already gone.
     pub async fn close(&self) {
