@@ -30,6 +30,7 @@ time.workspace = true
 # The one thing the server logs: a route that takes ClientPrincipal but is not served by Skakel,
 # where there is no server to send an event from.
 log.workspace = true
+socket2.workspace = true
 
 # The server stack. Every crate here, and what it pulls in, is MIT, Apache-2.0, BSD, ISC or Unicode-3.0
 # (checked with `cargo metadata`). rustls runs on ring rather than aws-lc-rs, which needs a C toolchain

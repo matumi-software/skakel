@@ -39,7 +39,7 @@ The wire is the same either way.
 The client takes tokio and rustls (with ring), hyper's HTTP/1.1 client over tokio-rustls for pinned
 HTTPS (one connection per request, no pool, no redirect, no proxy), tonic's generated clients over
 hyper's HTTP/2 client and tokio-rustls for pinned gRPC connections it opens itself, one TCP
-connection each, and if-addrs to find the networks to broadcast on. Both use one connector, so the
+connection each, and if-addrs to find the networks to probe on (IPv4 broadcast and IPv6 multicast), with socket2 for the IPv6-only UDP sockets (the server uses it for its own). Both use one connector, so the
 pin is checked the same way on every connection. tonic's own channel is not used:
 it dials again behind the caller's back and shares one connection, where the client needs to pin
 every handshake, keep connections to once a second, and give each stream a connection of its own.

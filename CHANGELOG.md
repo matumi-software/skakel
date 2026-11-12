@@ -10,6 +10,15 @@
   name (as sent) before the nonces, `DIGITS` is 8, `is_code` wants 8 digits, `commit` gives a
   different value for the same nonce, and an app that shows the code or asks the person for it shows
   and asks for 8 digits. A client of protocol 2 and a server of protocol 3 do not pair.
+- Protocol version 3, discovery over IPv6: a client also sends its probe to `ff02::1` on each IPv6
+  network it is on (from an address that is not link-local, so the answer comes from one too), and a
+  server whose HTTPS listens on an IPv6 address (or whose `discovery_bind` is one) answers on an
+  IPv6-only UDP socket of its own beside the IPv4 one, on the same port. A client ignores an answer
+  from a link-local address (`fe80::/10`), which cannot be dialled without a zone. The browser's
+  limit of 8 entries per address counts an IPv6 address as its `/64`. Apps that name the addresses
+  to probe (`BrowserOptions::probe_targets`) may name IPv6 ones. The packets are unchanged. IPv4-only
+  servers (`listen` on an IPv4 address) answer IPv4 only, as before. `skakel-server` and
+  `skakel-client` now depend on `socket2` for the IPv6-only sockets.
 - Protocol version 3, lengths: the limits on a name (63), an app version (32) and a client name (80)
   count Unicode scalar values, not UTF-16 code units (an emoji counts for one, not two), and the
   discovery answer is plain `serde_json` (non-ASCII text is UTF-8, not `\uXXXX` escapes). The answer

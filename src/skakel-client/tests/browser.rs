@@ -119,3 +119,56 @@ async fn stopping_empties_the_list_and_ends_the_probes() {
         "no probe goes out once it stopped"
     );
 }
+
+/// True when this machine can use IPv6 on loopback; a test that needs it says so and passes
+/// without it (a container with IPv6 switched off).
+async fn has_ipv6_loopback() -> bool {
+    let usable = tokio::net::UdpSocket::bind("[::1]:0").await.is_ok();
+    if !usable {
+        eprintln!("no IPv6 loopback here, so the IPv6 discovery test is skipped");
+    }
+    usable
+}
+
+#[tokio::test]
+async fn the_browser_finds_a_server_over_ipv6_and_gives_its_address_as_one() {
+    if !has_ipv6_loopback().await {
+        return;
+    }
+    let server = skakel_server::SkakelServerBuilder::new(
+        "test-app",
+        "1.2.3",
+        skakel_server::InMemoryStore::new(),
+    )
+    .name("bench-v6")
+    .listen("[::1]:0".parse().unwrap())
+    .discovery_bind("::1".parse().unwrap())
+    .discovery_port(0)
+    .start()
+    .await
+    .unwrap();
+    let udp = server.discovery_addr().unwrap().port();
+    let browser = Browser::new(
+        BrowserOptions::new(5240)
+            .probe_targets(vec![format!("[::1]:{udp}").parse().unwrap()])
+            .probe_interval(Duration::from_millis(300)),
+    );
+    let mut changes = browser.watch();
+
+    browser.start().await.unwrap();
+
+    let list = within(
+        Duration::from_secs(20),
+        changes.wait_for(|list| !list.is_empty()),
+    )
+    .await
+    .unwrap()
+    .clone();
+    let found = &list[0];
+    assert_eq!(found.name, "bench-v6");
+    assert_eq!(found.address.to_string(), "::1");
+    assert_eq!(found.port, server.local_addr().port());
+    assert_eq!(found.url().host_str(), Some("[::1]"));
+    browser.stop();
+    server.shutdown().await;
+}

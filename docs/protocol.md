@@ -55,7 +55,8 @@ Skakel server". gRPC messages have limits of their own (see "One port for HTTPS 
 
 ## Discovery
 
-1. A client broadcasts a probe every ten seconds to its app's port, on each IPv4 network it is on.
+1. A client sends a probe every ten seconds to its app's port: broadcast on each IPv4 network it is
+   on, and to the IPv6 all-nodes group `ff02::1` on each IPv6 network it is on (see "IPv6" below).
 2. A probe is exactly 512 bytes: the line `SKAKEL-DISCOVER/1\n`, then zero padding.
 3. A server answers only a probe of at least 512 bytes that starts with that line, and never with
    more bytes than the probe had, so it cannot be used to multiply traffic. A server cuts its name
@@ -89,7 +90,8 @@ of a probe it sent.
 
 A client keeps one entry per fingerprint, address and port, so an answer that copies another
 server's fingerprint sits beside it and never changes it. It keeps at most 64 entries and at most
-8 from one address. When it has to make room it drops an entry from that address, or when the list
+8 from one address (an IPv6 address counts as its `/64`: a host owns the whole `/64` and can answer
+from any address in it). When it has to make room it drops an entry from that address, or when the list
 is full from the address that holds the most: the one that answered the fewest probes, then the
 stalest. It never drops an entry with a fingerprint a running link has pinned; when only those are
 left, the new answer is dropped. An entry that misses three probes in a row (35 seconds) expires.
@@ -99,8 +101,23 @@ with the other addresses that answered with the same fingerprint beside it. Anyo
 fingerprint, so several addresses for one is worth showing; only a pinned connection tells which
 holds the certificate. An app shows only the servers whose app id it can use.
 
-Broadcasts stay on the local network: a server elsewhere is entered by address. IPv6 discovery is
-not in version 2.
+Broadcasts stay on the local network: a server elsewhere is entered by address.
+
+**IPv6.** Discovery works over IPv6 with the same packets, on the same port number.
+
+- A client sends the probe to `ff02::1` (the all-nodes group, link-local scope) on each interface
+  that is up, is not loopback and has an IPv6 address that is not link-local, from that address. It
+  sends from an address that needs no zone because the server answers to the address the probe
+  came from, and a server that answers to a link-local address answers from one too.
+- A server answers IPv6 probes on an IPv6-only UDP socket of its own, beside the IPv4 one, on the
+  same port, when its HTTPS listener serves IPv6 (or the app binds discovery to an IPv6 address).
+  A server whose HTTPS is IPv4 only answers IPv4 probes only, so an answer never names an address
+  where HTTPS is not served. The no-amplification rule and the refusals (port 0, unspecified,
+  multicast) are the same.
+- A client ignores an answer from a link-local address (`fe80::/10`): the server could only be
+  reached with the interface's zone, which an address in a list cannot carry. A network with only
+  link-local IPv6 addresses is found over IPv4.
+- An app that names the addresses to probe (`probe_targets`) may name IPv6 ones.
 
 ## Info
 
@@ -580,7 +597,6 @@ round: both ends update together, and each tells a person so through the version
 
 ## Not in version 2
 
-- IPv6 discovery.
 - Several apps behind one port.
 - Resuming a stream after the connection drops: a client opens a new one.
 - QUIC and HTTP/3. UDP is blocked on some networks, which would need a fallback to TCP anyway.
