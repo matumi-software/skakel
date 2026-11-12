@@ -25,6 +25,13 @@ Build and test from `src/`:
 cd src && cargo build && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check
 ```
 
+The workflow in `.github/workflows/ci.yml` runs the same four commands with `--locked` on Linux and
+Windows for every pull request and every push to `main`, and `cargo deny check` against
+`src/deny.toml`. All of it must pass before a pull request merges, and the pull request ruleset
+requires it. The test `skakel-protocol/tests/parts.rs` fails when a crate depends on a Skakel crate
+that `docs/parts.md` does not allow. Dependabot proposes Cargo and GitHub Actions updates weekly, in
+one pull request each.
+
 ## Rules
 
 - **`docs/protocol.md` is the contract.** A change to what goes over the wire changes that file in

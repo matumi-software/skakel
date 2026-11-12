@@ -1,0 +1,44 @@
+# What `cargo deny check` enforces. Skakel is MIT, so every dependency must be under a licence that
+# lets that stand: nothing GPL, LGPL or AGPL. See "MIT, and nothing that would stop that" in
+# CLAUDE.md.
+
+[graph]
+# Check the crates a build can take on every platform, not only the one the check runs on.
+all-features = true
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "Unicode-3.0",
+]
+# An expression with OR passes when one of its options is allowed, so a crate offered under
+# "MIT OR LGPL" is used under MIT.
+
+# An exception names one crate and says why.
+exceptions = [
+    # Mozilla's root certificate list, as data, under a permissive licence for data with no
+    # copyleft and no restriction on use. rustls-platform-verifier takes it for its fallback.
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+]
+
+[advisories]
+# Yanked crates and security advisories fail the check. Unmaintained and unsound crates are
+# reported for the crates this workspace takes directly.
+yanked = "deny"
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# A path dependency inside the workspace carries a version, so it is not a wildcard.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
