@@ -1,7 +1,7 @@
 //! Pairing: requests a client opens, the person's approval and the credentials that follow.
 //!
 //! A request is opened with a commitment, revealed with the client's nonce, and then waits for a
-//! person to type the six-digit code both ends worked out. The app shows the waiting requests
+//! person to type the eight-digit code both ends worked out. The app shows the waiting requests
 //! (see [`PairingOverview`]) and calls [`Pairing::approve`] or [`Pairing::deny`].
 
 use std::collections::{HashMap, VecDeque};
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use skakel_wire::pairing::{
     PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpened, PairPoll, PairState,
-    compute, is_code, matches, new_nonce,
+    clean_client_name, compute, is_code, matches, new_nonce,
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -135,7 +135,10 @@ impl Stage {
 
 struct Request {
     id: String,
+    /// The name as the server keeps and shows it: cleaned and trimmed.
     client_name: String,
+    /// The name exactly as the client sent it, which is what the code is made from.
+    sent_name: String,
     from: String,
     address_key: String,
     commitment: String,
@@ -423,9 +426,11 @@ impl Pairing {
     }
 
     /// Opens a request. `None` when this server takes no more from this address for now.
+    /// `sent_name` is the client's name exactly as its opening call carried it; the server keeps
+    /// and shows it cleaned, and the code is made from it as sent.
     pub(crate) async fn open(
         &self,
-        client_name: &str,
+        sent_name: &str,
         commitment: &str,
         from: IpAddr,
     ) -> Option<PairOpened> {
@@ -467,7 +472,8 @@ impl Pairing {
         let wall = OffsetDateTime::now_utc();
         let request = Request {
             id: request_id,
-            client_name: client_name.to_owned(),
+            client_name: clean_client_name(sent_name),
+            sent_name: sent_name.to_owned(),
             from: util::address_text(from),
             address_key: key,
             commitment: commitment.to_owned(),
@@ -515,6 +521,7 @@ impl Pairing {
             }
             let Some(code) = compute(
                 &self.inner.state.fingerprint(),
+                &request.sent_name,
                 client_nonce,
                 &request.server_nonce,
             ) else {
@@ -683,7 +690,7 @@ mod tests {
             pairing.reveal(&opened.request_id, &nonce).await,
             Reveal::Revealed
         );
-        let code = compute(&state.fingerprint(), &nonce, &opened.server_nonce).unwrap();
+        let code = compute(&state.fingerprint(), "lab pc", &nonce, &opened.server_nonce).unwrap();
         (opened, code)
     }
 

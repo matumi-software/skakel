@@ -35,8 +35,8 @@ fn answers() -> impl Strategy<Value = DiscoveryAnswer> {
         )
 }
 
-fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
+fn length(text: &str) -> usize {
+    text.chars().count()
 }
 
 fn lan_address() -> SocketAddr {
@@ -54,8 +54,8 @@ proptest! {
         prop_assert_eq!(read.port, answer.port);
         prop_assert_eq!(&read.versions, &answer.versions);
         prop_assert_eq!(&read.app.id, &answer.app.id);
-        prop_assert!(utf16_len(&read.name) <= MAX_NAME_LENGTH);
-        prop_assert!(utf16_len(&read.app.version) <= MAX_APP_VERSION_LENGTH);
+        prop_assert!(length(&read.name) <= MAX_NAME_LENGTH);
+        prop_assert!(length(&read.app.version) <= MAX_APP_VERSION_LENGTH);
         // What a client reads is already clean, so cleaning it again changes nothing.
         prop_assert_eq!(clean(&read.name, MAX_NAME_LENGTH), read.name);
     }
@@ -80,8 +80,8 @@ proptest! {
         let mut bytes = b"SKAKEL-SERVER/1\n".to_vec();
         bytes.extend_from_slice(&tail);
         if let Some(answer) = try_parse_answer(&bytes) {
-            prop_assert!(utf16_len(&answer.name) <= MAX_NAME_LENGTH);
-            prop_assert!(utf16_len(&answer.app.version) <= MAX_APP_VERSION_LENGTH);
+            prop_assert!(length(&answer.name) <= MAX_NAME_LENGTH);
+            prop_assert!(length(&answer.app.version) <= MAX_APP_VERSION_LENGTH);
             prop_assert!((1..=MAX_VERSIONS).contains(&answer.versions.len()));
             prop_assert!(answer.port != 0);
         }
@@ -91,7 +91,7 @@ proptest! {
     #[test]
     fn clean_is_idempotent_and_bounded(text in texts(), max in 0usize..80) {
         let once = clean(&text, max);
-        prop_assert!(utf16_len(&once) <= max);
+        prop_assert!(length(&once) <= max);
         prop_assert_eq!(clean(&once, max), once.clone());
         prop_assert_eq!(once.trim(), once.as_str());
         prop_assert!(once.chars().all(|c| !c.is_control()));

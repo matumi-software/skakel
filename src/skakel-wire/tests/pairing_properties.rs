@@ -14,15 +14,44 @@ proptest! {
         prop_assert_eq!(matches(&commitment, &b), a == b);
     }
 
-    /// The code is always six digits, and the same inputs give the same code however the
+    /// The code is always eight digits, and the same inputs give the same code however the
     /// fingerprint is written.
     #[test]
-    fn the_code_is_six_digits_and_stable(fp in "[0-9A-F]{64}", c in ".{0,60}", s in ".{0,60}") {
-        let code = compute(&fp, &c, &s).unwrap();
+    fn the_code_is_eight_digits_and_stable(
+        fp in "[0-9A-F]{64}", name in ".{0,40}", c in ".{0,60}", s in ".{0,60}",
+    ) {
+        let code = compute(&fp, &name, &c, &s).unwrap();
         prop_assert_eq!(code.len(), DIGITS);
         prop_assert!(code.bytes().all(|b| b.is_ascii_digit()));
         let coloured: Vec<&str> = (0..32).map(|i| &fp[i * 2..i * 2 + 2]).collect();
-        prop_assert_eq!(compute(&coloured.join(":").to_lowercase(), &c, &s).unwrap(), code);
+        prop_assert_eq!(compute(&coloured.join(":").to_lowercase(), &name, &c, &s).unwrap(), code);
+    }
+
+    /// The client name is part of the code: another name gives another code. (An 8-digit code can
+    /// clash by chance once in a hundred million, which these few hundred cases do not reach.)
+    #[test]
+    fn another_client_name_gives_another_code(
+        fp in "[0-9A-F]{64}", a in ".{0,20}", b in ".{0,20}", c in ".{0,30}", s in ".{0,30}",
+    ) {
+        prop_assume!(a != b);
+        prop_assert_ne!(
+            compute(&fp, &a, &c, &s).unwrap(),
+            compute(&fp, &b, &c, &s).unwrap()
+        );
+    }
+
+    /// Where a part ends is part of the input: moving the last byte of one part to the start of
+    /// the next changes the code.
+    #[test]
+    fn moving_a_byte_between_parts_changes_the_code(
+        fp in "[0-9A-F]{64}", c in "[a-z]{1,30}", s in "[a-z]{1,30}",
+    ) {
+        let (head, tail) = c.split_at(c.len() - 1);
+        let moved = format!("{tail}{s}");
+        prop_assert_ne!(
+            compute(&fp, "n", &c, &s).unwrap(),
+            compute(&fp, "n", head, &moved).unwrap()
+        );
     }
 
     /// Text that is not 64 hex digits with optional colons gives no code, whatever it holds.
@@ -30,12 +59,12 @@ proptest! {
     fn text_that_is_not_a_fingerprint_gives_no_code(text in ".{0,100}") {
         let valid = text.chars().all(|c| c == ':' || c.is_ascii_hexdigit())
             && text.chars().filter(|c| *c != ':').count() == 64;
-        prop_assert_eq!(compute(&text, "c", "s").is_some(), valid);
+        prop_assert_eq!(compute(&text, "n", "c", "s").is_some(), valid);
     }
 
     /// Typed text is the code only when its digits are exactly the code.
     #[test]
-    fn a_typed_code_is_the_code_or_not(expected in "[0-9]{6}", typed in ".{0,30}") {
+    fn a_typed_code_is_the_code_or_not(expected in "[0-9]{8}", typed in ".{0,30}") {
         prop_assert!(is_code(&expected, &expected));
         let digits: String = typed.chars().filter(char::is_ascii_digit).collect();
         prop_assert_eq!(is_code(&expected, &typed), digits == expected);

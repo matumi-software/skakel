@@ -1,7 +1,7 @@
 //! Pairing with a server, so the client gets its credentials without anyone typing a secret.
 //!
 //! Opens a request over HTTPS pinned to the fingerprint discovery announced, with a commitment to a
-//! nonce, reveals the nonce, and gives the six-digit [`code`](PairingClient::code) to show. A person
+//! nonce, reveals the nonce, and gives the eight-digit [`code`](PairingClient::code) to show. A person
 //! types it on the server; [`wait`](PairingClient::wait) polls until they did and hands the
 //! credentials to the app, which decides where to keep them.
 
@@ -37,7 +37,7 @@ pub const MAX_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The longest request ID or poll token taken from a server. The server's own are far shorter.
 const MAX_ID_LENGTH: usize = 128;
 
-/// The longest a client name is, in UTF-16 code units as the server counts them.
+/// The longest a client name is, in Unicode scalar values as the server counts them.
 const MAX_CLIENT_NAME_LENGTH: usize = 80;
 
 /// Why a pairing request could not be opened.
@@ -130,7 +130,7 @@ impl PairingClient {
         options: &ClientOptions,
     ) -> Result<Self, PairingError> {
         let name = client_name.trim();
-        if name.is_empty() || name.encode_utf16().count() > MAX_CLIENT_NAME_LENGTH {
+        if name.is_empty() || name.chars().count() > MAX_CLIENT_NAME_LENGTH {
             return Err(PairingError::InvalidClientName);
         }
         let server = base_address(address)?;
@@ -162,7 +162,8 @@ impl PairingClient {
                 ));
             }
 
-            let code = compute(pins.fingerprint(), &nonce, &opened.server_nonce)
+            // The name goes into the code exactly as it was sent in the opening call.
+            let code = compute(pins.fingerprint(), name, &nonce, &opened.server_nonce)
                 .ok_or_else(|| Error::of(FailureKind::CertificateMismatch))?;
             let now = options.clock.now();
             // By this client's clock: never later than five minutes from now, however far off the
@@ -234,7 +235,7 @@ impl PairingClient {
         &self.server_name
     }
 
-    /// The six-digit code to show. The person types it on the server.
+    /// The eight-digit code to show. The person types it on the server.
     pub fn code(&self) -> &str {
         &self.code
     }

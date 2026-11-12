@@ -70,7 +70,7 @@ has how it works, the shared memory contract, installing and upgrading, and sign
 
 - **Finding a server:** a UDP probe on the local network. A server answers with its name, port,
   certificate fingerprint and version.
-- **Pairing:** a six-digit code that a person compares on both machines, so no secret is ever
+- **Pairing:** an eight-digit code that a person compares on both machines, so no secret is ever
   typed or copied.
 - **Signing in:** OAuth 2.0 client credentials. The client pins the server's certificate.
 - **Control:** gRPC over HTTP/2 on the same port. Skakel's control service carries the certificate

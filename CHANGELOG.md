@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Protocol version 3, pairing: the code a person compares is 8 digits, not 6, and is made from the
+  client's name as well as the certificate and both nonces, so a man in the middle that shows the
+  person another name than the client sent gets a code that does not match. Every hash input is
+  length-prefixed (`skakel-pair-v2`, commitment `skakel-commit-v2`); the derivation is in
+  `docs/protocol.md` ("Pairing"). Breaking for apps: `skakel_wire::pairing::compute` takes the client
+  name (as sent) before the nonces, `DIGITS` is 8, `is_code` wants 8 digits, `commit` gives a
+  different value for the same nonce, and an app that shows the code or asks the person for it shows
+  and asks for 8 digits. A client of protocol 2 and a server of protocol 3 do not pair.
+- Protocol version 3, lengths: the limits on a name (63), an app version (32) and a client name (80)
+  count Unicode scalar values, not UTF-16 code units (an emoji counts for one, not two), and the
+  discovery answer is plain `serde_json` (non-ASCII text is UTF-8, not `\uXXXX` escapes). The answer
+  still never exceeds the 512-byte probe: a name that does not fit is cut by scalar values.
 - `skakel-server`: the server no longer panics when the operating system has no random bytes. A
   request that needs them is refused and the error is logged: a pairing open is answered as for a
   full server, the token endpoint answers 500, and `register_client` and `rotate_secret` return the

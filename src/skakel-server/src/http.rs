@@ -35,7 +35,7 @@ use time::OffsetDateTime;
 use crate::pairing::Reveal;
 use crate::server::Shared;
 use crate::tokens::Principal;
-use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token, utf16_len};
+use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token};
 
 /// The largest body the token and pairing paths read.
 pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024;
@@ -301,8 +301,10 @@ async fn pair_open(
             "Send the client's name and commitment as JSON.",
         );
     };
-    let name = clean_client_name(request.client_name.as_deref().unwrap_or(""));
-    if name.is_empty() || utf16_len(&name) > MAX_CLIENT_NAME_LENGTH {
+    // The code is made from the name as the client sent it; the server keeps it cleaned.
+    let sent_name = request.client_name.as_deref().unwrap_or("");
+    let name = clean_client_name(sent_name);
+    if name.is_empty() || name.chars().count() > MAX_CLIENT_NAME_LENGTH {
         return problem(
             StatusCode::BAD_REQUEST,
             &format!("Give the client a name of 1 to {MAX_CLIENT_NAME_LENGTH} characters."),
@@ -321,7 +323,11 @@ async fn pair_open(
             );
         }
     };
-    match shared.pairing.open(&name, &commitment, remote.ip()).await {
+    match shared
+        .pairing
+        .open(sent_name, &commitment, remote.ip())
+        .await
+    {
         Some(opened) => Json(opened).into_response(),
         None => problem(
             StatusCode::TOO_MANY_REQUESTS,

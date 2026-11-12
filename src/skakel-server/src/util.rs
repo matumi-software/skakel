@@ -14,8 +14,8 @@ use subtle::ConstantTimeEq;
 
 const SHA256_PREFIX: &str = "sha256$";
 
-/// The longest client name a pairing request may carry, in UTF-16 code units, the unit
-/// the protocol counts in.
+/// The longest client name a pairing request may carry, in Unicode scalar values (what a person
+/// counts as characters, bar combining marks).
 pub(crate) const MAX_CLIENT_NAME_LENGTH: usize = 80;
 
 /// `N` random bytes from the operating system, or [`RandomError`] when it has none to give. The
@@ -160,10 +160,6 @@ pub(crate) fn address_key(address: IpAddr) -> String {
     }
 }
 
-pub(crate) fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,12 +285,6 @@ mod properties {
             let mut headers = HeaderMap::new();
             headers.insert(AUTHORIZATION, HeaderValue::from_bytes(&value).unwrap());
             let _ = bearer_token(&headers);
-        }
-
-        /// The length in UTF-16 units is the standard library's own count.
-        #[test]
-        fn utf16_length_is_the_encoders(text in ".{0,100}") {
-            prop_assert_eq!(utf16_len(&text), text.encode_utf16().count());
         }
     }
 

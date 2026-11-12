@@ -69,7 +69,7 @@ fn check(info: SkakelInfo, server: &Url) -> Result<SkakelInfo> {
         app,
         versions,
     } = info;
-    if app.version.encode_utf16().count() > MAX_APP_VERSION_LENGTH
+    if app.version.chars().count() > MAX_APP_VERSION_LENGTH
         || !is_app_id(&app.id)
         || !(1..=MAX_VERSIONS).contains(&versions.len())
         || versions.contains(&0)

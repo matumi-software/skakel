@@ -4,11 +4,12 @@ use unicode_general_category::{GeneralCategory, get_general_category};
 
 /// Text a person can be shown: without control characters, format characters (such as bidi
 /// overrides and zero-width ones) or line and paragraph separators (Unicode categories Cc, Cf, Zl
-/// and Zp), trimmed and cut to `max_length` UTF-16 code units, never through a surrogate pair.
-/// What a client applies to a server's name and app version, from discovery and from info alike.
+/// and Zp), trimmed and cut to `max_length` Unicode scalar values, never through one. What a client
+/// applies to a server's name and app version, from discovery and from info alike.
 ///
-/// Lengths are in UTF-16 code units, not bytes or characters, because that is what Skakel has
-/// counted since protocol version 1, and every side must keep the same text.
+/// Lengths are in Unicode scalar values (what Rust's `char` is), not bytes and not UTF-16 code
+/// units, so an emoji counts for one. A combining mark counts for one too: what a person sees as
+/// one character may be several.
 pub fn clean(text: &str, max_length: usize) -> String {
     let kept: String = text
         .chars()
@@ -23,23 +24,10 @@ pub fn clean(text: &str, max_length: usize) -> String {
         })
         .collect();
 
-    let mut clean = String::new();
-    let mut units = 0;
-    for c in kept.trim().chars() {
-        units += c.len_utf16();
-        if units > max_length {
-            break;
-        }
-        clean.push(c);
-    }
+    let mut clean: String = kept.trim().chars().take(max_length).collect();
     // A cut inside the text can leave the space before it at the end.
     clean.truncate(clean.trim_end().len());
     clean
-}
-
-/// The length of `text` in UTF-16 code units, the unit the protocol counts in.
-pub(crate) fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
 }
 
 #[cfg(test)]
@@ -63,15 +51,17 @@ mod tests {
     }
 
     #[test]
-    fn clean_cuts_to_length_without_splitting_a_surrogate_pair() {
+    fn clean_cuts_to_length_in_scalar_values_and_never_through_one() {
         assert_eq!(clean(&"n".repeat(100), 63).len(), 63);
+        // An emoji is one scalar value, so 63 of them fit, and so do 62 letters and one emoji.
+        assert_eq!(clean(&"\u{1F600}".repeat(100), 63).chars().count(), 63);
         assert_eq!(
             clean(&format!("{}\u{1F600}", "n".repeat(62)), 63),
-            "n".repeat(62)
+            format!("{}\u{1F600}", "n".repeat(62))
         );
         assert_eq!(
-            clean(&format!("{}\u{1F600}", "n".repeat(61)), 63),
-            format!("{}\u{1F600}", "n".repeat(61))
+            clean(&format!("{}\u{1F600}", "n".repeat(63)), 63),
+            "n".repeat(63)
         );
         assert_eq!(clean("", 63), "");
         assert_eq!(clean("abc", 0), "");

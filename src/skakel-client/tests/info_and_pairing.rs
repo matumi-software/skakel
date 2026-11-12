@@ -9,8 +9,8 @@ use skakel_client::{
     require_version,
 };
 
-fn code_is_six_digits(code: &str) -> bool {
-    code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit())
+fn code_is_eight_digits(code: &str) -> bool {
+    code.len() == 8 && code.bytes().all(|b| b.is_ascii_digit())
 }
 
 #[tokio::test]
@@ -95,7 +95,7 @@ async fn wait_hands_over_credentials_once_the_code_is_typed_on_the_server() {
     pairing.set_poll_interval(Duration::from_millis(100));
 
     assert_eq!(pairing.server_name(), "bench");
-    assert!(code_is_six_digits(pairing.code()), "{}", pairing.code());
+    assert!(code_is_eight_digits(pairing.code()), "{}", pairing.code());
     let requests = bench.requests(&server).await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1, "laptop");
