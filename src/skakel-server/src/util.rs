@@ -31,6 +31,16 @@ pub(crate) fn new_id(prefix: &str) -> String {
     format!("{prefix}-{}", hex_lower(&random::<5>()))
 }
 
+/// The first id `make` gives that `taken` does not claim.
+pub(crate) fn first_free(mut make: impl FnMut() -> String, taken: impl Fn(&str) -> bool) -> String {
+    loop {
+        let id = make();
+        if !taken(&id) {
+            return id;
+        }
+    }
+}
+
 /// A poll token: 32 random bytes as uppercase hex.
 pub(crate) fn new_token() -> String {
     hex_upper(&random::<32>())
@@ -40,7 +50,7 @@ pub(crate) fn hex_upper(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect()
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -127,6 +137,15 @@ pub(crate) fn utf16_len(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_free_skips_the_ids_that_are_taken() {
+        let mut ids = ["a", "b", "c"].into_iter().map(String::from);
+
+        let id = first_free(|| ids.next().unwrap(), |id| id != "c");
+
+        assert_eq!(id, "c");
+    }
 
     #[test]
     fn secrets_are_43_url_safe_characters_and_never_repeat() {

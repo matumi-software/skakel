@@ -59,8 +59,8 @@ pub struct SkakelState {
     pub next_certificate: Option<NextCertificateRecord>,
 }
 
-/// A registered client.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A registered client. `Debug` leaves out the kept secret.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientRecord {
     /// The client's id, such as `client-3fa9c01b2e`.
@@ -79,8 +79,8 @@ pub struct ClientRecord {
     pub secret: Option<String>,
 }
 
-/// A token signing key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A token signing key. `Debug` leaves out the private key.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyRecord {
     /// The id in the `kid` header of the tokens it signs.
@@ -95,14 +95,47 @@ pub struct KeyRecord {
     pub accept_until: Option<OffsetDateTime>,
 }
 
-/// A certificate and its private key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A certificate and its private key. `Debug` leaves out the private key.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CertificateRecord {
     /// The certificate, DER as base64.
     pub certificate: String,
     /// Its ECDSA P-256 private key, PKCS#8 DER as base64.
     pub private_key: String,
+}
+
+impl std::fmt::Debug for ClientRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientRecord")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("secret_hash", &"<hidden>")
+            .field("created_at", &self.created_at)
+            .field("generation", &self.generation)
+            .field("secret", &self.secret.as_ref().map(|_| "<hidden>"))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for KeyRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyRecord")
+            .field("key_id", &self.key_id)
+            .field("private_key", &"<hidden>")
+            .field("created_at", &self.created_at)
+            .field("accept_until", &self.accept_until)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CertificateRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CertificateRecord")
+            .field("certificate", &self.certificate)
+            .field("private_key", &"<hidden>")
+            .finish()
+    }
 }
 
 /// A certificate prepared for a handover.
@@ -180,15 +213,38 @@ impl SkakelStore for FileStore {
 
     fn save<'a>(&'a self, state: &'a SkakelState) -> StoreFuture<'a, ()> {
         Box::pin(async move {
+            use tokio::io::AsyncWriteExt;
+
             let json = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
             if let Some(folder) = self.path.parent().filter(|p| !p.as_os_str().is_empty()) {
                 tokio::fs::create_dir_all(folder).await?;
             }
+            // A file of its own beside the state, so two saves never write the same one, then
+            // renamed over the old state.
             let mut temporary = self.path.clone().into_os_string();
-            temporary.push(".tmp");
+            temporary.push(format!(
+                ".{}.tmp",
+                crate::util::hex_lower(&crate::util::random::<6>())
+            ));
             let temporary = PathBuf::from(temporary);
-            tokio::fs::write(&temporary, json).await?;
-            tokio::fs::rename(&temporary, &self.path).await
+
+            let written = async {
+                let mut options = tokio::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                // The state holds private keys: readable by the server's own account only.
+                #[cfg(unix)]
+                options.mode(0o600);
+                let mut file = options.open(&temporary).await?;
+                file.write_all(&json).await?;
+                file.sync_all().await?;
+                drop(file);
+                tokio::fs::rename(&temporary, &self.path).await
+            }
+            .await;
+            if written.is_err() {
+                let _ = tokio::fs::remove_file(&temporary).await;
+            }
+            written
         })
     }
 }
@@ -246,6 +302,60 @@ mod tests {
         assert_eq!(store.load().await.unwrap(), Some(state()));
         assert!(!folder.join("nested").join("state.json.tmp").exists());
         let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[tokio::test]
+    async fn the_file_store_leaves_only_the_state_file_behind() {
+        let folder =
+            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        let store = FileStore::new(folder.join("state.json"));
+
+        store.save(&state()).await.unwrap();
+        store.save(&state()).await.unwrap();
+
+        let names: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["state.json"]);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_file_store_lets_only_its_own_account_read_the_state_even_over_an_open_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder =
+            std::env::temp_dir().join(format!("skakel-store-{}", crate::util::new_id("t")));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("state.json");
+        std::fs::write(&path, b"{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        FileStore::new(&path).save(&state()).await.unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn debug_output_hides_secrets_and_private_keys() {
+        let mut s = state();
+        s.clients[0].secret = Some("the-client-secret".into());
+        s.signing_key.private_key = "the-signing-key".into();
+        s.certificate.private_key = "the-certificate-key".into();
+
+        let text = format!("{s:?}");
+
+        for hidden in [
+            "the-client-secret",
+            "the-signing-key",
+            "the-certificate-key",
+        ] {
+            assert!(!text.contains(hidden), "{hidden} was printed");
+        }
+        assert!(text.contains("lab pc"));
     }
 
     #[tokio::test]
