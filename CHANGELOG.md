@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `skakel-server`: a token or pairing request whose body stops arriving no longer holds its connection
+  for as long as the client likes: the body has 10 seconds to arrive in full, and a request that
+  misses that gets 400. A body over the message limit on `ControlService.Hello` now ends with
+  `RESOURCE_EXHAUSTED`, as the protocol says, where tonic's `OUT_OF_RANGE` came through before.
 - `skakel-server`: public API clean-up, breaking for apps that match or construct these types.
   `#[non_exhaustive]` is now on `ServerEvent`, `ServerError`, `StreamOpen` and `Approval` (a `match`
   needs a wildcard arm) and on the structs `PairingRequest`, `PairingOverview`, `PairingDecision`,

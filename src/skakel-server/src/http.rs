@@ -2,8 +2,12 @@
 //! token with, and the gate that limits the token and pairing paths before anything else reads the
 //! request. Hello and the streams are gRPC in version 2.
 
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::{Arc, Once};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
@@ -197,8 +201,59 @@ async fn gate(
     }
     // A body sent without a length is cut off once it passes the cap.
     let (parts, body) = request.into_parts();
-    let body = Body::new(Limited::new(body, MAX_BODY_BYTES));
+    let body = Body::new(TimedBody::new(Limited::new(body, MAX_BODY_BYTES)));
     next.run(Request::from_parts(parts, body)).await
+}
+
+/// How long a client has to send the whole body of a token or pairing request, which is at most
+/// [`MAX_BODY_BYTES`]. A client that sends the headers and then stops would otherwise hold the
+/// connection for as long as it likes.
+pub(crate) const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A request body that fails when it has not been read to its end within [`BODY_TIMEOUT`] of the
+/// request arriving.
+struct TimedBody<B> {
+    inner: B,
+    deadline: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl<B> TimedBody<B> {
+    fn new(inner: B) -> Self {
+        Self {
+            inner,
+            deadline: Box::pin(tokio::time::sleep(BODY_TIMEOUT)),
+        }
+    }
+}
+
+impl<B> http_body::Body for TimedBody<B>
+where
+    B: http_body::Body + Unpin,
+    B::Error: Into<axum::BoxError>,
+{
+    type Data = B::Data;
+    type Error = axum::BoxError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        if let Poll::Ready(frame) = Pin::new(&mut self.inner).poll_frame(cx) {
+            return Poll::Ready(frame.map(|frame| frame.map_err(Into::into)));
+        }
+        if self.deadline.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Some(Err("The body did not arrive in time.".into())));
+        }
+        Poll::Pending
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
 }
 
 async fn info(State(shared): State<Arc<Shared>>) -> Json<SkakelInfo> {
@@ -523,5 +578,33 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer abc"));
         assert_eq!(basic_credentials(&headers), None);
+    }
+}
+
+#[cfg(test)]
+mod properties {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        /// An id and secret are read back from a Basic header, whatever characters they hold, once
+        /// form-encoded as RFC 6749 says.
+        #[test]
+        fn basic_credentials_read_back(id in "[^:]{1,30}", secret in ".{1,40}") {
+            let encode = |text: &str| serde_urlencoded::to_string([("v", text)]).unwrap()[2..].to_owned();
+            let raw = format!("{}:{}", encode(&id), encode(&secret));
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, HeaderValue::from_str(&format!("Basic {}", STANDARD.encode(raw))).unwrap());
+            prop_assert_eq!(basic_credentials(&headers), Some((id, secret)));
+        }
+
+        /// Any header value is read as credentials or refused, never a panic.
+        #[test]
+        fn a_basic_header_is_read_or_refused(value in proptest::collection::vec(32u8..127, 0..120)) {
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, HeaderValue::from_bytes(&value).unwrap());
+            let _ = basic_credentials(&headers);
+        }
     }
 }
