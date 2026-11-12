@@ -21,10 +21,10 @@ use tonic::{Code, Status};
 use tonic_types::{ErrorDetails, StatusExt};
 use tower_service::Service;
 
-use crate::crypto::Principal;
 use crate::http::ClientPrincipal;
 use crate::server::Shared;
 use crate::sessions::SessionGuard;
+use crate::tokens::Principal;
 
 /// A status Skakel refuses or ends a call with: the reason's code, the message for a person, and an
 /// `ErrorInfo` with the domain `skakel` and the reason.

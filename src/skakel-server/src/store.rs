@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 /// What a store returns: an I/O result, boxed so a store can sit behind `dyn`.
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send + 'a>>;
 
-/// Where the server keeps its state: its clients, its signing keys and its certificates. The
+/// Where the server keeps its state: its clients and its certificates. The
 /// app supplies one. [`InMemoryStore`] keeps nothing past the process; [`FileStore`] writes a JSON
 /// file.
 ///
@@ -47,11 +47,6 @@ impl<T: SkakelStore> SkakelStore for std::sync::Arc<T> {
 pub struct SkakelState {
     /// The registered clients.
     pub clients: Vec<ClientRecord>,
-    /// The key that signs access tokens.
-    pub signing_key: KeyRecord,
-    /// Keys that were replaced but whose tokens are still live.
-    #[serde(default)]
-    pub retired_signing_keys: Vec<KeyRecord>,
     /// The certificate the server presents.
     pub certificate: CertificateRecord,
     /// The certificate the server will present next, while a handover is under way.
@@ -79,22 +74,6 @@ pub struct ClientRecord {
     pub secret: Option<String>,
 }
 
-/// A token signing key. `Debug` leaves out the private key.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KeyRecord {
-    /// The id in the `kid` header of the tokens it signs.
-    pub key_id: String,
-    /// The ECDSA P-256 private key, PKCS#8 DER as base64.
-    pub private_key: String,
-    /// When it was made.
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-    /// For a replaced key, until when tokens it signed are still taken.
-    #[serde(default, with = "time::serde::rfc3339::option")]
-    pub accept_until: Option<OffsetDateTime>,
-}
-
 /// A certificate and its private key. `Debug` leaves out the private key.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,17 +93,6 @@ impl std::fmt::Debug for ClientRecord {
             .field("created_at", &self.created_at)
             .field("generation", &self.generation)
             .field("secret", &self.secret.as_ref().map(|_| "<hidden>"))
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for KeyRecord {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KeyRecord")
-            .field("key_id", &self.key_id)
-            .field("private_key", &"<hidden>")
-            .field("created_at", &self.created_at)
-            .field("accept_until", &self.accept_until)
             .finish()
     }
 }
@@ -264,13 +232,6 @@ mod tests {
                 generation: 2,
                 secret: None,
             }],
-            signing_key: KeyRecord {
-                key_id: "skakel-1".into(),
-                private_key: "AA==".into(),
-                created_at: now,
-                accept_until: None,
-            },
-            retired_signing_keys: vec![],
             certificate: CertificateRecord {
                 certificate: "AA==".into(),
                 private_key: "AA==".into(),
@@ -343,16 +304,11 @@ mod tests {
     fn debug_output_hides_secrets_and_private_keys() {
         let mut s = state();
         s.clients[0].secret = Some("the-client-secret".into());
-        s.signing_key.private_key = "the-signing-key".into();
         s.certificate.private_key = "the-certificate-key".into();
 
         let text = format!("{s:?}");
 
-        for hidden in [
-            "the-client-secret",
-            "the-signing-key",
-            "the-certificate-key",
-        ] {
+        for hidden in ["the-client-secret", "the-certificate-key"] {
             assert!(!text.contains(hidden), "{hidden} was printed");
         }
         assert!(text.contains("lab pc"));
@@ -372,5 +328,21 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_state_saved_with_signing_keys_still_loads_and_is_written_without_them() {
+        let old = r#"{
+            "clients": [],
+            "signingKey": {"keyId": "skakel-1", "privateKey": "SECRETKEY", "createdAt": "2026-11-01T00:00:00Z"},
+            "retiredSigningKeys": [{"keyId": "skakel-0", "privateKey": "OLDKEY", "createdAt": "2026-10-01T00:00:00Z"}],
+            "certificate": {"certificate": "AA==", "privateKey": "AA=="}
+        }"#;
+
+        let state: SkakelState = serde_json::from_str(old).unwrap();
+        let written = serde_json::to_string(&state).unwrap();
+
+        assert!(state.clients.is_empty());
+        assert!(!written.contains("SECRETKEY") && !written.contains("OLDKEY"));
     }
 }

@@ -50,9 +50,6 @@ use crate::streams::{StreamHandler, Streams};
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long connections get to finish after the server stops.
 const STOP_GRACE: Duration = Duration::from_secs(3);
-/// How often the replaced signing keys that ran out are dropped.
-const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
-
 /// What the server's handlers share.
 pub(crate) struct Shared {
     pub name: String,
@@ -361,7 +358,6 @@ impl SkakelServerBuilder {
         pairing.spawn_sweeper();
         let sessions = Sessions::new(state.clone());
         sessions.spawn_watch();
-        spawn_pruner(&state);
 
         let app = SkakelApp {
             id: self.app_id,
@@ -453,18 +449,6 @@ fn grpc_router(shared: &Arc<Shared>, services: Vec<AppService>) -> Router {
     routes.routes().into_axum_router()
 }
 
-fn spawn_pruner(state: &Arc<ServerState>) {
-    let weak = Arc::downgrade(state);
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(PRUNE_INTERVAL);
-        loop {
-            tick.tick().await;
-            let Some(state) = weak.upgrade() else { return };
-            let _ = state.prune_retired_keys().await;
-        }
-    });
-}
-
 /// A running Skakel server.
 pub struct SkakelServer {
     shared: Arc<Shared>,
@@ -544,7 +528,7 @@ impl SkakelServer {
         }
     }
 
-    /// The certificates and the token signing key.
+    /// The certificates.
     pub fn keys(&self) -> Keys {
         Keys {
             state: self.shared.state.clone(),
@@ -632,7 +616,7 @@ impl Clients {
     }
 }
 
-/// The server's certificates and its token signing key.
+/// The server's certificates.
 #[derive(Clone)]
 pub struct Keys {
     state: Arc<ServerState>,
@@ -654,7 +638,7 @@ impl Keys {
         self.state.loaded().next_fingerprint.clone()
     }
 
-    /// Both fingerprints, the signing key and what else is in use.
+    /// Both fingerprints and when the next certificate was prepared.
     pub fn view(&self) -> KeysView {
         self.state.keys()
     }
@@ -675,12 +659,6 @@ impl Keys {
     /// the names of the clients that never stored it, who have to pair again.
     pub async fn switch_certificate(&self) -> Result<Option<CertificateSwitch>, ServerError> {
         self.state.switch_certificate().await
-    }
-
-    /// Makes a new token signing key. Tokens of the old one stay good until they would have
-    /// expired. Returns the new key's id.
-    pub async fn rotate_signing_key(&self) -> Result<String, ServerError> {
-        self.state.rotate_signing_key().await
     }
 }
 

@@ -15,7 +15,7 @@ pub enum ServerEvent {
     Decided(PairingDecision),
     /// The list of clients changed.
     Clients(Vec<ClientView>),
-    /// The certificate or the signing key changed.
+    /// The certificate, or the next one being prepared, changed.
     Keys(KeysView),
 }
 
