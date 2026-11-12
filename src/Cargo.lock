@@ -1535,7 +1535,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "skakel-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "http-body-util",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-discovery"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1579,7 +1579,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-pairing"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -1592,7 +1592,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-proto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "prost",
  "protox",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.23.1",
  "serde",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-serial"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "prost",
  "skakel-proto",
@@ -1622,7 +1622,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -1658,14 +1658,14 @@ dependencies = [
 
 [[package]]
 name = "skakel-vcam"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "skakel-vcam-source"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "skakel-vcam",
  "windows",

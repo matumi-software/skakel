@@ -11,7 +11,7 @@ the network, is the first app built on it.
 
 ## Status
 
-Version 0.2.0, Rust only. Protocol version 2 is specified in
+Version 0.2.1, Rust only. Protocol version 2 is specified in
 [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), with its
 wire format in `.proto` files under `src/proto/skakel/v2/`. The server and the client speak it:
 gRPC for the control channel, the app's own calls and the data streams, beside HTTPS for info,
