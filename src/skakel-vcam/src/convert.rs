@@ -30,7 +30,9 @@ impl PixelFormat {
 /// A frame of the wrong size for its format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SizeMismatch {
+    /// The bytes the format needs.
     pub expected: usize,
+    /// The bytes given.
     pub actual: usize,
 }
 

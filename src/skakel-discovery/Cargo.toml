@@ -8,8 +8,14 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 skakel-protocol.workspace = true
 unicode-general-category.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

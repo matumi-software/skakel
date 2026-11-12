@@ -8,6 +8,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 base64.workspace = true
 getrandom.workspace = true
@@ -18,5 +21,6 @@ time.workspace = true
 unicode-general-category.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 serde_json.workspace = true
 time = { workspace = true, features = ["macros"] }

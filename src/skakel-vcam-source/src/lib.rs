@@ -139,6 +139,7 @@ pub unsafe extern "system" fn DllGetClassObject(
     })
 }
 
+/// Tells COM whether the DLL can be unloaded: when no object or lock is left.
 #[unsafe(no_mangle)]
 pub extern "system" fn DllCanUnloadNow() -> HRESULT {
     if OBJECTS.load(Ordering::SeqCst) == 0 && LOCKS.load(Ordering::SeqCst) == 0 {
@@ -165,6 +166,7 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
     })
 }
 
+/// Removes the DLL's registration. Kept for tools that call it; Skakel's installer does the work.
 #[unsafe(no_mangle)]
 pub extern "system" fn DllUnregisterServer() -> HRESULT {
     guard_hresult(

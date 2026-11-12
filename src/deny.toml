@@ -20,12 +20,9 @@ allow = [
 # An expression with OR passes when one of its options is allowed, so a crate offered under
 # "MIT OR LGPL" is used under MIT.
 
-# An exception names one crate and says why.
-exceptions = [
-    # Mozilla's root certificate list, as data, under a permissive licence for data with no
-    # copyleft and no restriction on use. rustls-platform-verifier takes it for its fallback.
-    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
-]
+# An exception names one crate and says why. There is none now: the one for Mozilla's root
+# certificate list (`webpki-root-certs`, CDLA-Permissive-2.0) went with reqwest.
+exceptions = []
 
 [advisories]
 # Yanked crates and security advisories fail the check. Unmaintained and unsound crates are

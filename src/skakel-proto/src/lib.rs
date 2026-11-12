@@ -17,7 +17,11 @@
 //! requests, and the server is a service an HTTP/2 server runs. Skakel's client and server bring
 //! their own, pinned to the server's certificate.
 
-/// Package `skakel.v2`: protocol version 2.
+#![forbid(unsafe_code)]
+
+/// Package `skakel.v2`: protocol version 2. The generated items carry the comments of the
+/// `.proto` files where there are any; the rest is as the file says.
+#[allow(missing_docs)]
 pub mod v2 {
     include!(concat!(env!("OUT_DIR"), "/skakel.v2.rs"));
 }

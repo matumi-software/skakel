@@ -14,6 +14,9 @@ client = ["dep:tonic", "dep:tonic-prost"]
 # The tonic server trait and service of each service, for a Skakel server.
 server = ["dep:tonic", "dep:tonic-prost"]
 
+[lints]
+workspace = true
+
 [dependencies]
 prost.workspace = true
 tonic = { workspace = true, optional = true, features = ["codegen"] }
@@ -24,4 +27,5 @@ protox.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 protox.workspace = true

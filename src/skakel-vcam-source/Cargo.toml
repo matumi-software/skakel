@@ -11,6 +11,9 @@ repository.workspace = true
 [lib]
 crate-type = ["cdylib"]
 
+[lints]
+workspace = true
+
 [target.'cfg(windows)'.dependencies]
 skakel-vcam.workspace = true
 windows-core.workspace = true

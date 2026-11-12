@@ -27,6 +27,8 @@ pub struct Pacer {
 }
 
 impl Pacer {
+    /// A pacer that counts frame times from `start` (100 ns units) at `fps_num / fps_den` frames a
+    /// second. Both must be above zero.
     pub fn new(start: i64, fps_num: u32, fps_den: u32) -> Self {
         assert!(fps_num > 0 && fps_den > 0);
         Self {

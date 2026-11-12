@@ -121,6 +121,7 @@ pub fn registered_path() -> Result<Option<PathBuf>> {
 pub struct Installed {
     /// The file the CLSID points at now.
     pub path: PathBuf,
+    /// The version of the installed file.
     pub version: String,
     /// Older versions still loaded, deleted at the next restart.
     pub pending_delete: Vec<PathBuf>,

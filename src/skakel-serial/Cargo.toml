@@ -8,6 +8,12 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 skakel-proto.workspace = true
 prost.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

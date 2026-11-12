@@ -38,22 +38,39 @@ pub const MAX_FPS: u32 = 120;
 /// Byte offsets into the header. The source writes everything below `PRODUCER_STATE` once, before
 /// `MAGIC`; the producer owns the rest.
 pub mod offsets {
+    /// The magic word, written last, that says the header is ready.
     pub const MAGIC: usize = 0;
+    /// The layout version.
     pub const VERSION: usize = 4;
+    /// The size of the header, a field that says how many bytes the header takes.
     pub const HEADER_SIZE: usize = 8;
+    /// The width in pixels.
     pub const WIDTH: usize = 12;
+    /// The height in pixels.
     pub const HEIGHT: usize = 16;
+    /// The frame rate numerator.
     pub const FPS_NUM: usize = 20;
+    /// The frame rate denominator.
     pub const FPS_DEN: usize = 24;
+    /// The pixel format, as a four character code.
     pub const FOURCC: usize = 28;
+    /// The size of one frame in bytes.
     pub const FRAME_SIZE: usize = 32;
+    /// How many frame slots the ring has.
     pub const SLOT_COUNT: usize = 36;
+    /// The size of one slot in bytes, rounded up for alignment.
     pub const SLOT_SIZE: usize = 40;
+    /// The size of the whole section, in bytes.
     pub const TOTAL_SIZE: usize = 48;
+    /// Whether a producer is attached.
     pub const PRODUCER_STATE: usize = 64;
+    /// The process id of the attached producer.
     pub const PRODUCER_PID: usize = 68;
+    /// How long the camera repeats the last frame before it shows the idle frame.
     pub const IDLE_TIMEOUT_MS: usize = 72;
+    /// The sequence number of the newest frame.
     pub const FRAME_SEQ: usize = 80;
+    /// The version of the idle frame.
     pub const IDLE_SEQ: usize = 88;
     /// `SLOT_COUNT` sequence numbers of 8 bytes each.
     pub const SLOT_SEQ: usize = 96;
@@ -62,9 +79,13 @@ pub mod offsets {
 /// The size and rate of one camera's frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Format {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
+    /// Frame rate numerator.
     pub fps_num: u32,
+    /// Frame rate denominator.
     pub fps_den: u32,
 }
 
@@ -116,8 +137,20 @@ impl Format {
 /// Why a size or rate is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormatError {
-    Size { width: u32, height: u32 },
-    Rate { fps_num: u32, fps_den: u32 },
+    /// The width or height is odd or outside 16 to 4096.
+    Size {
+        /// The width asked for.
+        width: u32,
+        /// The height asked for.
+        height: u32,
+    },
+    /// The rate is outside 1 to 120 frames a second.
+    Rate {
+        /// The numerator asked for.
+        fps_num: u32,
+        /// The denominator asked for.
+        fps_den: u32,
+    },
 }
 
 impl fmt::Display for FormatError {
@@ -196,10 +229,12 @@ impl Region {
         Self { base, len }
     }
 
+    /// The length of the region in bytes.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// True for a region of no bytes.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -343,6 +378,7 @@ impl FrameWriter {
         })
     }
 
+    /// The format this side of the ring was opened with.
     pub fn format(&self) -> Format {
         self.format
     }
@@ -419,6 +455,7 @@ impl FrameReader {
         })
     }
 
+    /// The format this side of the ring was opened with.
     pub fn format(&self) -> Format {
         self.format
     }
@@ -791,5 +828,60 @@ mod tests {
         }
         writer.join().unwrap();
         assert!(seen > 0);
+    }
+
+    /// Two readers on their own threads, a writer that alternates frames and idle frames: nobody
+    /// ever sees a torn frame of either kind, and what each reader sees only moves forward.
+    #[test]
+    fn two_readers_never_see_a_torn_frame_or_idle_frame() {
+        let (_buffer, region, format) = setup(64, 32);
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let readers: Vec<_> = (0..2)
+            .map(|_| {
+                let finished = finished.clone();
+                let size = format.frame_size();
+                let mut reader = FrameReader::open(region).unwrap();
+                std::thread::spawn(move || {
+                    let mut frame = vec![0; size];
+                    let (mut last_frame, mut last_idle, mut seen) = (0, 0, 0);
+                    // One more pass after the writer is done, so the last frames are taken.
+                    let mut done = false;
+                    loop {
+                        if let Some(seq) = reader.read_new_frame(&mut frame) {
+                            let expected = (seq % 251) as u8;
+                            assert!(frame.iter().all(|&b| b == expected), "torn frame {seq}");
+                            assert!(seq > last_frame, "frames went backwards");
+                            last_frame = seq;
+                            seen += 1;
+                        }
+                        if let Some(version) = reader.read_new_idle(&mut frame) {
+                            let expected = (version % 241) as u8;
+                            assert!(frame.iter().all(|&b| b == expected), "torn idle {version}");
+                            assert!(version > last_idle, "idle versions went backwards");
+                            last_idle = version;
+                            seen += 1;
+                        }
+                        if done {
+                            break;
+                        }
+                        done = finished.load(std::sync::atomic::Ordering::Acquire);
+                    }
+                    seen
+                })
+            })
+            .collect();
+        let mut writer = FrameWriter::attach(region, 7, 0).unwrap();
+        for n in 1..=1500u64 {
+            writer.write_frame(|slot| slot.fill((n % 251) as u8));
+            if n % 5 == 0 {
+                // The idle version counts up from 1 by one each write.
+                let version = n / 5;
+                writer.write_idle(|slot| slot.fill((version % 241) as u8));
+            }
+        }
+        finished.store(true, std::sync::atomic::Ordering::Release);
+        for reader in readers {
+            assert!(reader.join().unwrap() > 0);
+        }
     }
 }
