@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in Skakel does not work as it should.
+labels: ["type: bug", "state: needs-triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A failing test or a short program is best.
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: part
+    attributes:
+      label: Crate
+      description: The crate it involves, if you know.
+      placeholder: skakel-client, skakel-server, skakel-discovery, skakel-vcam...
+  - type: input
+    id: version
+    attributes:
+      label: Skakel version
+      description: The tag or commit you use.
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Rust version
+      placeholder: Windows 11, rustc 1.99
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App built on Skakel, if any
+      placeholder: Koppel 0.2.0
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove anything you would rather not share.
+      render: text
