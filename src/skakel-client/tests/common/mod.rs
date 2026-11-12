@@ -780,3 +780,18 @@ impl Drop for CountingProxy {
         self.task.abort();
     }
 }
+
+/// Records each status the link goes through, in order.
+pub fn record_status(link: &skakel_client::Link) -> Recorder<skakel_client::LinkStatus> {
+    let recorder = Recorder::new();
+    let to = recorder.clone();
+    let mut events = link.events();
+    tokio::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let skakel_client::LinkEvent::Status(status) = event {
+                to.record(status);
+            }
+        }
+    });
+    recorder
+}

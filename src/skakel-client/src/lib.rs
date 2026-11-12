@@ -33,6 +33,7 @@
 
 mod browser;
 mod clock;
+mod events;
 mod failure;
 mod grpc;
 mod http;
@@ -52,7 +53,10 @@ pub use browser::{Browser, BrowserOptions, DiscoveredServer};
 pub use clock::{Clock, Sleep, SystemClock};
 pub use failure::{Error, Failure, FailureKind, Result};
 pub use info::{pick_version, read_info, require_version};
-pub use link::{HandlerError, Link, LinkChannel, LinkState, LinkStatus};
+pub use events::{Events, EventsError, StateWatch};
+pub use link::{
+    Link, LinkChannel, LinkEvent, LinkState, LinkStatus, PinStore, SaveFuture, StoreError,
+};
 pub use options::ClientOptions;
 pub use pairing::{MAX_WAIT, PairingClient, PairingError};
 pub use pins::{Credentials, InvalidFingerprint, Pins};

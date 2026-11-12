@@ -7,19 +7,13 @@ use std::time::Duration;
 
 use common::greeter::{self, GreetRequest, WatchRequest};
 use common::{Recorder, free_tcp, within};
-use skakel_client::tonic::{Code, Request};
+use tonic::{Code, Request};
 use skakel_client::{
     ClientOptions, Credentials, FailureKind, Link, LinkState, LinkStatus, Method, Pins, Url,
 };
 
 pub fn record_status(link: &Link) -> Recorder<LinkStatus> {
-    let recorder = Recorder::new();
-    let to = recorder.clone();
-    link.on_status_changed(move |status| {
-        let to = to.clone();
-        async move { to.record(status) }
-    });
-    recorder
+    common::record_status(link)
 }
 
 fn states(statuses: &Recorder<LinkStatus>) -> Vec<LinkState> {
@@ -95,12 +89,12 @@ async fn an_app_call_the_server_does_not_serve_is_unimplemented() {
     link.start();
     statuses.wait(|s| s.state == LinkState::Connected).await;
 
-    let mut grpc = skakel_client::tonic::client::Grpc::new(link.channel());
+    let mut grpc = tonic::client::Grpc::new(link.channel());
     grpc.ready().await.unwrap();
     let error = grpc
         .unary(
             greeting("hello"),
-            skakel_client::tonic::codegen::http::uri::PathAndQuery::from_static(
+            tonic::codegen::http::uri::PathAndQuery::from_static(
                 "/test.app.v1.Greeter/NoSuchMethod",
             ),
             tonic_prost::ProstCodec::<GreetRequest, greeter::GreetReply>::default(),
@@ -373,7 +367,7 @@ async fn stop_closes_the_control_channel_and_says_so() {
     link.stop().await;
 
     assert_eq!(link.status().state, LinkState::Stopped);
-    assert_eq!(statuses.seen().last().unwrap().state, LinkState::Stopped);
+    statuses.wait(|s| s.state == LinkState::Stopped).await;
     // And the connection is not there for a call.
     let error = greeter::greet(link.channel(), greeting("x"))
         .await

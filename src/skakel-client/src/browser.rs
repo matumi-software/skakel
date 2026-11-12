@@ -31,6 +31,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::events::StateWatch;
 use crate::http::PinsFn;
 use crate::info::pick_version;
 
@@ -401,8 +402,8 @@ impl Browser {
 
     /// The list as it changes. A server appears, changes or goes away; a slow reader gets the latest
     /// list, not every one in between.
-    pub fn watch(&self) -> watch::Receiver<Vec<DiscoveredServer>> {
-        self.inner.changes.subscribe()
+    pub fn watch(&self) -> StateWatch<Vec<DiscoveredServer>> {
+        StateWatch::new(self.inner.changes.subscribe())
     }
 
     /// Every address and port that answered, one entry each, the best network and the longest

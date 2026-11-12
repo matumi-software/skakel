@@ -6,7 +6,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::within;
-use skakel_client::tonic::Code;
+use tonic::Code;
 use skakel_client::{
     Bytes, ClientOptions, Credentials, DataBits, ErrorCode, FailureKind, FlowControl, Frame,
     LineSettings, Link, OpenResult, Parity, Pins, SerialEvent, StopBits, StreamCloseReason,
