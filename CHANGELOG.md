@@ -54,6 +54,18 @@ unchanged: protocol version 2 as 0.2.0 speaks it.
     feature. `HandlerError` is `StoreError`.
   - `Token` no longer prints its value in `Debug`. `#![warn(missing_docs)]`, and the crate docs have
     a compiled example.
+- `skakel-client`: more API changes in the same move.
+  - `Credentials` and the poll token of a `PairingClient` are overwritten with zeros when they are
+    dropped (each clone's secret too; best effort, as copies the app made are not reached). Because
+    of that, `Credentials` has a `Drop` and its fields cannot be moved out by value: clone them
+    (`credentials.client_id.clone()`) or read them by reference.
+  - `Browser::new` takes a `BrowserOptions` (`BrowserOptions::new(port)` with `app_ids`,
+    `probe_targets` and `probe_interval`); `Browser::with_options` and the old
+    `Browser::new(port, app_ids)` are gone.
+  - `DiscoveredServer` is `#[non_exhaustive]`: an app does not build one. A test builds it with
+    `DiscoveredServer::for_test`, behind the `test-util` feature.
+  - `SerialConnection::into_io` gives a `SerialIo`, the port's data as tokio's `AsyncRead` and
+    `AsyncWrite`; the line settings, modem lines and events stay on `SerialIo::connection`.
 - `skakel-server`: access tokens are random strings the server remembers, not signed JWTs. Clients
   never read a token, so nothing changes for them, but a server that restarts forgets its tokens
   and clients ask for new ones (they already do on `TOKEN_REFUSED`). Breaking for apps: the signing

@@ -27,6 +27,7 @@ serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+zeroize.workspace = true
 rustls.workspace = true
 prost.workspace = true
 getrandom.workspace = true

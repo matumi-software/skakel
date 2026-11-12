@@ -157,7 +157,7 @@ async fn a_wrong_secret_is_rejected_credentials_and_closes_the_link_for_good() {
     let link = Link::new(
         &server.address(),
         server.pins(),
-        Credentials::new(credentials.client_id, "wrong"),
+        Credentials::new(credentials.client_id.clone(), "wrong"),
         ClientOptions::default(),
     )
     .unwrap();
@@ -383,7 +383,7 @@ async fn a_link_that_closed_for_good_starts_again_when_asked() {
     let link = Link::new(
         &server.address(),
         server.pins(),
-        Credentials::new(credentials.client_id, "wrong"),
+        Credentials::new(credentials.client_id.clone(), "wrong"),
         ClientOptions::default(),
     )
     .unwrap();

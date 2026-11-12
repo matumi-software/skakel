@@ -138,7 +138,7 @@ fn record_status(link: &Link) -> Recorder<LinkStatus> {
 async fn the_browser_finds_the_server_and_info_reads_what_it_says() {
     let server = start().await;
     let udp = server.discovery_addr().expect("discovery is on");
-    let browser = Browser::with_options(
+    let browser = Browser::new(
         BrowserOptions::new(5240)
             .app_ids(vec!["test-app".into()])
             .probe_targets(vec![SocketAddr::from(([127, 0, 0, 1], udp.port()))])

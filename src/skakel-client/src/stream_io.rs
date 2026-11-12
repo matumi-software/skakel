@@ -112,31 +112,41 @@ impl AsyncRead for StreamIo {
     }
 }
 
+/// Sends the start of `data` (at most [`MAX_FRAME`] bytes) as one data frame, once the stream has
+/// room, and says how much went. Shared by the byte views of a stream and of a serial connection.
+pub(crate) fn poll_write_frame(
+    outgoing: &mut Option<PollSender<OpenRequest>>,
+    cx: &mut Context<'_>,
+    data: &[u8],
+) -> Poll<io::Result<usize>> {
+    if data.is_empty() {
+        return Poll::Ready(Ok(0));
+    }
+    let Some(outgoing) = outgoing.as_mut() else {
+        return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+    };
+    match outgoing.poll_reserve(cx) {
+        Poll::Pending => return Poll::Pending,
+        Poll::Ready(Err(_)) => return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
+        Poll::Ready(Ok(())) => {}
+    }
+    let part = &data[..data.len().min(MAX_FRAME)];
+    let sent = outgoing.send_item(OpenRequest {
+        frame: Some(open_request::Frame::Data(Bytes::copy_from_slice(part))),
+    });
+    match sent {
+        Ok(()) => Poll::Ready(Ok(part.len())),
+        Err(_) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
+    }
+}
+
 impl AsyncWrite for StreamIo {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         data: &[u8],
     ) -> Poll<io::Result<usize>> {
-        if data.is_empty() {
-            return Poll::Ready(Ok(0));
-        }
-        let Some(outgoing) = self.outgoing.as_mut() else {
-            return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
-        };
-        match outgoing.poll_reserve(cx) {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Err(_)) => return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
-            Poll::Ready(Ok(())) => {}
-        }
-        let part = &data[..data.len().min(MAX_FRAME)];
-        let sent = outgoing.send_item(OpenRequest {
-            frame: Some(open_request::Frame::Data(Bytes::copy_from_slice(part))),
-        });
-        match sent {
-            Ok(()) => Poll::Ready(Ok(part.len())),
-            Err(_) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
-        }
+        poll_write_frame(&mut self.outgoing, cx, data)
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {

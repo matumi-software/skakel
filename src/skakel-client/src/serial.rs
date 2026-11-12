@@ -10,9 +10,11 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use prost::bytes::Bytes;
+use skakel_proto::v2::OpenRequest;
 use skakel_serial::{ClientMessage, ErrorCode, LineSettings, ModemStatus, ServerMessage};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -210,6 +212,20 @@ impl SerialConnection {
     /// was read. One task at a time reads.
     pub async fn recv(&self) -> Option<Bytes> {
         self.data.lock().await.recv().await
+    }
+
+    /// The next chunk of data for a byte-stream view that owns this connection.
+    pub(crate) fn poll_data(&mut self, cx: &mut Context<'_>) -> Poll<Option<Bytes>> {
+        self.data.get_mut().poll_recv(cx)
+    }
+
+    /// A sender for the data the port is sent, and the way to end the sending side.
+    pub(crate) fn outgoing(&self) -> Option<mpsc::Sender<OpenRequest>> {
+        self.stream.outgoing()
+    }
+
+    pub(crate) fn end_sending(&self) {
+        self.stream.end_sending();
     }
 
     /// How long the server has to answer a change to the line settings: 10 seconds unless set.

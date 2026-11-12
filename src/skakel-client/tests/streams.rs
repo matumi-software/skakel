@@ -426,6 +426,51 @@ async fn serial_bytes_go_both_ways() {
 }
 
 #[tokio::test]
+async fn a_serial_connection_is_also_an_async_reader_and_writer_for_its_data() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let (link, _) = linked(&mut bench, &server).await;
+    let mut io = open_serial(&link, "COM1").await.into_io();
+
+    io.write_all(b"AT\r\n").await.unwrap();
+    let mut back = [0u8; 4];
+    within(Duration::from_secs(20), io.read_exact(&mut back))
+        .await
+        .unwrap();
+    assert_eq!(&back, b"AT\r\n");
+
+    // The port's settings change on the connection while the data flows through the view.
+    let change = io
+        .connection()
+        .set_line_settings(settings(19_200))
+        .await
+        .unwrap();
+    assert!(change.applied);
+    io.write_all(b"after").await.unwrap();
+    let mut after = [0u8; 5];
+    within(Duration::from_secs(20), io.read_exact(&mut after))
+        .await
+        .unwrap();
+    assert_eq!(&after, b"after");
+
+    // Shutting down the writing side ends the call; reading then runs to the end.
+    io.shutdown().await.unwrap();
+    let mut rest = Vec::new();
+    within(Duration::from_secs(20), io.read_to_end(&mut rest))
+        .await
+        .unwrap();
+    assert!(rest.is_empty());
+    assert_eq!(
+        within(Duration::from_secs(20), io.connection().closed())
+            .await
+            .reason,
+        StreamCloseReason::Normal
+    );
+    assert!(io.write_all(b"late").await.is_err());
+}
+
+#[tokio::test]
 async fn set_line_settings_waits_for_the_server_to_echo_them() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;

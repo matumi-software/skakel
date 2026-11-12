@@ -74,8 +74,8 @@
 //! # Runtime
 //!
 //! Everything is async on tokio, and says so: a [`Link`], a [`Browser`] and a pairing request start
-//! tasks and need a running tokio runtime, and [`StreamIo`] implements tokio's `AsyncRead` and
-//! `AsyncWrite`. There is no runtime-agnostic mode.
+//! tasks and need a running tokio runtime, and [`StreamIo`] and [`SerialIo`] implement tokio's
+//! `AsyncRead` and `AsyncWrite`. There is no runtime-agnostic mode.
 //!
 //! # What an app depends on
 //!
@@ -102,6 +102,7 @@ mod pairing;
 mod pins;
 mod request;
 mod serial;
+mod serial_io;
 mod status;
 mod stream_io;
 mod streams;
@@ -121,6 +122,7 @@ pub use pairing::{MAX_WAIT, PairingClient, PairingError};
 pub use pins::{Credentials, InvalidFingerprint, Pins};
 pub use request::{RequestBuilder, Response};
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
+pub use serial_io::SerialIo;
 pub use status::GrpcCode;
 pub use stream_io::StreamIo;
 pub use streams::{

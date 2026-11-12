@@ -306,7 +306,7 @@ fn flood(udp: u16, addresses: u8, per_address: u32) -> tokio::task::JoinHandle<(
 async fn a_flood_of_answers_from_one_address_keeps_eight_entries_and_the_browser_alive() {
     let udp = free_udp();
     let sender = flood(udp, 1, 300);
-    let browser = Browser::with_options(
+    let browser = Browser::new(
         BrowserOptions::new(udp)
             .probe_targets(vec![SocketAddr::from(([127, 0, 0, 1], udp))])
             .probe_interval(Duration::from_millis(300)),
@@ -325,7 +325,7 @@ async fn a_flood_of_answers_from_one_address_keeps_eight_entries_and_the_browser
 async fn a_flood_of_answers_from_many_addresses_keeps_the_list_at_its_cap() {
     let udp = free_udp();
     let sender = flood(udp, 100, 3);
-    let browser = Browser::with_options(
+    let browser = Browser::new(
         BrowserOptions::new(udp)
             .probe_targets(vec![SocketAddr::from(([127, 0, 0, 1], udp))])
             .probe_interval(Duration::from_millis(300)),

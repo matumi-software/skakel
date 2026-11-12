@@ -361,6 +361,11 @@ impl StreamConnection {
         (frames, incoming)
     }
 
+    /// A sender for what goes out, for a byte-stream view that is not this connection itself.
+    pub(crate) fn outgoing(&self) -> Option<mpsc::Sender<OpenRequest>> {
+        lock(&self.frames).clone()
+    }
+
     /// Ends the client's side of the call without waiting for the server.
     pub(crate) fn end_sending(&self) {
         lock(&self.frames).take();

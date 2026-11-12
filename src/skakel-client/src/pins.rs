@@ -4,6 +4,7 @@
 use std::fmt;
 
 use skakel_protocol::fingerprints;
+use zeroize::Zeroize;
 
 /// The certificates a client trusts for one server: the pinned one and, while the server hands over
 /// to a new certificate, the next one.
@@ -97,6 +98,11 @@ impl Pins {
 
 /// What a client signs in to one server with. Pairing hands them over; the app keeps them, and the
 /// secret only where it keeps secrets.
+///
+/// The secret is overwritten with zeros when a `Credentials` is dropped, and so is each clone's. That
+/// is best effort: copies the app made of the string itself, and buffers a `String` left behind when
+/// it grew, are not reached. Because of the wipe, the fields cannot be moved out of a `Credentials`
+/// (destructuring it by value does not compile); clone them or read them by reference.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Credentials {
     /// The client's ID on that server.
@@ -112,6 +118,18 @@ impl Credentials {
             client_id: client_id.into(),
             client_secret: client_secret.into(),
         }
+    }
+}
+
+impl Credentials {
+    fn wipe(&mut self) {
+        self.client_secret.zeroize();
+    }
+}
+
+impl Drop for Credentials {
+    fn drop(&mut self) {
+        self.wipe();
     }
 }
 
@@ -186,6 +204,19 @@ mod tests {
             pins.with_server_certificates(&fp("EF"), Some(&fp("01"))),
             pins
         );
+    }
+
+    #[test]
+    fn wiping_credentials_clears_the_secret_and_keeps_the_id() {
+        let mut credentials = Credentials::new("c1", "hunter2");
+        let clone = credentials.clone();
+
+        credentials.wipe();
+
+        assert!(credentials.client_secret.is_empty());
+        assert_eq!(credentials.client_id, "c1");
+        // A clone holds its own copy and is wiped on its own drop.
+        assert_eq!(clone.client_secret, "hunter2");
     }
 
     #[test]

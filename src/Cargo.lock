@@ -1344,6 +1344,7 @@ dependencies = [
  "tonic-types",
  "tower-service",
  "url",
+ "zeroize",
 ]
 
 [[package]]

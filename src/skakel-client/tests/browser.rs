@@ -24,7 +24,7 @@ async fn the_browser_lists_a_server_by_what_it_answers() {
     let mut bench = common::Bench::new();
     let udp = free_udp();
     let server = bench.server_with_discovery(udp).await;
-    let browser = Browser::with_options(options(udp, Some(vec!["test-app".into()])));
+    let browser = Browser::new(options(udp, Some(vec!["test-app".into()])));
     let mut changes = browser.watch();
 
     browser.start().await.unwrap();
@@ -57,7 +57,7 @@ async fn the_browser_leaves_out_the_servers_of_other_apps() {
     let mut bench = common::Bench::new();
     let udp = free_udp();
     bench.server_with_discovery(udp).await;
-    let browser = Browser::with_options(options(udp, Some(vec!["another-app".into()])));
+    let browser = Browser::new(options(udp, Some(vec!["another-app".into()])));
     browser.start().await.unwrap();
 
     // Several probes go by: the server answers them all, and none is kept.
@@ -73,7 +73,7 @@ async fn a_server_that_stops_answering_leaves_the_list() {
     let mut bench = common::Bench::new();
     let udp = free_udp();
     let server = bench.server_with_discovery(udp).await;
-    let browser = Browser::with_options(options(udp, None));
+    let browser = Browser::new(options(udp, None));
     let mut changes = browser.watch();
     browser.start().await.unwrap();
     within(
@@ -99,7 +99,7 @@ async fn stopping_empties_the_list_and_ends_the_probes() {
     let mut bench = common::Bench::new();
     let udp = free_udp();
     bench.server_with_discovery(udp).await;
-    let browser = Browser::with_options(options(udp, None));
+    let browser = Browser::new(options(udp, None));
     let mut changes = browser.watch();
     browser.start().await.unwrap();
     within(
