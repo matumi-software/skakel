@@ -3,7 +3,7 @@ resolver = "3"
 members = ["skakel-client", "skakel-discovery", "skakel-pairing", "skakel-proto", "skakel-protocol", "skakel-serial", "skakel-server", "skakel-vcam", "skakel-vcam-source"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.99"
 authors = ["Matumi Software"]
@@ -11,10 +11,10 @@ license = "MIT"
 repository = "https://github.com/matumi-software/skakel"
 
 [workspace.dependencies]
-skakel-protocol = { path = "skakel-protocol", version = "0.2.0" }
-skakel-proto = { path = "skakel-proto", version = "0.2.0" }
-skakel-discovery = { path = "skakel-discovery", version = "0.2.0" }
-skakel-vcam = { path = "skakel-vcam", version = "0.2.0" }
+skakel-protocol = { path = "skakel-protocol", version = "0.2.1" }
+skakel-proto = { path = "skakel-proto", version = "0.2.1" }
+skakel-discovery = { path = "skakel-discovery", version = "0.2.1" }
+skakel-vcam = { path = "skakel-vcam", version = "0.2.1" }
 # Microsoft's Windows bindings (MIT OR Apache-2.0). `windows-core` is named directly because the
 # `#[implement]` macro expands to paths in it.
 windows = "0.62.2"
@@ -35,8 +35,8 @@ time = { version = "0.3.55", features = ["serde-well-known", "parsing", "formatt
 unicode-general-category = "1.1.0"
 
 # The client (all MIT, Apache-2.0 or ISC, checked with `cargo info`, and the tree with `cargo metadata`).
-skakel-pairing = { path = "skakel-pairing", version = "0.2.0" }
-skakel-serial = { path = "skakel-serial", version = "0.2.0" }
+skakel-pairing = { path = "skakel-pairing", version = "0.2.1" }
+skakel-serial = { path = "skakel-serial", version = "0.2.1" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-util = "0.7"
 # HTTP over a rustls config the client builds itself, so the certificate check is the pin.

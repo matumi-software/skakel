@@ -38,7 +38,7 @@ log.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-skakel-server = { path = "../skakel-server", version = "0.2.0" }
+skakel-server = { path = "../skakel-server", version = "0.2.1" }
 tokio = { workspace = true, features = ["io-util"] }
 # The test bench: a self-signed server of another version, a gRPC server that never answers, and
 # the app's own service written the way tonic generates one.
