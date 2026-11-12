@@ -2,7 +2,7 @@
 //! expires. One per link, shared by the control channel, the streams and the app's own calls.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use skakel_protocol::{ACCESS_TOKEN_LIFETIME, TOKEN_PATH};
@@ -28,7 +28,7 @@ pub(crate) const MAX_LIFETIME: Duration = ACCESS_TOKEN_LIFETIME;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Token {
     pub value: String,
-    pub expires_at: SystemTime,
+    pub expires_at: Instant,
 }
 
 pub(crate) struct TokenClient {
@@ -69,7 +69,7 @@ impl TokenClient {
     pub async fn get(&self) -> Result<Token, Error> {
         let mut cached = self.cached.lock().await;
         if let Some(token) = cached.as_ref()
-            && since(token.expires_at, self.clock.now()) > RENEW_BEFORE
+            && since(token.expires_at, self.clock.instant()) > RENEW_BEFORE
         {
             return Ok(token.clone());
         }
@@ -117,7 +117,7 @@ impl TokenClient {
         }
         let fresh = Token {
             value,
-            expires_at: self.clock.now() + lifetime(expires_in),
+            expires_at: self.clock.instant() + lifetime(expires_in),
         };
         *cached = Some(fresh.clone());
         Ok(fresh)

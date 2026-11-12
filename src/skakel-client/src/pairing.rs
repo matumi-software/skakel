@@ -8,7 +8,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use ::http::StatusCode;
 use skakel_pairing::{
@@ -17,7 +17,7 @@ use skakel_pairing::{
 use skakel_protocol::{PAIR_PATH, PAIR_TOKEN_HEADER};
 use url::Url;
 
-use crate::clock::{Clock, since};
+use crate::clock::{Clock, since, wall_since};
 use crate::failure::{Error, FailureKind, Result, bad_answer};
 use crate::http::{self, base_address};
 use crate::info::{read_info_with, require_version};
@@ -87,6 +87,9 @@ pub struct PairingClient {
     server_name: String,
     code: String,
     expires_at: SystemTime,
+    /// When the wait ends, on the monotonic clock: `expires_at` as the time left when it was
+    /// worked out.
+    deadline: Instant,
     request_id: String,
     poll_token: String,
     clock: Arc<dyn Clock>,
@@ -157,6 +160,7 @@ impl PairingClient {
             // By this client's clock: never later than five minutes from now, however far off the
             // server's answer is.
             let expires_at = SystemTime::from(opened.expires_at).min(now + MAX_WAIT);
+            let deadline = options.clock.instant() + wall_since(expires_at, now);
             let pairing = PairingClient {
                 http: client.clone(),
                 address: server.clone(),
@@ -164,6 +168,7 @@ impl PairingClient {
                 server_name: info.name.clone(),
                 code,
                 expires_at,
+                deadline,
                 request_id: opened.request_id,
                 poll_token: opened.poll_token,
                 clock: options.clock.clone(),
@@ -265,7 +270,7 @@ impl PairingClient {
         let url = pair_url(&self.address, &self.request_id, None)?;
         let mut failed_polls = 0;
         loop {
-            if since(self.clock.now(), self.expires_at) > EXPIRY_GRACE {
+            if since(self.clock.instant(), self.deadline) > EXPIRY_GRACE {
                 return Err(Error::of(FailureKind::PairingExpired));
             }
 

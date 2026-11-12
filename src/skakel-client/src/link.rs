@@ -24,7 +24,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use ::http::{Method, StatusCode};
 use skakel_proto::v2::control_service_client::ControlServiceClient;
@@ -160,7 +160,7 @@ struct Inner {
     /// The control channel's connection while it is up, for the app's own calls.
     control: watch::Sender<Option<Connection>>,
     /// When the last connection or `Connect` call started.
-    last_start: Mutex<Option<SystemTime>>,
+    last_start: Mutex<Option<Instant>>,
     wake: Notify,
     run: Mutex<Option<Running>>,
     following: Mutex<Following>,
@@ -713,7 +713,7 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
     let mut backoff = MIN_BACKOFF;
     while !stop.is_cancelled() {
         let address = lock(&inner.address).clone();
-        let started = inner.clock.now();
+        let started = inner.clock.instant();
         match connect_once(&inner, &address, &stop).await {
             Ok(None) => return,
             Ok(Some(end)) => {
@@ -733,7 +733,7 @@ async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
                     end.code()
                 );
                 set_status(&inner, LinkStatus::with(LinkState::Failed, end)).await;
-                if since(inner.clock.now(), started) >= STABLE_AFTER {
+                if since(inner.clock.instant(), started) >= STABLE_AFTER {
                     backoff = MIN_BACKOFF;
                 }
             }
@@ -812,7 +812,7 @@ async fn pause(inner: &Inner, delay: Duration, stop: &CancellationToken) {
 async fn pace(inner: &Inner, stop: &CancellationToken) -> bool {
     let last = *lock(&inner.last_start);
     if let Some(last) = last {
-        let gone = since(inner.clock.now(), last);
+        let gone = since(inner.clock.instant(), last);
         if gone < MIN_BACKOFF {
             tokio::select! {
                 () = inner.clock.sleep(MIN_BACKOFF - gone) => {}
@@ -820,7 +820,7 @@ async fn pace(inner: &Inner, stop: &CancellationToken) -> bool {
             }
         }
     }
-    *lock(&inner.last_start) = Some(inner.clock.now());
+    *lock(&inner.last_start) = Some(inner.clock.instant());
     !stop.is_cancelled()
 }
 
@@ -872,8 +872,8 @@ async fn open_call(
 
 /// When to renew a control call opened with `token`: half a minute ahead of its end; a token with
 /// less than a minute left is renewed halfway through what it has.
-fn renew_at(inner: &Inner, token: &Token) -> SystemTime {
-    let left = since(token.expires_at, inner.clock.now());
+fn renew_at(inner: &Inner, token: &Token) -> Instant {
+    let left = since(token.expires_at, inner.clock.instant());
     token.expires_at - REFRESH_AHEAD.min(left / 2)
 }
 
@@ -985,7 +985,7 @@ async fn serve(
     let timeout = inner.options.request_timeout;
     let mut closing: Option<Reason> = None;
     loop {
-        let wait = since(renew_at(inner, token), inner.clock.now()).min(ACCESS_TOKEN_LIFETIME);
+        let wait = since(renew_at(inner, token), inner.clock.instant()).min(ACCESS_TOKEN_LIFETIME);
         let renew = tokio::select! {
             () = stop.cancelled() => return End::Stopped,
             () = connection.closed() => {
