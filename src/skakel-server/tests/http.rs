@@ -116,6 +116,79 @@ async fn discovery_off_binds_nothing() {
     assert!(server.discovery_addr().is_none());
 }
 
+/// Sends a probe to `address` and says whether an answer came back within a second.
+async fn probe_is_answered(address: std::net::SocketAddr) -> bool {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    socket
+        .send_to(&skakel_discovery::create_probe(), address)
+        .await
+        .unwrap();
+    let mut buffer = [0u8; 2048];
+    tokio::time::timeout(Duration::from_secs(1), socket.recv_from(&mut buffer))
+        .await
+        // On Windows a probe to a closed port comes back as an error, which is no answer.
+        .is_ok_and(|received| received.is_ok())
+}
+
+#[tokio::test]
+async fn discovery_can_be_started_after_it_was_built_off() {
+    let server = bench_builder().discovery(false).start().await.unwrap();
+
+    let address = server.start_discovery().await.unwrap();
+
+    assert_eq!(server.discovery_addr(), Some(address));
+    assert!(probe_is_answered(address).await);
+}
+
+#[tokio::test]
+async fn discovery_stops_answering_and_frees_its_port_until_started_again() {
+    let server = start().await;
+    let address = server.discovery_addr().unwrap();
+
+    server.stop_discovery().await;
+
+    assert!(server.discovery_addr().is_none());
+    assert!(!probe_is_answered(address).await);
+    // The port is free once stop has returned.
+    drop(
+        UdpSocket::bind(address)
+            .await
+            .expect("the port is released"),
+    );
+    let again = server.start_discovery().await.unwrap();
+    assert_eq!(again, address, "the same port, so the announcement holds");
+    assert!(probe_is_answered(again).await);
+}
+
+#[tokio::test]
+async fn starting_and_stopping_discovery_twice_changes_nothing() {
+    let server = start().await;
+    let address = server.discovery_addr().unwrap();
+
+    assert_eq!(server.start_discovery().await.unwrap(), address);
+    assert!(probe_is_answered(address).await);
+    server.stop_discovery().await;
+    server.stop_discovery().await;
+    assert!(server.discovery_addr().is_none());
+}
+
+#[tokio::test]
+async fn starting_discovery_on_a_port_in_use_is_an_error_and_it_stays_off() {
+    let taken = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let server = bench_builder()
+        .discovery(false)
+        .discovery_port(port)
+        .start()
+        .await
+        .unwrap();
+
+    assert!(server.start_discovery().await.is_err());
+    assert!(server.discovery_addr().is_none());
+    drop(taken);
+    assert!(server.start_discovery().await.is_ok());
+}
+
 #[tokio::test]
 async fn discovery_announces_the_new_fingerprint_after_a_certificate_switch() {
     let server = start().await;

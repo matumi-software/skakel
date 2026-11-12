@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-Nothing yet. `main` is at the v0.2.0 tag.
+- `skakel-server`: `SkakelServer::start_discovery` and `stop_discovery` start and stop answering discovery
+  probes while the server runs, so an app whose role changes at runtime answers only while it is a
+  server. Stopping releases the UDP port before it returns, and both are safe to repeat. Nothing
+  changes for an app that never calls them.
 
 ## 0.2.0 (2026-11-09)
 
