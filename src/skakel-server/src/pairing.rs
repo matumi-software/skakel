@@ -639,7 +639,7 @@ mod tests {
             false,
             "pi-lab".into(),
             "test-app".into(),
-            Events::new(vec![]),
+            Events::new(),
         )
         .await
         .unwrap();
@@ -904,7 +904,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_sweep_tells_the_app_when_a_waiting_request_ran_out() {
-        let events = Events::new(vec![]);
+        let events = Events::new();
         let mut listener = events.subscribe();
         let state = ServerState::start(
             Arc::new(InMemoryStore::new()),
@@ -918,14 +918,14 @@ mod tests {
         let pairing = Pairing::new(state.clone());
         revealed(&pairing, &state, addr(1)).await;
         assert!(
-            matches!(listener.try_recv(), Ok(ServerEvent::Pairing(o)) if o.requests.len() == 1)
+            matches!(listener.try_recv(), Some(ServerEvent::Pairing(o)) if o.requests.len() == 1)
         );
 
         tokio::time::advance(Duration::from_secs(301)).await;
         pairing.sweep().await;
 
         assert!(
-            matches!(listener.try_recv(), Ok(ServerEvent::Pairing(o)) if o.requests.is_empty())
+            matches!(listener.try_recv(), Some(ServerEvent::Pairing(o)) if o.requests.is_empty())
         );
     }
 
@@ -979,7 +979,7 @@ mod tests {
             false,
             "pi-lab".into(),
             "test-app".into(),
-            Events::new(vec![]),
+            Events::new(),
         )
         .await
         .unwrap();

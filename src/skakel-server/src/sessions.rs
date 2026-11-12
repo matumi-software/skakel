@@ -256,7 +256,7 @@ mod tests {
             false,
             "pi-lab".into(),
             "t".into(),
-            Events::new(vec![]),
+            Events::new(),
         )
         .await
         .unwrap();

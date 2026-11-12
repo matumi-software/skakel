@@ -17,78 +17,74 @@ use skakel_client::{
     read_info,
 };
 use skakel_server::{
-    BoxFuture, InMemoryStore, SkakelServer, SkakelServerBuilder, StreamHandler, StreamMessage,
-    StreamOpen, StreamRequest, StreamSession,
+    InMemoryStore, SkakelServer, SkakelServerBuilder, StreamMessage, StreamOpen, StreamRequest,
+    StreamSession,
 };
 use tonic::Request;
 
-fn echo() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
-        Box::pin(async move {
-            match &request.target[..] {
-                b"" => StreamOpen::BadTarget("Say which target.".into()),
-                b"busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
-                _ => StreamOpen::accept(|mut session: StreamSession| async move {
-                    while let Some(message) = session.recv().await {
-                        if session.send(message).await.is_err() {
+fn echo() -> impl skakel_server::StreamHandler {
+    |request: StreamRequest| async move {
+        match &request.target[..] {
+            b"" => StreamOpen::BadTarget("Say which target.".into()),
+            b"busy" => StreamOpen::InUse("bench-2 holds busy.".into()),
+            _ => StreamOpen::accept(|mut session: StreamSession| async move {
+                while let Some(message) = session.recv().await {
+                    if session.send(message).await.is_err() {
+                        return;
+                    }
+                }
+            }),
+        }
+    }
+}
+
+fn serial() -> impl skakel_server::StreamHandler {
+    |request: StreamRequest| async move {
+        if skakel_serial::port_of(&request.target).as_deref() != Some("COM1") {
+            return StreamOpen::NotFound("There is no such port.".into());
+        }
+        StreamOpen::accept(|mut session: StreamSession| async move {
+            let mut settings = LineSettings {
+                baud: 9600,
+                data_bits: skakel_client::DataBits::Eight,
+                parity: skakel_client::Parity::None,
+                stop_bits: skakel_client::StopBits::One,
+                flow_control: skakel_client::FlowControl::None,
+            };
+            let opened = skakel_serial::ServerMessage::Opened {
+                line_settings: settings,
+                modem_status: skakel_client::ModemStatus {
+                    cts: true,
+                    dsr: false,
+                    dcd: false,
+                    ri: false,
+                },
+            };
+            if session.send_control(opened.encode()).await.is_err() {
+                return;
+            }
+            while let Some(message) = session.recv().await {
+                match message {
+                    StreamMessage::Data(data) => {
+                        if session.send_data(data).await.is_err() {
                             return;
                         }
                     }
-                }),
-            }
-        })
-    })
-}
-
-fn serial() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, StreamOpen> {
-        Box::pin(async move {
-            if skakel_serial::port_of(&request.target).as_deref() != Some("COM1") {
-                return StreamOpen::NotFound("There is no such port.".into());
-            }
-            StreamOpen::accept(|mut session: StreamSession| async move {
-                let mut settings = LineSettings {
-                    baud: 9600,
-                    data_bits: skakel_client::DataBits::Eight,
-                    parity: skakel_client::Parity::None,
-                    stop_bits: skakel_client::StopBits::One,
-                    flow_control: skakel_client::FlowControl::None,
-                };
-                let opened = skakel_serial::ServerMessage::Opened {
-                    line_settings: settings,
-                    modem_status: skakel_client::ModemStatus {
-                        cts: true,
-                        dsr: false,
-                        dcd: false,
-                        ri: false,
-                    },
-                };
-                if session.send_control(opened.encode()).await.is_err() {
-                    return;
-                }
-                while let Some(message) = session.recv().await {
-                    match message {
-                        StreamMessage::Data(data) => {
-                            if session.send_data(data).await.is_err() {
+                    StreamMessage::Control(control) => {
+                        if let Ok(skakel_serial::ClientMessage::LineSettings(change)) =
+                            skakel_serial::ClientMessage::decode(&control)
+                        {
+                            settings = change;
+                            let answer = skakel_serial::ServerMessage::LineSettings(settings);
+                            if session.send_control(answer.encode()).await.is_err() {
                                 return;
-                            }
-                        }
-                        StreamMessage::Control(control) => {
-                            if let Ok(skakel_serial::ClientMessage::LineSettings(change)) =
-                                skakel_serial::ClientMessage::decode(&control)
-                            {
-                                settings = change;
-                                let answer = skakel_serial::ServerMessage::LineSettings(settings);
-                                if session.send_control(answer.encode()).await.is_err() {
-                                    return;
-                                }
                             }
                         }
                     }
                 }
-            })
+            }
         })
-    })
+    }
 }
 
 async fn start() -> SkakelServer {
@@ -297,7 +293,7 @@ async fn a_certificate_handover_is_learned_and_a_new_connection_shows_the_new_ce
     let current = server.fingerprint();
 
     let next = server
-        .keys()
+        .certificates()
         .prepare_next_certificate()
         .await
         .unwrap()
@@ -320,7 +316,12 @@ async fn a_certificate_handover_is_learned_and_a_new_connection_shows_the_new_ce
     })
     .await;
 
-    let switched = server.keys().switch_certificate().await.unwrap().unwrap();
+    let switched = server
+        .certificates()
+        .switch_certificate()
+        .await
+        .unwrap()
+        .unwrap();
     assert!(switched.not_received.is_empty());
     pins_seen
         .wait(|p| p.next_fingerprint().is_none() && p.trusts(&next))

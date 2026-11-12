@@ -419,7 +419,7 @@ async fn a_control_call_hears_the_handover_and_its_acknowledgement_is_recorded()
     call.next().await.unwrap();
 
     let next = server
-        .keys()
+        .certificates()
         .prepare_next_certificate()
         .await
         .unwrap()
@@ -443,7 +443,7 @@ async fn a_control_call_hears_the_handover_and_its_acknowledgement_is_recorded()
         server.clients().all()[0].has_next_certificate
     })
     .await;
-    server.keys().switch_certificate().await.unwrap();
+    server.certificates().switch_certificate().await.unwrap();
     let Some(connect_response::Message::Certificates(switched)) = call.next().await.unwrap() else {
         panic!("no certificates after the switch");
     };
@@ -458,7 +458,11 @@ async fn an_acknowledgement_of_the_wrong_certificate_is_not_recorded() {
     let connection = grpc(&server).await;
     let mut call = connect(&connection, &token).await.unwrap();
     call.next().await.unwrap();
-    server.keys().prepare_next_certificate().await.unwrap();
+    server
+        .certificates()
+        .prepare_next_certificate()
+        .await
+        .unwrap();
     call.next().await.unwrap();
 
     call.requests
@@ -490,10 +494,18 @@ async fn a_cancelled_handover_is_told_with_an_empty_next_fingerprint() {
     let connection = grpc(&server).await;
     let mut call = connect(&connection, &token).await.unwrap();
     call.next().await.unwrap();
-    server.keys().prepare_next_certificate().await.unwrap();
+    server
+        .certificates()
+        .prepare_next_certificate()
+        .await
+        .unwrap();
     call.next().await.unwrap();
 
-    server.keys().cancel_next_certificate().await.unwrap();
+    server
+        .certificates()
+        .cancel_next_certificate()
+        .await
+        .unwrap();
 
     let Some(connect_response::Message::Certificates(cancelled)) = call.next().await.unwrap()
     else {

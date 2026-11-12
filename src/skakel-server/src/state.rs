@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 use tokio::sync::watch;
 
 use crate::crypto;
-use crate::error::ServerError;
+use crate::error::{ServerError, StateError};
 use crate::events::{Events, ServerEvent};
 use crate::store::{
     CertificateRecord, ClientRecord, NextCertificateRecord, SkakelState, SkakelStore,
@@ -65,7 +65,7 @@ impl std::fmt::Debug for NewClient {
 /// The certificate now in use, and the next one during a handover.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct KeysView {
+pub struct CertificatesView {
     /// The fingerprint of the certificate the server presents.
     pub fingerprint: String,
     /// The fingerprint of the next one, during a handover.
@@ -122,7 +122,7 @@ impl Loaded {
 fn der(text: &str) -> Result<Vec<u8>, ServerError> {
     STANDARD
         .decode(text)
-        .map_err(|e| ServerError::State(format!("a saved certificate or key is not base64: {e}")))
+        .map_err(|e| ServerError::State(StateError::NotBase64(Box::new(e))))
 }
 
 fn certified(record: &CertificateRecord) -> Result<(CertifiedKey, String), ServerError> {
@@ -130,7 +130,7 @@ fn certified(record: &CertificateRecord) -> Result<(CertifiedKey, String), Serve
     let fingerprint = fingerprints::of_der(&certificate);
     let key = PrivatePkcs8KeyDer::from(der(&record.private_key)?);
     let signing = rustls::crypto::ring::sign::any_ecdsa_type(&PrivateKeyDer::Pkcs8(key))
-        .map_err(|e| ServerError::State(format!("the saved certificate key is unusable: {e}")))?;
+        .map_err(|e| ServerError::State(StateError::KeyUnusable(Box::new(e))))?;
     Ok((
         CertifiedKey::new(vec![CertificateDer::from(certificate)], signing),
         fingerprint,
@@ -151,7 +151,7 @@ pub(crate) struct ServerState {
     current: watch::Sender<Arc<Loaded>>,
     last_seen: Mutex<HashMap<String, OffsetDateTime>>,
     tokens: Tokens,
-    raised: Mutex<(Vec<ClientView>, KeysView)>,
+    raised: Mutex<(Vec<ClientView>, CertificatesView)>,
     pub(crate) events: Events,
 }
 
@@ -181,7 +181,10 @@ impl ServerState {
             }
         };
         let loaded = Arc::new(Loaded::build(state)?);
-        let raised = (clients_of(&loaded, &HashMap::new()), keys_of(&loaded));
+        let raised = (
+            clients_of(&loaded, &HashMap::new()),
+            certificates_of(&loaded),
+        );
         Ok(Arc::new(Self {
             store,
             keep_client_secrets,
@@ -212,8 +215,8 @@ impl ServerState {
         clients_of(&self.loaded(), &self.last_seen.lock().expect("lock"))
     }
 
-    pub(crate) fn keys(&self) -> KeysView {
-        keys_of(&self.loaded())
+    pub(crate) fn certificates(&self) -> CertificatesView {
+        certificates_of(&self.loaded())
     }
 
     pub(crate) fn find(&self, client_id: &str) -> Option<ClientRecord> {
@@ -291,7 +294,7 @@ impl ServerState {
     fn raise_views(&self) {
         let loaded = self.loaded();
         let clients = clients_of(&loaded, &self.last_seen.lock().expect("lock"));
-        let keys = keys_of(&loaded);
+        let keys = certificates_of(&loaded);
         let (clients_changed, keys_changed) = {
             let mut raised = self.raised.lock().expect("lock");
             // `last_seen` alone is no reason to tell the app.
@@ -309,16 +312,14 @@ impl ServerState {
             self.events.emit(ServerEvent::Clients(clients));
         }
         if keys_changed {
-            self.events.emit(ServerEvent::Keys(keys));
+            self.events.emit(ServerEvent::Certificates(keys));
         }
     }
 
     pub(crate) async fn register_client(&self, name: &str) -> Result<NewClient, ServerError> {
         let clean = skakel_pairing::clean_client_name(name);
         if clean.is_empty() {
-            return Err(ServerError::Invalid(
-                "The name is empty once control and format characters and the spaces around it are taken out.".into(),
-            ));
+            return Err(ServerError::InvalidName);
         }
         let secret = util::new_secret();
         let secret_hash = util::hash_secret(&secret);
@@ -518,9 +519,9 @@ fn clients_of(loaded: &Loaded, seen: &HashMap<String, OffsetDateTime>) -> Vec<Cl
         .collect()
 }
 
-fn keys_of(loaded: &Loaded) -> KeysView {
+fn certificates_of(loaded: &Loaded) -> CertificatesView {
     let state = &loaded.state;
-    KeysView {
+    CertificatesView {
         fingerprint: loaded.fingerprint.clone(),
         next_fingerprint: loaded.next_fingerprint.clone(),
         next_prepared_at: state.next_certificate.as_ref().map(|n| n.prepared_at),
@@ -538,7 +539,7 @@ mod tests {
             false,
             "pi-lab".into(),
             "test-app".into(),
-            Events::new(vec![]),
+            Events::new(),
         )
         .await
         .unwrap()
@@ -674,7 +675,7 @@ mod tests {
         assert_eq!(switched.to, next);
         assert_eq!(switched.not_received, ["b"]);
         assert_eq!(state.fingerprint(), next);
-        assert_eq!(state.keys().next_fingerprint, None);
+        assert_eq!(state.certificates().next_fingerprint, None);
         assert!(state.switch_certificate().await.unwrap().is_none());
     }
 
@@ -687,7 +688,7 @@ mod tests {
         assert!(state.cancel_certificate().await.unwrap());
 
         assert_eq!(state.fingerprint(), current);
-        assert_eq!(state.keys().next_fingerprint, None);
+        assert_eq!(state.certificates().next_fingerprint, None);
         assert!(!state.cancel_certificate().await.unwrap());
     }
 
@@ -714,7 +715,7 @@ mod tests {
             false,
             "pi-lab".into(),
             "test-app".into(),
-            Events::new(vec![]),
+            Events::new(),
         )
         .await
         .unwrap();
@@ -726,7 +727,7 @@ mod tests {
     #[tokio::test]
     async fn changes_are_told_to_the_app() {
         let store = Arc::new(InMemoryStore::new());
-        let events = Events::new(vec![]);
+        let events = Events::new();
         let mut listener = events.subscribe();
         let state = ServerState::start(store, false, "pi-lab".into(), "t".into(), events)
             .await
@@ -735,9 +736,12 @@ mod tests {
         state.register_client("lab pc").await.unwrap();
         state.prepare_certificate().await.unwrap();
 
-        assert!(matches!(listener.try_recv(), Ok(ServerEvent::Clients(c)) if c.len() == 1));
-        assert!(matches!(listener.try_recv(), Ok(ServerEvent::Keys(_))));
-        assert!(listener.try_recv().is_err());
+        assert!(matches!(listener.try_recv(), Some(ServerEvent::Clients(c)) if c.len() == 1));
+        assert!(matches!(
+            listener.try_recv(),
+            Some(ServerEvent::Certificates(_))
+        ));
+        assert!(listener.try_recv().is_none());
     }
 
     #[tokio::test]

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use skakel_pairing::{commit, compute, new_nonce};
 use skakel_proto::v2::{HelloRequest, connect_response, open_response};
 use skakel_protocol::fingerprints;
-use skakel_server::{Approval, ServerError, SkakelServerBuilder};
+use skakel_server::{Approval, OptionProblem, ServerError, SkakelServerBuilder};
 use tokio::net::UdpSocket;
 use tonic::Code;
 use tower_service::Service;
@@ -278,7 +278,7 @@ async fn the_apps_acceptor_presents_the_certificate_and_a_handover_changes_it_on
     ));
 
     let next = server
-        .keys()
+        .certificates()
         .prepare_next_certificate()
         .await
         .unwrap()
@@ -288,7 +288,12 @@ async fn the_apps_acceptor_presents_the_certificate_and_a_handover_changes_it_on
         fingerprints::are_equal(&presented_fingerprint(server.local_addr()).await, &current),
         "still the current one"
     );
-    server.keys().switch_certificate().await.unwrap().unwrap();
+    server
+        .certificates()
+        .switch_certificate()
+        .await
+        .unwrap()
+        .unwrap();
     assert!(fingerprints::are_equal(
         &presented_fingerprint(server.local_addr()).await,
         &next
@@ -386,5 +391,5 @@ async fn a_mounted_server_with_discovery_needs_the_port_the_app_bound() {
     let Err(ServerError::Options(problems)) = started else {
         panic!("a mounted server on port 0 with discovery started");
     };
-    assert!(problems[0].contains("port"), "{problems:?}");
+    assert_eq!(problems, [OptionProblem::DiscoveryPort]);
 }

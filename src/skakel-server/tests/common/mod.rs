@@ -30,8 +30,8 @@ use skakel_proto::v2::{
     StreamOpen, open_request, open_response, serial_client_message, serial_server_message,
 };
 use skakel_server::{
-    BoxFuture, InMemoryStore, SkakelServer, SkakelServerBuilder, StreamEnd, StreamHandler,
-    StreamMessage, StreamOpen as Opening, StreamRequest, StreamSession, connection_builder,
+    InMemoryStore, SkakelServer, SkakelServerBuilder, StreamEnd, StreamMessage,
+    StreamOpen as Opening, StreamRequest, StreamSession, connection_builder,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
@@ -53,38 +53,36 @@ pub const NAME: &str = "rust-bench";
 /// open, `sink` counts the data it gets and, once the client ends its side, sends the count as a
 /// control frame (eight bytes, big-endian), `huge` opens and sends one data frame over the 16 MiB
 /// limit, and anything else echoes what it receives.
-pub fn echo_stream() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, Opening> {
-        Box::pin(async move {
-            match std::str::from_utf8(&request.target).unwrap_or("") {
-                "" => Opening::BadTarget("Say which target.".into()),
-                "missing" => Opening::NotFound("There is no target called missing.".into()),
-                "busy" => Opening::InUse("bench-2 holds busy.".into()),
-                "vanish" => Opening::accept(|session: StreamSession| async move {
-                    session.end(StreamEnd::target_gone("unplugged")).await;
-                }),
-                "abort" => Opening::accept(|session: StreamSession| async move {
-                    session
-                        .end(StreamEnd::aborted("WORN_OUT", "The echo is worn out.").unwrap())
-                        .await;
-                }),
-                "slow" => Opening::accept(|session: StreamSession| async move {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    echo(session).await;
-                }),
-                "late" => {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    Opening::accept(echo)
-                }
-                "sink" => Opening::accept(sink),
-                "huge" => Opening::accept(|session: StreamSession| async move {
-                    let _ = session.send_data(vec![7u8; 16 * 1024 * 1024 + 1]).await;
-                    session.ended().await;
-                }),
-                _ => Opening::accept(echo),
+pub fn echo_stream() -> impl skakel_server::StreamHandler {
+    |request: StreamRequest| async move {
+        match std::str::from_utf8(&request.target).unwrap_or("") {
+            "" => Opening::BadTarget("Say which target.".into()),
+            "missing" => Opening::NotFound("There is no target called missing.".into()),
+            "busy" => Opening::InUse("bench-2 holds busy.".into()),
+            "vanish" => Opening::accept(|session: StreamSession| async move {
+                session.end(StreamEnd::target_gone("unplugged")).await;
+            }),
+            "abort" => Opening::accept(|session: StreamSession| async move {
+                session
+                    .end(StreamEnd::aborted("WORN_OUT", "The echo is worn out.").unwrap())
+                    .await;
+            }),
+            "slow" => Opening::accept(|session: StreamSession| async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                echo(session).await;
+            }),
+            "late" => {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Opening::accept(echo)
             }
-        })
-    })
+            "sink" => Opening::accept(sink),
+            "huge" => Opening::accept(|session: StreamSession| async move {
+                let _ = session.send_data(vec![7u8; 16 * 1024 * 1024 + 1]).await;
+                session.ended().await;
+            }),
+            _ => Opening::accept(echo),
+        }
+    }
 }
 
 async fn sink(mut session: StreamSession) {
@@ -127,20 +125,18 @@ fn server_message(message: serial_server_message::Message) -> Bytes {
 /// back. `COM1` opens; `fault` opens and then reports a fault (`PORT_FAULT`); `busy` is `IN_USE`;
 /// no port is `BAD_TARGET`; anything else `NO_SUCH_TARGET`. 12345 baud is a rate the port cannot
 /// do. Setting DTR raises DSR and DCD.
-pub fn serial_stream() -> StreamHandler {
-    Arc::new(|request: StreamRequest| -> BoxFuture<'static, Opening> {
-        Box::pin(async move {
-            let port = SerialTarget::decode(request.target.clone())
-                .map(|t| t.port)
-                .unwrap_or_default();
-            match port.as_str() {
-                "" => Opening::BadTarget("Say which port.".into()),
-                "busy" => Opening::InUse("bench-2 holds busy.".into()),
-                "COM1" | "fault" => Opening::accept(move |session| pretend_serial(session, port)),
-                other => Opening::NotFound(format!("There is no port {other}.")),
-            }
-        })
-    })
+pub fn serial_stream() -> impl skakel_server::StreamHandler {
+    |request: StreamRequest| async move {
+        let port = SerialTarget::decode(request.target.clone())
+            .map(|t| t.port)
+            .unwrap_or_default();
+        match port.as_str() {
+            "" => Opening::BadTarget("Say which port.".into()),
+            "busy" => Opening::InUse("bench-2 holds busy.".into()),
+            "COM1" | "fault" => Opening::accept(move |session| pretend_serial(session, port)),
+            other => Opening::NotFound(format!("There is no port {other}.")),
+        }
+    }
 }
 
 async fn pretend_serial(mut session: StreamSession, port: String) {
