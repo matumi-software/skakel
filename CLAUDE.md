@@ -31,6 +31,8 @@ cd src && cargo build && cargo test && cargo clippy --all-targets -- -D warnings
   the same pull request. Apps other than Koppel depend on it. Tests pin the wire bytes, and a change
   to a pinned value is a protocol change. `docs/virtual-camera.md` is the same for the camera's
   shared memory.
+- **`CHANGELOG.md` records what an app can notice.** A change to the wire format or to a crate's
+  public API adds a line to Unreleased in the same pull request.
 - **The virtual camera is never registered by a build or a test.** Installing the media source and
   creating a camera change the machine; that is a hand test, steps in `docs/virtual-camera.md`.
 - **MIT, and nothing that would stop that.** Never copy GPL or LGPL code in, from Koppel's
