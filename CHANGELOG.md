@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `skakel-server`: `Debug` of `NewClient`, `ClientRecord`, `KeyRecord` and `CertificateRecord` no
+  longer prints client secrets or private keys. `FileStore` writes the state to a temporary file of
+  its own, readable by the server's account only (mode 0600 on Unix), syncs it and renames it over
+  the old one; a state file left with wider permissions is replaced by a private one on the next
+  save. A client id another client already has is never reused, and a state that cannot be loaded
+  is never saved.
 - `skakel-server`: every per-address limit counts an IPv6 address by its `/64`, so one host cannot
   spend a limit by rotating addresses. Pairing takes at most 64 requests that have not revealed for
   the whole server, and refuses a revealed nonce shorter than 43 characters with 404, as for any

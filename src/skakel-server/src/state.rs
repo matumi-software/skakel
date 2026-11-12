@@ -42,8 +42,8 @@ pub struct ClientView {
 }
 
 /// A client that was just registered. The secret is shown here and nowhere again, unless the
-/// server was told to keep it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// server was told to keep it. `Debug` leaves the secret out.
+#[derive(Clone, PartialEq, Eq)]
 pub struct NewClient {
     /// The client's id.
     pub client_id: String,
@@ -51,6 +51,16 @@ pub struct NewClient {
     pub name: String,
     /// The secret.
     pub client_secret: String,
+}
+
+impl std::fmt::Debug for NewClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewClient")
+            .field("client_id", &self.client_id)
+            .field("name", &self.name)
+            .field("client_secret", &"<hidden>")
+            .finish()
+    }
 }
 
 /// The certificate and token key now in use.
@@ -296,8 +306,12 @@ impl ServerState {
             let Some(next) = change(&previous.state) else {
                 return Ok(());
             };
-            self.store.save(&next).await.map_err(ServerError::Store)?;
+            // Built first: a state that cannot be loaded must never reach the store.
             let loaded = Arc::new(Loaded::build(next)?);
+            self.store
+                .save(&loaded.state)
+                .await
+                .map_err(ServerError::Store)?;
             self.current.send_replace(loaded);
         }
         self.raise_views();
@@ -337,24 +351,31 @@ impl ServerState {
             ));
         }
         let secret = util::new_secret();
-        let client = ClientRecord {
-            id: util::new_id("client"),
-            name: clean,
-            secret_hash: util::hash_secret(&secret),
-            created_at: OffsetDateTime::now_utc(),
-            generation: 1,
-            secret: self.keep_client_secrets.then(|| secret.clone()),
-        };
-        let added = client.clone();
-        self.update(move |state| {
+        let secret_hash = util::hash_secret(&secret);
+        let kept = self.keep_client_secrets.then(|| secret.clone());
+        let mut registered = None;
+        self.update(|state| {
+            // An id another client already has is skipped, however unlikely it is.
+            let id = util::first_free(
+                || util::new_id("client"),
+                |id| state.clients.iter().any(|c| c.id == id),
+            );
             let mut next = state.clone();
-            next.clients.push(added);
+            next.clients.push(ClientRecord {
+                id: id.clone(),
+                name: clean.clone(),
+                secret_hash,
+                created_at: OffsetDateTime::now_utc(),
+                generation: 1,
+                secret: kept,
+            });
+            registered = Some(id);
             Some(next)
         })
         .await?;
         Ok(NewClient {
-            client_id: client.id,
-            name: client.name,
+            client_id: registered.expect("the change ran"),
+            name: clean,
             client_secret: secret,
         })
     }
@@ -782,5 +803,35 @@ mod tests {
         assert!(matches!(listener.try_recv(), Ok(ServerEvent::Clients(c)) if c.len() == 1));
         assert!(matches!(listener.try_recv(), Ok(ServerEvent::Keys(_))));
         assert!(listener.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_new_client_does_not_print_its_secret() {
+        let state = state().await;
+
+        let client = state.register_client("lab pc").await.unwrap();
+
+        let text = format!("{client:?}");
+        assert!(!text.contains(&client.client_secret));
+        assert!(text.contains(&client.client_id));
+    }
+
+    #[tokio::test]
+    async fn a_state_that_cannot_be_loaded_is_not_saved() {
+        let store = Arc::new(InMemoryStore::new());
+        let state = state_with(store.clone()).await;
+        let before = store.state().unwrap();
+
+        let result = state
+            .update(|current| {
+                let mut next = current.clone();
+                next.certificate.private_key = "not a key".into();
+                Some(next)
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(store.state().unwrap(), before);
+        assert_eq!(state.loaded().state, before);
     }
 }
