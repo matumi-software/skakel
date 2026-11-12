@@ -21,7 +21,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use reqwest::Url;
 use skakel_discovery::{
     ANSWER_WINDOW, MAX_ENTRIES, MAX_ENTRIES_PER_ADDRESS, PROBE_INTERVAL, create_probe,
     try_parse_answer,
@@ -30,6 +29,7 @@ use skakel_protocol::SkakelApp;
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use crate::http::PinsFn;
 use crate::info::pick_version;

@@ -42,10 +42,12 @@ mod moves;
 mod options;
 mod pairing;
 mod pins;
+mod request;
 mod serial;
 mod streams;
 mod tokens;
 
+pub use ::http::{Method, StatusCode};
 pub use browser::{Browser, BrowserOptions, DiscoveredServer};
 pub use clock::{Clock, Sleep, SystemClock};
 pub use failure::{Error, Failure, FailureKind, Result};
@@ -54,12 +56,13 @@ pub use link::{HandlerError, Link, LinkChannel, LinkState, LinkStatus};
 pub use options::ClientOptions;
 pub use pairing::{MAX_WAIT, PairingClient, PairingError};
 pub use pins::{Credentials, InvalidFingerprint, Pins};
-pub use reqwest::{Method, RequestBuilder, Response, Url};
+pub use request::{RequestBuilder, Response};
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
 pub use streams::{
     Frame, OpenResult, StreamClose, StreamCloseReason, StreamConnection, StreamRefusal,
     StreamRefusalReason,
 };
+pub use url::Url;
 
 /// Skakel's own types the client's API is made of, so an app needs only this crate.
 pub use prost::bytes::Bytes;

@@ -8,7 +8,6 @@
 //! calls running or not, and drops the connection when 15 more seconds pass without an answer.
 
 use std::future::Future;
-use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -17,20 +16,17 @@ use std::time::Duration;
 use http_body_util::BodyExt;
 use hyper::client::conn::http2::{Builder, SendRequest};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use reqwest::Url;
-use rustls::pki_types::ServerName;
 use skakel_protocol::{KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, Reason};
-use tokio::net::TcpStream;
 use tokio::sync::watch;
-use tokio_rustls::TlsConnector;
 use tonic::body::Body;
 use tonic::codegen::http;
 use tonic::{Code, Status};
 use tonic_types::StatusExt;
 use url::Host;
+use url::Url;
 
 use crate::failure::{Error, FailureKind, GrpcStatus, bad_answer};
-use crate::http::{CONNECT_TIMEOUT, PinsFn, Presented, last_presented, presented, tls_config};
+use crate::http::{PinsFn, Presented, connect_tls, last_presented, presented, tls_config};
 
 /// One HTTP/2 connection to a server, pinned. Dropping the last handle closes it.
 #[derive(Clone)]
@@ -59,17 +55,6 @@ impl std::fmt::Debug for Connection {
     }
 }
 
-/// Where to connect: the server's address as a socket address, or a name to resolve, and the port.
-fn target(address: &Url) -> Result<(String, Option<IpAddr>, u16), Error> {
-    let port = address.port_or_known_default().unwrap_or(443);
-    match address.host() {
-        Some(Host::Ipv4(ip)) => Ok((ip.to_string(), Some(IpAddr::V4(ip)), port)),
-        Some(Host::Ipv6(ip)) => Ok((ip.to_string(), Some(IpAddr::V6(ip)), port)),
-        Some(Host::Domain(name)) => Ok((name.to_owned(), None, port)),
-        None => Err(Error::of(FailureKind::Unreachable)),
-    }
-}
-
 impl Connection {
     /// Opens a connection to `address`: TCP within ten seconds, then TLS pinned to `pins` with ALPN
     /// `h2`, then HTTP/2, within `timeout` in all. A server that picks anything but `h2` did not
@@ -79,38 +64,21 @@ impl Connection {
         pins: PinsFn,
         timeout: Duration,
     ) -> Result<Self, Error> {
-        let (host, ip, port) = target(address)?;
-        let authority: Arc<str> = match ip {
-            Some(IpAddr::V6(_)) => format!("[{host}]:{port}"),
-            _ => format!("{host}:{port}"),
+        let port = address.port_or_known_default().unwrap_or(443);
+        let authority: Arc<str> = match address.host() {
+            Some(Host::Ipv6(ip)) => format!("[{ip}]:{port}"),
+            Some(host) => format!("{host}:{port}"),
+            None => return Err(Error::of(FailureKind::Unreachable)),
         }
         .into();
         let presented_by: Presented = presented();
         let opening = async {
-            let tcp = tokio::time::timeout(CONNECT_TIMEOUT, async {
-                match ip {
-                    Some(ip) => TcpStream::connect(SocketAddr::new(ip, port)).await,
-                    None => TcpStream::connect((host.as_str(), port)).await,
-                }
-            })
-            .await
-            .map_err(Error::from_cause)?
-            .map_err(Error::from_cause)?;
-            let _ = tcp.set_nodelay(true);
-
             let mut config = tls_config(pins, Some(presented_by.clone()));
             config.alpn_protocols = vec![b"h2".to_vec()];
             // A resumed session shows no certificate, and the link proves a certificate by what a
             // new connection presents.
             config.resumption = rustls::client::Resumption::disabled();
-            let name = match ip {
-                Some(ip) => ServerName::IpAddress(ip.into()),
-                None => ServerName::try_from(host.clone()).map_err(Error::from_cause)?,
-            };
-            let tls = TlsConnector::from(Arc::new(config))
-                .connect(name, tcp)
-                .await
-                .map_err(Error::from_cause)?;
+            let tls = connect_tls(address, Arc::new(config)).await?;
             if tls.get_ref().1.alpn_protocol() != Some(b"h2") {
                 return Err(bad_answer(
                     "The server did not choose HTTP/2 for a connection that offered only h2.",

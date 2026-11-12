@@ -1,13 +1,14 @@
 //! Reading a server's `GET /skakel/info`, and picking the protocol version to speak with it.
 
-use reqwest::Url;
 use skakel_discovery::{MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, clean};
 use skakel_protocol::{INFO_PATH, SkakelApp, SkakelInfo, VERSIONS, is_app_id};
+use url::Url;
 
 use crate::failure::{Error, Failure, Result, bad_answer};
 use crate::http::{self, base_address};
 use crate::options::ClientOptions;
 use crate::pins::Pins;
+use crate::request::HttpClient;
 
 /// The highest version both this client and the server speak, or `None` when there is none.
 ///
@@ -36,25 +37,20 @@ pub fn require_version(server_versions: &[i32]) -> Result<u32> {
 /// pick it with [`require_version`].
 pub async fn read_info(address: &Url, pins: &Pins, options: &ClientOptions) -> Result<SkakelInfo> {
     let server = base_address(address)?;
-    let client = http::client_for(pins.clone());
+    let client = HttpClient::pinned(pins.clone());
     read_info_with(&client, &server, options.request_timeout).await
 }
 
 /// The same over a client the caller made, pinned.
 pub(crate) async fn read_info_with(
-    client: &reqwest::Client,
+    client: &HttpClient,
     server: &Url,
     timeout: std::time::Duration,
 ) -> Result<SkakelInfo> {
     let result = async {
         let url = server.join(INFO_PATH).map_err(Error::from_cause)?;
-        let response = client
-            .get(url)
-            .timeout(timeout)
-            .send()
-            .await
-            .map_err(Error::from_cause)?;
-        let info: SkakelInfo = http::read_json(response).await?;
+        let response = client.get(url).timeout(timeout).send().await?;
+        let info: SkakelInfo = response.read_json()?;
         check(info, server)
     }
     .await;
