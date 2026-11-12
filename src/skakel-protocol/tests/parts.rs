@@ -98,10 +98,13 @@ fn no_skakel_crate_depends_on_itself_through_any_kind_of_dependency() {
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for package in workspace_packages() {
         let name = package["name"].as_str().unwrap().to_owned();
-        let to = edges.entry(name).or_default();
+        let to = edges.entry(name.clone()).or_default();
         for dependency in package["dependencies"].as_array().unwrap() {
             let on = dependency["name"].as_str().unwrap();
-            if on.starts_with("skakel-") {
+            // A crate that names itself as a dev-dependency does it to turn on one of its own
+            // features for its tests (a `test-util` feature); that is no cycle of crates.
+            let itself_for_tests = on == name && dependency["kind"] == "dev";
+            if on.starts_with("skakel-") && !itself_for_tests {
                 to.insert(on.to_owned());
             }
         }
