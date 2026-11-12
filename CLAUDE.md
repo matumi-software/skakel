@@ -25,10 +25,7 @@ Build and test from `src/`:
 cd src && cargo build && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check
 ```
 
-The workflow in `.github/workflows/ci.yml` runs the same four commands with `--locked` on Linux and
-Windows for every pull request and every push to `main`, and `cargo doc --no-deps --locked` with
-rustdoc warnings denied, and `cargo deny check` against `src/deny.toml`. All of it must pass before a pull request merges, and the pull request ruleset
-requires it. The test `skakel-wire/tests/parts.rs` fails when a crate depends on a Skakel crate
+There is no CI: no workflow runs on a hosted runner, so a pull request is checked by hand before it is opened. Run the four commands above with `--locked` on Linux (a container) and Windows, then `cargo doc --no-deps --locked` with rustdoc warnings denied, and `cargo deny check` against `src/deny.toml`. The test `skakel-wire/tests/parts.rs` fails when a crate depends on a Skakel crate
 that `docs/parts.md` does not allow. Dependencies are updated by hand: no bot proposes updates.
 
 ## Rules
