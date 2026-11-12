@@ -7,8 +7,14 @@ use std::time::Duration;
 use crate::browser::Browser;
 use crate::clock::{Clock, SystemClock};
 
-/// How the client's parts keep time and wait.
+/// How the client's parts keep time and wait. Start from the default and change what you need:
+///
+/// ```
+/// # use std::time::Duration;
+/// let options = skakel_client::ClientOptions::default().request_timeout(Duration::from_secs(10));
+/// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ClientOptions {
     /// The clock. The system's unless set.
     pub clock: Arc<dyn Clock>,
@@ -19,6 +25,29 @@ pub struct ClientOptions {
     /// For a link: the browser it listens to, so it can follow its server to another address on the
     /// local network when the saved one stops answering. Without one, a link stays where it is.
     pub browser: Option<Browser>,
+}
+
+impl ClientOptions {
+    /// Keeps time by `clock` instead of the system's.
+    #[must_use]
+    pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// How long one request may take.
+    #[must_use]
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
+    /// For a link: the browser to listen to, so it can follow its server to another address.
+    #[must_use]
+    pub fn browser(mut self, browser: Browser) -> Self {
+        self.browser = Some(browser);
+        self
+    }
 }
 
 impl Default for ClientOptions {

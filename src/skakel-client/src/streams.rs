@@ -16,6 +16,7 @@ use tonic::{Code, Status, Streaming};
 
 use crate::failure::{Error, Failure, FailureKind, bad_answer};
 use crate::grpc::{Connection, call_failed, error_info_of, reason_of};
+use crate::status::GrpcCode;
 
 /// How long a close waits for the server to end the call.
 const CLOSE_TIMEOUT: Duration = Duration::from_millis(2500);
@@ -25,6 +26,7 @@ const FRAMES: usize = 16;
 
 /// A frame of an open stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Frame {
     /// Data, the stream's own bytes.
     Data(Bytes),
@@ -34,6 +36,7 @@ pub enum Frame {
 
 /// Why a stream ended, by the status the call ended with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StreamCloseReason {
     /// `OK`: closed normally.
     Normal,
@@ -55,11 +58,12 @@ pub enum StreamCloseReason {
 
 /// How a stream ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StreamClose {
     /// The status as a reason a client acts on.
     pub reason: StreamCloseReason,
     /// The status code the call ended with.
-    pub code: Code,
+    pub code: GrpcCode,
     /// For [`StreamCloseReason::TypeDefined`], the reason the stream type gave, such as
     /// `PORT_FAULT`.
     pub type_reason: Option<String>,
@@ -69,27 +73,27 @@ pub struct StreamClose {
 
 impl StreamClose {
     /// A stream that ended with `OK`.
-    pub fn normal() -> Self {
+    pub(crate) fn normal() -> Self {
         Self {
             reason: StreamCloseReason::Normal,
-            code: Code::Ok,
+            code: GrpcCode::Ok,
             type_reason: None,
             description: None,
         }
     }
 
     /// A stream whose connection was lost.
-    pub fn connection_lost() -> Self {
+    pub(crate) fn connection_lost() -> Self {
         Self {
             reason: StreamCloseReason::ConnectionLost,
-            code: Code::Unavailable,
+            code: GrpcCode::Unavailable,
             type_reason: None,
             description: None,
         }
     }
 
     /// The close for the status a stream ended with.
-    pub fn from_status(status: &Status) -> Self {
+    pub(crate) fn from_status(status: &Status) -> Self {
         let info = error_info_of(status);
         let mut type_reason = None;
         let reason = match (status.code(), reason_of(status)) {
@@ -113,7 +117,7 @@ impl StreamClose {
         };
         Self {
             reason,
-            code: status.code(),
+            code: status.code().into(),
             type_reason,
             description: Some(status.message().to_owned()).filter(|m| !m.is_empty()),
         }
@@ -147,6 +151,7 @@ impl StreamClose {
 
 /// Why the server refused to open a stream, by the reason it gave.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StreamRefusalReason {
     /// `TOKEN_REFUSED`: no token, an expired one, or one from an older generation.
     Unauthorized,
@@ -167,9 +172,10 @@ pub enum StreamRefusalReason {
 
 /// The server refused to open a stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StreamRefusal {
     /// The status code.
-    pub code: Code,
+    pub code: GrpcCode,
     /// The reason.
     pub reason: StreamRefusalReason,
     /// The server's words for a person, or fixed wording when it sent none.
@@ -178,7 +184,7 @@ pub struct StreamRefusal {
 
 impl StreamRefusal {
     /// The refusal for the status the call ended with before `opened`.
-    pub fn from_status(status: &Status) -> Self {
+    pub(crate) fn from_status(status: &Status) -> Self {
         let reason = match reason_of(status) {
             Some(Reason::TokenRefused) => StreamRefusalReason::Unauthorized,
             Some(Reason::NoSuchType) => StreamRefusalReason::NoSuchType,
@@ -206,7 +212,7 @@ impl StreamRefusal {
             words => words.to_owned(),
         };
         Self {
-            code: status.code(),
+            code: status.code().into(),
             reason,
             message,
         }
@@ -563,7 +569,7 @@ mod tests {
             StreamRefusal::from_status(&with(Code::FailedPrecondition, "IN_USE", "skakel", ""));
 
         assert_eq!(with_words.reason, StreamRefusalReason::InUse);
-        assert_eq!(with_words.code, Code::FailedPrecondition);
+        assert_eq!(with_words.code, GrpcCode::FailedPrecondition);
         assert_eq!(with_words.message, "bench-2 holds busy.");
         assert_eq!(without.message, "Someone else is using it.");
         for (reason, expected) in [

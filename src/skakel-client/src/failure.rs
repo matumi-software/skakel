@@ -11,6 +11,7 @@ use tonic::{Code, Status};
 
 /// What went wrong. An app shows [`Failure::message`] and acts on the kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FailureKind {
     /// Nothing answered at the server's address: refused, timed out, no route, or a name that does
     /// not resolve.
@@ -114,7 +115,7 @@ pub struct Failure {
 impl Failure {
     /// The failure of this kind with its fixed wording. For [`FailureKind::VersionMismatch`],
     /// [`Failure::version_mismatch`] names the versions.
-    pub fn of(kind: FailureKind) -> Self {
+    pub(crate) fn of(kind: FailureKind) -> Self {
         Self {
             kind,
             message: kind.message().to_owned(),
@@ -124,7 +125,7 @@ impl Failure {
     /// The server speaks none of this client's protocol versions, worded with both sides' versions
     /// and which one to update, such as "This server speaks Skakel 2 and this app speaks Skakel 1.
     /// Update the app."
-    pub fn version_mismatch(server_versions: &[i32]) -> Self {
+    pub(crate) fn version_mismatch(server_versions: &[i32]) -> Self {
         let Some(highest) = server_versions.iter().max() else {
             return Self::of(FailureKind::VersionMismatch);
         };
@@ -192,7 +193,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 impl Error {
     /// A failure with no cause beyond itself.
-    pub fn new(failure: Failure) -> Self {
+    pub(crate) fn new(failure: Failure) -> Self {
         Self {
             failure,
             source: None,
@@ -200,7 +201,7 @@ impl Error {
     }
 
     /// A failure and what caused it.
-    pub fn with_source(
+    pub(crate) fn with_source(
         failure: Failure,
         source: impl Into<Box<dyn StdError + Send + Sync>>,
     ) -> Self {
@@ -211,7 +212,7 @@ impl Error {
     }
 
     /// An error of this kind with its fixed wording.
-    pub fn of(kind: FailureKind) -> Self {
+    pub(crate) fn of(kind: FailureKind) -> Self {
         Self::new(Failure::of(kind))
     }
 

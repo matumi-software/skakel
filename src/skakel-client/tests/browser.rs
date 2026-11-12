@@ -10,11 +10,12 @@ use common::{free_udp, within};
 use skakel_client::{Browser, BrowserOptions};
 
 fn options(udp: u16, app_ids: Option<Vec<String>>) -> BrowserOptions {
-    BrowserOptions {
-        port: 5240,
-        app_ids,
-        probe_targets: Some(vec![SocketAddr::from(([127, 0, 0, 1], udp))]),
-        probe_interval: Duration::from_millis(300),
+    let options = BrowserOptions::new(5240)
+        .probe_targets(vec![SocketAddr::from(([127, 0, 0, 1], udp))])
+        .probe_interval(Duration::from_millis(300));
+    match app_ids {
+        Some(ids) => options.app_ids(ids),
+        None => options,
     }
 }
 

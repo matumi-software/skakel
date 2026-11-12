@@ -72,10 +72,7 @@ async fn a_token_is_reused_until_a_minute_before_it_runs_out() {
     let (link, _) = link_with(
         &mut bench,
         &server,
-        ClientOptions {
-            clock: clock.clone(),
-            ..ClientOptions::default()
-        },
+        ClientOptions::default().clock(clock.clone()),
     )
     .await;
     let first = link.access_token().await.unwrap();
@@ -102,10 +99,7 @@ async fn the_control_call_is_renewed_on_the_same_connection_before_its_token_run
         &proxy.address(),
         server.pins(),
         credentials.clone(),
-        ClientOptions {
-            clock: clock.clone(),
-            ..ClientOptions::default()
-        },
+        ClientOptions::default().clock(clock.clone()),
     )
     .unwrap();
     let statuses = record_status(&link);

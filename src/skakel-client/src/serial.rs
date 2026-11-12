@@ -35,6 +35,7 @@ const DATA_CHUNKS: usize = 16;
 
 /// What became of a change to the line settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SerialChange {
     /// True when the server echoed the settings: the change is done. False when the port refused it.
     pub applied: bool,
@@ -46,6 +47,7 @@ pub struct SerialChange {
 
 /// What the port reports besides the answer to a change.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SerialEvent {
     /// An input line changed. [`SerialConnection::modem_status`] has the new state already.
     ModemStatus(ModemStatus),

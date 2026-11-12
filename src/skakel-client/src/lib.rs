@@ -46,6 +46,7 @@ mod pins;
 mod request;
 mod serial;
 mod stream_io;
+mod status;
 mod streams;
 mod tokens;
 
@@ -63,6 +64,7 @@ pub use pairing::{MAX_WAIT, PairingClient, PairingError};
 pub use pins::{Credentials, InvalidFingerprint, Pins};
 pub use request::{RequestBuilder, Response};
 pub use stream_io::StreamIo;
+pub use status::GrpcCode;
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
 pub use streams::{
     Frame, OpenResult, StreamClose, StreamCloseReason, StreamConnection, StreamRefusal,
@@ -76,6 +78,3 @@ pub use skakel_protocol::{SkakelApp, SkakelHello, SkakelInfo};
 pub use skakel_serial::{
     DataBits, ErrorCode, FlowControl, LineSettings, ModemStatus, Parity, StopBits,
 };
-/// The gRPC library [`LinkChannel`] and the stream statuses come from, so an app builds its
-/// generated clients on the same version.
-pub use tonic;

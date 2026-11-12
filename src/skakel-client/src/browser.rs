@@ -77,6 +77,7 @@ impl DiscoveredServer {
 
 /// How a browser probes. Without options it broadcasts every ten seconds on every IPv4 network.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct BrowserOptions {
     /// The app's port number: servers answer probes on UDP at the number their HTTPS listens on.
     pub port: u16,
@@ -100,6 +101,27 @@ impl BrowserOptions {
             probe_targets: None,
             probe_interval: PROBE_INTERVAL,
         }
+    }
+
+    /// Keeps only the servers of these apps.
+    #[must_use]
+    pub fn app_ids(mut self, ids: Vec<String>) -> Self {
+        self.app_ids = Some(ids);
+        self
+    }
+
+    /// Sends each probe to these addresses instead of broadcasting.
+    #[must_use]
+    pub fn probe_targets(mut self, targets: Vec<SocketAddr>) -> Self {
+        self.probe_targets = Some(targets);
+        self
+    }
+
+    /// Probes this often.
+    #[must_use]
+    pub fn probe_interval(mut self, interval: Duration) -> Self {
+        self.probe_interval = interval;
+        self
     }
 }
 
@@ -482,8 +504,8 @@ impl Browser {
     }
 
     /// An answer from the network, as if a probe had just been answered. For a test that stands in
-    /// for the network.
-    #[doc(hidden)]
+    /// for the network; behind the `test-util` feature.
+    #[cfg(feature = "test-util")]
     pub fn add_for_test(&self, server: DiscoveredServer, rank: i32) {
         self.inner.add(server, rank, Instant::now());
     }

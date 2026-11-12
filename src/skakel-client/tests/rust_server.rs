@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use common::greeter::{self, GreetRequest};
 use common::{Recorder, within};
-use tonic::{Code, Request};
+use tonic::Request;
 use skakel_client::{
-    Browser, BrowserOptions, Bytes, ClientOptions, FailureKind, Frame, LineSettings, Link,
+    Browser, BrowserOptions, Bytes, ClientOptions, FailureKind, Frame, GrpcCode, LineSettings, Link,
     LinkState, LinkStatus, OpenResult, PairingClient, Pins, StreamCloseReason, Url, read_info,
 };
 use skakel_server::{
@@ -137,12 +137,12 @@ fn record_status(link: &Link) -> Recorder<LinkStatus> {
 async fn the_browser_finds_the_server_and_info_reads_what_it_says() {
     let server = start().await;
     let udp = server.discovery_addr().expect("discovery is on");
-    let browser = Browser::with_options(BrowserOptions {
-        port: 5240,
-        app_ids: Some(vec!["test-app".into()]),
-        probe_targets: Some(vec![SocketAddr::from(([127, 0, 0, 1], udp.port()))]),
-        probe_interval: Duration::from_millis(300),
-    });
+    let browser = Browser::with_options(
+        BrowserOptions::new(5240)
+            .app_ids(vec!["test-app".into()])
+            .probe_targets(vec![SocketAddr::from(([127, 0, 0, 1], udp.port()))])
+            .probe_interval(Duration::from_millis(300)),
+    );
     let mut changes = browser.watch();
     browser.start().await.unwrap();
 
@@ -257,10 +257,10 @@ async fn streams_and_the_serial_stream_work() {
     let busy = link.open_stream("echo", b"busy").await.unwrap();
     assert_eq!(
         busy.refusal().map(|r| (r.code, r.message.as_str())),
-        Some((Code::FailedPrecondition, "bench-2 holds busy."))
+        Some((GrpcCode::FailedPrecondition, "bench-2 holds busy."))
     );
     let refused = link.open_serial("COM9").await.unwrap();
-    assert!(matches!(refused, OpenResult::Refused(r) if r.code == Code::NotFound));
+    assert!(matches!(refused, OpenResult::Refused(r) if r.code == GrpcCode::NotFound));
 
     let port = link.open_serial("COM1").await.unwrap().stream().unwrap();
     assert_eq!(port.line_settings().baud, 9600);

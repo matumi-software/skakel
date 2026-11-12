@@ -1268,6 +1268,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "skakel-client",
  "skakel-discovery",
  "skakel-pairing",
  "skakel-proto",
