@@ -72,6 +72,47 @@ async fn open_stream_opens_a_stream_that_carries_data_and_closes_normally() {
 }
 
 #[tokio::test]
+async fn a_stream_is_also_an_async_reader_and_writer_for_its_data() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let (link, _) = linked(&mut bench, &server).await;
+    let stream = link
+        .open_stream("echo", b"a b")
+        .await
+        .unwrap()
+        .stream()
+        .unwrap();
+    let mut io = stream.into_io();
+
+    io.write_all(b"ping pong").await.unwrap();
+    let mut back = [0u8; 9];
+    within(Duration::from_secs(20), io.read_exact(&mut back))
+        .await
+        .unwrap();
+    assert_eq!(&back, b"ping pong");
+
+    // A write of more than a frame goes out in parts and comes back whole.
+    let big = vec![7u8; 200_000];
+    io.write_all(&big).await.unwrap();
+    let mut echoed = vec![0u8; big.len()];
+    within(Duration::from_secs(20), io.read_exact(&mut echoed))
+        .await
+        .unwrap();
+    assert_eq!(echoed, big);
+
+    // Shutting down the writing side ends the call; reading then runs to the end.
+    io.shutdown().await.unwrap();
+    let mut rest = Vec::new();
+    within(Duration::from_secs(20), io.read_to_end(&mut rest))
+        .await
+        .unwrap();
+    assert!(rest.is_empty());
+    assert_eq!(io.close_info().unwrap().reason, StreamCloseReason::Normal);
+    assert!(io.write_all(b"late").await.is_err());
+}
+
+#[tokio::test]
 async fn data_and_control_frames_keep_their_order() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;

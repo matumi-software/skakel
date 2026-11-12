@@ -45,6 +45,7 @@ mod pairing;
 mod pins;
 mod request;
 mod serial;
+mod stream_io;
 mod streams;
 mod tokens;
 
@@ -61,6 +62,7 @@ pub use options::ClientOptions;
 pub use pairing::{MAX_WAIT, PairingClient, PairingError};
 pub use pins::{Credentials, InvalidFingerprint, Pins};
 pub use request::{RequestBuilder, Response};
+pub use stream_io::StreamIo;
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
 pub use streams::{
     Frame, OpenResult, StreamClose, StreamCloseReason, StreamConnection, StreamRefusal,
