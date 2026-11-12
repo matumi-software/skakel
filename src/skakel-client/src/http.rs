@@ -112,8 +112,8 @@ pub(crate) fn tls_config(pins: PinsFn, presented: Option<Presented>) -> rustls::
         algorithms: provider.signature_verification_algorithms,
     };
     rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .expect("the ring provider speaks the default protocol versions")
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("the ring provider speaks TLS 1.3")
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth()

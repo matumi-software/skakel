@@ -213,7 +213,7 @@ mod tests {
                 id: "test-app".into(),
                 version: "1".into(),
             },
-            versions: vec![2],
+            versions: vec![3],
             other_endpoints: Vec::new(),
         }
     }

@@ -1,13 +1,17 @@
-// Skakel protocol version 2: the `serial` stream type, one serial port on the server used by one
-// client at a time. docs/protocol.md at the repository root ("The serial stream type") is the
-// contract.
+// The `serial` stream type, one serial port on the server used by one client at a time. Its package
+// is its own, `skakel.streams.serial.v1`, so it versions apart from the core protocol.
+// docs/protocol.md at the repository root ("The serial stream type") is the contract.
 //
 // Data frames carry the port's bytes with no framing of their own. Control frames carry one
 // `SerialClientMessage` (client to server) or `SerialServerMessage` (server to client), encoded.
+//
+// Evolution rules: a field that is removed has its number and name `reserved`, a number is never
+// reused, an end ignores a oneof arm and an enum value it does not know, and a new kind of message
+// is a new oneof arm. A change that breaks these is a protocol version.
 
 syntax = "proto3";
 
-package skakel.v2;
+package skakel.streams.serial.v1;
 
 // The target of a `serial` stream, in `StreamOpen.target`.
 message SerialTarget {
@@ -18,8 +22,9 @@ message SerialTarget {
 // A control message from the client.
 message SerialClientMessage {
   oneof message {
-    // Change the port's settings. Every field is required.
-    LineSettings line_settings = 1;
+    // Change the port's settings. Every field is required. The server answers with the same
+    // `request_id` in `line_settings` or `error`.
+    LineSettingsRequest line_settings = 1;
     // Set the output lines.
     ModemLines modem_lines = 2;
     // Start or end a break.
@@ -34,13 +39,28 @@ message SerialServerMessage {
   oneof message {
     // The first control message on the stream: the port as it is now.
     SerialOpened opened = 1;
-    // The settings now on the port, after a change was applied.
-    LineSettings line_settings = 2;
+    // The answer to a change that was applied: the settings now on the port.
+    LineSettingsApplied line_settings = 2;
     // An input line changed.
     ModemStatus modem_status = 3;
     // A change the port refused, or errors the port reported.
     SerialError error = 4;
   }
+}
+
+// A change of the port's line settings.
+message LineSettingsRequest {
+  // Names this change in the answer. Nonzero: a request with 0 is refused.
+  uint32 request_id = 1;
+  LineSettings settings = 2;
+}
+
+// The answer to a `LineSettingsRequest` that was applied.
+message LineSettingsApplied {
+  // The `request_id` of the change this answers.
+  uint32 request_id = 1;
+  // The settings now on the port.
+  LineSettings settings = 2;
 }
 
 message LineSettings {
@@ -117,6 +137,8 @@ message SerialError {
   SerialErrorCode code = 1;
   // What happened, for a person. May be empty.
   string detail = 2;
+  // The `request_id` of the change this refuses, or 0 for an error the port reported on its own.
+  uint32 request_id = 3;
 }
 
 enum SerialErrorCode {

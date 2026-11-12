@@ -173,7 +173,7 @@ where
 pub struct Impostor;
 
 impl NamedService for Impostor {
-    const NAME: &'static str = "skakel.v2.Impostor";
+    const NAME: &'static str = "skakel.v3.Impostor";
 }
 
 impl tower_service::Service<http::Request<Body>> for Impostor {

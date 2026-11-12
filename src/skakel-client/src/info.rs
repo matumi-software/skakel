@@ -116,28 +116,33 @@ mod tests {
 
     #[test]
     fn pick_version_takes_the_highest_both_speak() {
-        assert_eq!(pick_version(&[2]), Some(2));
-        assert_eq!(pick_version(&[3, 2, 1]), Some(2));
-        assert_eq!(pick_version(&[1]), None);
-        assert_eq!(pick_version(&[3, 4]), None);
+        assert_eq!(pick_version(&[3]), Some(3));
+        assert_eq!(pick_version(&[4, 3, 2]), Some(3));
+        assert_eq!(pick_version(&[2]), None);
+        assert_eq!(pick_version(&[4, 5]), None);
         assert_eq!(pick_version(&[]), None);
     }
 
     #[test]
     fn require_version_names_both_sides_when_there_is_none() {
-        let error = require_version(&[1]).unwrap_err();
+        let error = require_version(&[2]).unwrap_err();
 
         assert_eq!(error.kind(), FailureKind::VersionMismatch);
         assert_eq!(
             error.to_string(),
-            "This server speaks Skakel 1 and this app speaks Skakel 2. Update the server."
+            "This server speaks Skakel 2 and this app speaks Skakel 3. Update the server."
+        );
+        let newer = require_version(&[4]).unwrap_err();
+        assert_eq!(
+            newer.to_string(),
+            "This server speaks Skakel 4 and this app speaks Skakel 3. Update the app."
         );
     }
 
     #[test]
     fn check_cleans_the_name_and_the_version() {
         let checked = check(
-            info(" pi\u{202E}lab ", "koppel", "1.0\u{200B}", vec![2]),
+            info(" pi\u{202E}lab ", "koppel", "1.0\u{200B}", vec![3]),
             &server(),
         )
         .unwrap();
@@ -148,7 +153,7 @@ mod tests {
 
     #[test]
     fn check_puts_the_address_in_for_a_name_that_is_nothing_once_cleaned() {
-        let checked = check(info("\u{200B}", "koppel", "1", vec![2]), &server()).unwrap();
+        let checked = check(info("\u{200B}", "koppel", "1", vec![3]), &server()).unwrap();
 
         assert_eq!(checked.name, "10.0.0.5");
     }
@@ -157,12 +162,12 @@ mod tests {
     fn check_refuses_what_breaks_the_limits() {
         let long_version = "v".repeat(33);
         let bad = [
-            info("x", "Koppel", "1", vec![2]),
-            info("x", "", "1", vec![2]),
-            info("x", "koppel", &long_version, vec![2]),
+            info("x", "Koppel", "1", vec![3]),
+            info("x", "", "1", vec![3]),
+            info("x", "koppel", &long_version, vec![3]),
             info("x", "koppel", "1", vec![]),
             info("x", "koppel", "1", vec![0]),
-            info("x", "koppel", "1", vec![2; 9]),
+            info("x", "koppel", "1", vec![3; 9]),
         ];
 
         for case in bad {

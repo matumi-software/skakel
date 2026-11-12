@@ -23,6 +23,28 @@
   count Unicode scalar values, not UTF-16 code units (an emoji counts for one, not two), and the
   discovery answer is plain `serde_json` (non-ASCII text is UTF-8, not `\uXXXX` escapes). The answer
   still never exceeds the 512-byte probe: a name that does not fit is cut by scalar values.
+- **Protocol version 3** (wire changes, together: a version 3 end does not talk to a version 2 end,
+  and each tells a person so through the version check; `docs/protocol.md` has "Changes from version
+  2"):
+  - The version is 3: `/skakel/v3/...` paths, the gRPC package `skakel.v3` (the proto files moved to
+    `src/proto/skakel/v3/`), `"versions": [3]` in discovery and info. `skakel_wire::VERSION`,
+    `BASE_PATH`, `PAIR_PATH` and `TOKEN_PATH` follow; `skakel_proto::v2` is now `skakel_proto::v3`.
+  - Fingerprints on the control channel are their 32 bytes: `Certificates::fingerprint`,
+    `next_fingerprint` and `NextCertificateReceived::fingerprint` are `bytes`, empty for none.
+    Discovery and info JSON keep the colon form. `skakel_wire::fingerprints` has `BYTES`,
+    `bytes_of_der`, `to_bytes` and `from_bytes` for the conversions.
+  - The serial messages have a package of their own, `skakel.streams.serial.v1`, in
+    `src/proto/skakel/streams/serial/v1/serial.proto`, so the stream type versions apart from the
+    core: `skakel_proto::serial` holds them. A line settings change carries a nonzero `request_id`
+    and its answer (`line_settings` or `error`) carries it back. `skakel_serial::ClientMessage::LineSettings`
+    and `ServerMessage::LineSettings` are struct variants with `request_id` and `settings`,
+    `ServerMessage::Error` has a `request_id` (0 for an error the port reported on its own), and a
+    change with a `request_id` of 0 decodes as the new `ClientMessageError::NoRequestId`.
+    `SerialConnection::set_line_settings` takes the answer that carries its id and no other, so an
+    answer that comes after its change gave up can no longer be taken for the next one.
+  - TLS 1.3 only on both ends: a client that offers only TLS 1.2 gets a failed handshake.
+  - A rule for evolution (removed fields are `reserved`, unknown oneof arms and enum values are
+    ignored) is in `docs/protocol.md` and the proto files.
 - `skakel-server`: the server no longer panics when the operating system has no random bytes. A
   request that needs them is refused and the error is logged: a pairing open is answered as for a
   full server, the token endpoint answers 500, and `register_client` and `rotate_secret` return the

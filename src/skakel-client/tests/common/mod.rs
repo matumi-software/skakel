@@ -384,19 +384,29 @@ async fn run_serial(mut session: StreamSession, fault: bool) {
                 continue;
             }
             StreamMessage::Control(control) => match ClientMessage::decode(&control).ok() {
-                Some(ClientMessage::LineSettings(change)) if change.baud == UNSUPPORTED_BAUD => {
-                    Some(ServerMessage::Error {
-                        code: ErrorCode::Unsupported,
-                        detail: Some(format!("This port cannot run at {UNSUPPORTED_BAUD} baud.")),
-                    })
-                }
-                Some(ClientMessage::LineSettings(change)) if change.baud == SILENT_BAUD => None,
-                Some(ClientMessage::LineSettings(change)) => {
+                Some(ClientMessage::LineSettings {
+                    request_id,
+                    settings: change,
+                }) if change.baud == UNSUPPORTED_BAUD => Some(ServerMessage::Error {
+                    request_id,
+                    code: ErrorCode::Unsupported,
+                    detail: Some(format!("This port cannot run at {UNSUPPORTED_BAUD} baud.")),
+                }),
+                Some(ClientMessage::LineSettings {
+                    settings: change, ..
+                }) if change.baud == SILENT_BAUD => None,
+                Some(ClientMessage::LineSettings {
+                    request_id,
+                    settings: change,
+                }) => {
                     if change.baud == SLOW_BAUD {
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                     settings = change;
-                    Some(ServerMessage::LineSettings(settings))
+                    Some(ServerMessage::LineSettings {
+                        request_id,
+                        settings,
+                    })
                 }
                 Some(ClientMessage::ModemLines { dtr: Some(dtr), .. }) => {
                     Some(ServerMessage::ModemStatus(ModemStatus {

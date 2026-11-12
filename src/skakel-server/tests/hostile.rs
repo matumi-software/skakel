@@ -12,7 +12,7 @@ use common::*;
 use http_body_util::{BodyExt, Full};
 use prost::bytes::Bytes;
 use serde_json::json;
-use skakel_proto::v2::HelloRequest;
+use skakel_proto::v3::HelloRequest;
 use skakel_server::StreamOpen as Opening;
 use skakel_wire::discovery::{PROBE_SIZE, create_probe};
 use skakel_wire::pairing::{commit, new_nonce};
@@ -24,7 +24,7 @@ use tower_service::Service;
 
 /// A gRPC call to `Hello` with `body` as its whole request body, and the status it ends with.
 async fn raw_hello(connection: &mut Grpc, token: &str, body: Vec<u8>) -> (u16, Option<String>) {
-    let request = http::Request::post("/skakel.v2.ControlService/Hello")
+    let request = http::Request::post("/skakel.v3.ControlService/Hello")
         .header("content-type", "application/grpc")
         .header("te", "trailers")
         .header("authorization", format!("Bearer {token}"))
@@ -109,7 +109,7 @@ async fn a_grpc_call_over_http_1_1_is_not_served_as_grpc() {
     let server = start().await;
     let (_, token) = client_with_token(&server, "bench-1").await;
 
-    let reply = Request::new("POST", "/skakel.v2.ControlService/Hello")
+    let reply = Request::new("POST", "/skakel.v3.ControlService/Hello")
         .header("Content-Type", "application/grpc")
         .header("TE", "trailers")
         .bearer(&token)
@@ -171,7 +171,7 @@ async fn mounted() -> skakel_server::SkakelServer {
 
 async fn open_from(server: &skakel_server::SkakelServer, from: IpAddr) -> (u16, serde_json::Value) {
     let body = json!({ "clientName": "lab pc", "commitment": commit(&new_nonce().unwrap()) });
-    let mut request = http::Request::post("/skakel/v2/pair")
+    let mut request = http::Request::post("/skakel/v3/pair")
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
@@ -312,7 +312,7 @@ async fn a_body_that_stops_arriving_is_answered_and_given_up_on() {
     let (mut stream, _) = tls(server.local_addr(), true).await;
     stream
         .write_all(
-            b"POST /skakel/v2/token HTTP/1.1\r\nHost: localhost\r\n\
+            b"POST /skakel/v3/token HTTP/1.1\r\nHost: localhost\r\n\
               Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 64\r\n\r\n\
               grant_type=",
         )
@@ -330,4 +330,36 @@ async fn a_body_that_stops_arriving_is_answered_and_given_up_on() {
         n == 0 || text.starts_with("HTTP/1.1 400"),
         "a stalled body is a 400 or a closed connection: {text}"
     );
+}
+
+#[tokio::test]
+async fn a_client_that_speaks_only_tls_1_2_cannot_connect() {
+    use std::sync::{Arc, Mutex};
+
+    use tokio_rustls::TlsConnector;
+
+    let server = start().await;
+    let verifier = Arc::new(AcceptAnything {
+        presented: Mutex::new(None),
+    });
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS12])
+    .unwrap()
+    .dangerous()
+    .with_custom_certificate_verifier(verifier)
+    .with_no_client_auth();
+    let tcp = tokio::net::TcpStream::connect(server.local_addr())
+        .await
+        .unwrap();
+
+    let handshake = TlsConnector::from(Arc::new(config))
+        .connect(
+            rustls::pki_types::ServerName::try_from("localhost").unwrap(),
+            tcp,
+        )
+        .await;
+
+    assert!(handshake.is_err(), "TLS 1.2 is not spoken: {handshake:?}");
 }

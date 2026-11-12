@@ -442,7 +442,7 @@ fn is_id(text: &str) -> bool {
     (1..=MAX_ID_LENGTH).contains(&text.len()) && text.bytes().all(|b| b > b' ' && b < 0x7f)
 }
 
-/// `/skakel/v2/pair/{id}` and what follows it, with the id escaped as one path segment.
+/// `/skakel/v3/pair/{id}` and what follows it, with the id escaped as one path segment.
 fn pair_url(server: &Url, id: &str, tail: Option<&str>) -> Result<Url, Error> {
     let mut url = server.clone();
     {
@@ -481,11 +481,11 @@ mod tests {
 
         assert_eq!(
             pair_url(&server, "a/b?c", None).unwrap().as_str(),
-            "https://10.0.0.5:5240/skakel/v2/pair/a%2Fb%3Fc"
+            "https://10.0.0.5:5240/skakel/v3/pair/a%2Fb%3Fc"
         );
         assert_eq!(
             pair_url(&server, "r1", Some("reveal")).unwrap().as_str(),
-            "https://10.0.0.5:5240/skakel/v2/pair/r1/reveal"
+            "https://10.0.0.5:5240/skakel/v3/pair/r1/reveal"
         );
     }
 }

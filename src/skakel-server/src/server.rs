@@ -14,8 +14,8 @@ use hyper_util::rt::TokioIo;
 use rustls::ServerConfig;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use skakel_proto::v2::control_service_server::ControlServiceServer;
-use skakel_proto::v2::stream_service_server::StreamServiceServer;
+use skakel_proto::v3::control_service_server::ControlServiceServer;
+use skakel_proto::v3::stream_service_server::StreamServiceServer;
 use skakel_wire::discovery::MAX_APP_VERSION_LENGTH;
 use skakel_wire::{
     CONTROL_MESSAGE_LIMIT, Reason, STREAM_MESSAGE_LIMIT, SkakelApp, is_app_id, is_app_service_name,
@@ -648,7 +648,8 @@ impl ResolvesServerCert for Resolver {
 fn tls_config(state: &Arc<ServerState>) -> Result<Arc<ServerConfig>, ServerError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
+        // TLS 1.3 only: both ends are Skakel, and every certificate check here is a pin.
+        .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|e| ServerError::Tls(Box::new(e)))?
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(Resolver(state.clone())));

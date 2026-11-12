@@ -25,7 +25,7 @@ async fn info_is_served_without_a_token_in_the_shape_the_protocol_shows() {
     assert_eq!(reply.status, 200);
     assert_eq!(
         reply.text(),
-        r#"{"name":"rust-bench","app":{"id":"test-app","version":"1.2.3"},"versions":[2]}"#
+        r#"{"name":"rust-bench","app":{"id":"test-app","version":"1.2.3"},"versions":[3]}"#
     );
 }
 
@@ -47,7 +47,7 @@ async fn a_server_with_bad_options_does_not_start_and_says_what_is_wrong() {
     assert!(error.contains("app id"), "{error}");
     assert!(error.contains("app version"), "{error}");
     assert!(error.contains("rate limits"), "{error}");
-    assert!(error.contains("'skakel.v2.Impostor'"), "{error}");
+    assert!(error.contains("'skakel.v3.Impostor'"), "{error}");
     assert!(error.contains("added twice"), "{error}");
     assert!(error.contains("stream type"), "{error}");
 }
@@ -56,7 +56,7 @@ async fn a_server_with_bad_options_does_not_start_and_says_what_is_wrong() {
 async fn a_plain_http_request_to_the_port_is_told_to_use_https() {
     let server = start().await;
 
-    let reply = Request::new("POST", "/skakel/v2/pair")
+    let reply = Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": "a", "commitment": "A".repeat(64) }))
         .send_plain(&server)
         .await;
@@ -86,7 +86,7 @@ async fn discovery_answers_a_probe_with_the_servers_fingerprint_and_port_and_not
     assert_eq!(answer.name, "rust-bench");
     assert_eq!(answer.port, server.local_addr().port());
     assert_eq!(answer.app.id, "test-app");
-    assert_eq!(answer.versions, [2]);
+    assert_eq!(answer.versions, [3]);
     assert!(fingerprints::are_equal(
         &answer.fingerprint,
         &server.fingerprint()
@@ -297,7 +297,7 @@ async fn discovery_announces_the_new_fingerprint_after_a_certificate_switch() {
 
 async fn open_pairing(server: &skakel_server::SkakelServer, name: &str) -> (Value, String) {
     let nonce = new_nonce().unwrap();
-    let opened = Request::new("POST", "/skakel/v2/pair")
+    let opened = Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": name, "commitment": commit(&nonce) }))
         .send(server)
         .await;
@@ -309,7 +309,7 @@ async fn reveal(server: &skakel_server::SkakelServer, opened: &Value, nonce: &st
     Request::new(
         "POST",
         &format!(
-            "/skakel/v2/pair/{}/reveal",
+            "/skakel/v3/pair/{}/reveal",
             opened["requestId"].as_str().unwrap()
         ),
     )
@@ -320,7 +320,7 @@ async fn reveal(server: &skakel_server::SkakelServer, opened: &Value, nonce: &st
 
 async fn poll(server: &skakel_server::SkakelServer, opened: &Value) -> Reply {
     Request::get(&format!(
-        "/skakel/v2/pair/{}",
+        "/skakel/v3/pair/{}",
         opened["requestId"].as_str().unwrap()
     ))
     .header("X-Pair-Token", opened["pollToken"].as_str().unwrap())
@@ -372,7 +372,7 @@ async fn pairing_runs_open_reveal_approve_poll_and_the_credentials_sign_in() {
     );
     let token = token_for(&server, id, secret).await;
     let hello = control(&grpc(&server).await)
-        .hello(with_token(skakel_proto::v2::HelloRequest {}, &token))
+        .hello(with_token(skakel_proto::v3::HelloRequest {}, &token))
         .await
         .unwrap()
         .into_inner();
@@ -467,40 +467,40 @@ async fn pairing_refuses_what_the_protocol_says_is_a_bad_request() {
     let good = commit(&new_nonce().unwrap());
     let cases: Vec<(Request, &str)> = vec![
         (
-            Request::new("POST", "/skakel/v2/pair").form("clientName=a"),
+            Request::new("POST", "/skakel/v3/pair").form("clientName=a"),
             "no JSON content type",
         ),
         (
-            Request::new("POST", "/skakel/v2/pair")
+            Request::new("POST", "/skakel/v3/pair")
                 .json(&json!({ "clientName": "", "commitment": good })),
             "empty name",
         ),
         (
-            Request::new("POST", "/skakel/v2/pair")
+            Request::new("POST", "/skakel/v3/pair")
                 .json(&json!({ "clientName": "\u{200b}\n", "commitment": good })),
             "name of format characters",
         ),
         (
-            Request::new("POST", "/skakel/v2/pair")
+            Request::new("POST", "/skakel/v3/pair")
                 .json(&json!({ "clientName": "a".repeat(81), "commitment": good })),
             "name over 80",
         ),
         (
-            Request::new("POST", "/skakel/v2/pair")
+            Request::new("POST", "/skakel/v3/pair")
                 .json(&json!({ "clientName": "a", "commitment": "abc" })),
             "short commitment",
         ),
         (
-            Request::new("POST", "/skakel/v2/pair")
+            Request::new("POST", "/skakel/v3/pair")
                 .json(&json!({ "clientName": "a", "commitment": "Z".repeat(64) })),
             "commitment not hex",
         ),
         (
-            Request::new("POST", "/skakel/v2/pair").json(&json!({ "clientName": "a" })),
+            Request::new("POST", "/skakel/v3/pair").json(&json!({ "clientName": "a" })),
             "no commitment",
         ),
         (
-            Request::new("POST", "/skakel/v2/pair").header("Content-Type", "application/json"),
+            Request::new("POST", "/skakel/v3/pair").header("Content-Type", "application/json"),
             "no body",
         ),
     ];
@@ -514,7 +514,7 @@ async fn pairing_refuses_what_the_protocol_says_is_a_bad_request() {
         );
     }
 
-    let eighty = Request::new("POST", "/skakel/v2/pair")
+    let eighty = Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": "a".repeat(80), "commitment": good }))
         .send(&server)
         .await;
@@ -527,23 +527,23 @@ async fn an_unknown_request_a_wrong_token_and_a_wrong_nonce_are_all_404() {
     let (opened, nonce) = open_pairing(&server, "lab pc").await;
     let id = opened["requestId"].as_str().unwrap();
 
-    let unknown = Request::get("/skakel/v2/pair/nobody")
+    let unknown = Request::get("/skakel/v3/pair/nobody")
         .header("X-Pair-Token", "x")
         .send(&server)
         .await;
-    let wrong_token = Request::get(&format!("/skakel/v2/pair/{id}"))
+    let wrong_token = Request::get(&format!("/skakel/v3/pair/{id}"))
         .header("X-Pair-Token", "x")
         .send(&server)
         .await;
-    let no_token = Request::get(&format!("/skakel/v2/pair/{id}"))
+    let no_token = Request::get(&format!("/skakel/v3/pair/{id}"))
         .send(&server)
         .await;
     let wrong_nonce = reveal(&server, &opened, "not-the-nonce").await;
-    let no_nonce = Request::new("POST", &format!("/skakel/v2/pair/{id}/reveal"))
+    let no_nonce = Request::new("POST", &format!("/skakel/v3/pair/{id}/reveal"))
         .json(&json!({}))
         .send(&server)
         .await;
-    let delete_wrong = Request::new("DELETE", &format!("/skakel/v2/pair/{id}"))
+    let delete_wrong = Request::new("DELETE", &format!("/skakel/v3/pair/{id}"))
         .header("X-Pair-Token", "x")
         .send(&server)
         .await;
@@ -573,7 +573,7 @@ async fn a_waiting_request_can_be_withdrawn_with_its_token() {
 
     let withdrawn = Request::new(
         "DELETE",
-        &format!("/skakel/v2/pair/{}", opened["requestId"].as_str().unwrap()),
+        &format!("/skakel/v3/pair/{}", opened["requestId"].as_str().unwrap()),
     )
     .header("X-Pair-Token", opened["pollToken"].as_str().unwrap())
     .send(&server)
@@ -591,7 +591,7 @@ async fn an_address_opens_five_requests_and_the_sixth_is_429_with_a_problem() {
         open_pairing(&server, "lab pc").await;
     }
 
-    let fourth = Request::new("POST", "/skakel/v2/pair")
+    let fourth = Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": "a", "commitment": commit(&new_nonce().unwrap()) }))
         .send(&server)
         .await;
@@ -616,14 +616,14 @@ async fn all_pairing_calls_are_limited_per_address_before_the_body_is_read() {
 
     for _ in 0..3 {
         assert_eq!(
-            Request::get("/skakel/v2/pair/nobody")
+            Request::get("/skakel/v3/pair/nobody")
                 .send(&server)
                 .await
                 .status,
             404
         );
     }
-    let over = Request::new("POST", "/skakel/v2/pair")
+    let over = Request::new("POST", "/skakel/v3/pair")
         .form("not even json")
         .send(&server)
         .await;
@@ -640,11 +640,11 @@ async fn a_body_over_four_kib_is_413_when_declared_and_400_when_found_out_while_
     let server = start().await;
     let big = "x".repeat(5000);
 
-    let mut declared = Request::new("POST", "/skakel/v2/pair")
+    let mut declared = Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": big, "commitment": "A" }));
     declared.declared_length = None;
     let declared = declared.send(&server).await;
-    let mut token = Request::new("POST", "/skakel/v2/token").form(&format!(
+    let mut token = Request::new("POST", "/skakel/v3/token").form(&format!(
         "grant_type=client_credentials&client_id=a&client_secret={big}"
     ));
     token.declared_length = None;
@@ -659,7 +659,7 @@ async fn a_body_over_four_kib_is_413_when_declared_and_400_when_found_out_while_
 
     // A body sent in chunks has no length to check, so the cap cuts it off while it is read.
     let (stream, _) = tls(server.local_addr(), true).await;
-    let mut raw = b"POST /skakel/v2/token HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    let mut raw = b"POST /skakel/v3/token HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
     for _ in 0..3 {
         raw.extend_from_slice(format!("{:x}\r\n{}\r\n", 2000, "a".repeat(2000)).as_bytes());
     }
@@ -717,20 +717,20 @@ async fn the_token_endpoint_takes_http_basic_credentials_and_refuses_other_grant
     let basic = base64::engine::general_purpose::STANDARD
         .encode(format!("{}:{}", client.client_id, client.client_secret));
 
-    let with_basic = Request::new("POST", "/skakel/v2/token")
+    let with_basic = Request::new("POST", "/skakel/v3/token")
         .header("Authorization", format!("Basic {basic}"))
         .form("grant_type=client_credentials")
         .send(&server)
         .await;
-    let password = Request::new("POST", "/skakel/v2/token")
+    let password = Request::new("POST", "/skakel/v3/token")
         .form("grant_type=password&username=a&password=b")
         .send(&server)
         .await;
-    let not_a_form = Request::new("POST", "/skakel/v2/token")
+    let not_a_form = Request::new("POST", "/skakel/v3/token")
         .json(&json!({}))
         .send(&server)
         .await;
-    let no_secret = Request::new("POST", "/skakel/v2/token")
+    let no_secret = Request::new("POST", "/skakel/v3/token")
         .form(&format!(
             "grant_type=client_credentials&client_id={}",
             client.client_id
@@ -831,7 +831,7 @@ async fn the_token_servers_discovery_documents_are_not_served() {
     for path in [
         "/.well-known/openid-configuration",
         "/.well-known/jwks",
-        "/skakel/v2/jwks",
+        "/skakel/v3/jwks",
     ] {
         assert_eq!(Request::get(path).send(&server).await.status, 404, "{path}");
     }

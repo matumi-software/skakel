@@ -16,10 +16,12 @@ use common::greeter::{self, GreetRequest, WatchRequest};
 use common::*;
 use prost::Message as _;
 use prost::bytes::Bytes;
-use skakel_proto::v2::{
+use skakel_proto::serial::{
+    SerialClientMessage, SerialServerMessage, serial_client_message, serial_server_message,
+};
+use skakel_proto::v3::{
     ClosingReason, ConnectRequest, HelloRequest, NextCertificateReceived, OpenRequest,
-    SerialClientMessage, SerialServerMessage, connect_request, connect_response, open_request,
-    open_response, serial_client_message, serial_server_message,
+    connect_request, connect_response, open_request, open_response,
 };
 use skakel_wire::fingerprints;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -170,7 +172,7 @@ async fn a_request_that_is_not_grpc_goes_to_https_and_an_unknown_service_is_unim
 
     let as_json = {
         let mut connection = connection.clone();
-        let request = http::Request::post("/skakel.v2.ControlService/Hello")
+        let request = http::Request::post("/skakel.v3.ControlService/Hello")
             .header("content-type", "application/json")
             .body(tonic::body::Body::empty())
             .unwrap();
@@ -184,7 +186,7 @@ async fn a_request_that_is_not_grpc_goes_to_https_and_an_unknown_service_is_unim
         grpc.unary(
             with_token(hello(), &token),
             http::uri::PathAndQuery::from_static("/other.v1.Nothing/Here"),
-            tonic_prost::ProstCodec::<HelloRequest, skakel_proto::v2::HelloResponse>::default(),
+            tonic_prost::ProstCodec::<HelloRequest, skakel_proto::v3::HelloResponse>::default(),
         )
         .await
         .unwrap_err()
@@ -257,8 +259,11 @@ async fn connect_starts_with_the_certificates() {
     let Some(connect_response::Message::Certificates(certificates)) = first else {
         panic!("not certificates: {first:?}");
     };
-    assert_eq!(certificates.fingerprint, server.fingerprint());
-    assert_eq!(certificates.next_fingerprint, "");
+    assert_eq!(
+        certificates.fingerprint,
+        fingerprint_bytes(&server.fingerprint())
+    );
+    assert!(certificates.next_fingerprint.is_empty());
 }
 
 #[tokio::test]
@@ -428,12 +433,12 @@ async fn a_control_call_hears_the_handover_and_its_acknowledgement_is_recorded()
     let Some(connect_response::Message::Certificates(told)) = call.next().await.unwrap() else {
         panic!("no certificates");
     };
-    assert_eq!(told.next_fingerprint, next);
+    assert_eq!(told.next_fingerprint, fingerprint_bytes(&next));
     call.requests
         .send(ConnectRequest {
             message: Some(connect_request::Message::NextCertificateReceived(
                 NextCertificateReceived {
-                    fingerprint: next.clone(),
+                    fingerprint: fingerprint_bytes(&next),
                 },
             )),
         })
@@ -447,8 +452,8 @@ async fn a_control_call_hears_the_handover_and_its_acknowledgement_is_recorded()
     let Some(connect_response::Message::Certificates(switched)) = call.next().await.unwrap() else {
         panic!("no certificates after the switch");
     };
-    assert_eq!(switched.fingerprint, next);
-    assert_eq!(switched.next_fingerprint, "");
+    assert_eq!(switched.fingerprint, fingerprint_bytes(&next));
+    assert!(switched.next_fingerprint.is_empty());
 }
 
 #[tokio::test]
@@ -469,7 +474,7 @@ async fn an_acknowledgement_of_the_wrong_certificate_is_not_recorded() {
         .send(ConnectRequest {
             message: Some(connect_request::Message::NextCertificateReceived(
                 NextCertificateReceived {
-                    fingerprint: "AA:BB".into(),
+                    fingerprint: Bytes::from_static(&[0xAA, 0xBB]),
                 },
             )),
         })
@@ -511,9 +516,9 @@ async fn a_cancelled_handover_is_told_with_an_empty_next_fingerprint() {
     else {
         panic!("no certificates");
     };
-    assert_eq!(cancelled.next_fingerprint, "");
+    assert!(cancelled.next_fingerprint.is_empty());
     assert!(fingerprints::are_equal(
-        &cancelled.fingerprint,
+        &fingerprints::from_bytes(&cancelled.fingerprint).unwrap(),
         &server.fingerprint()
     ));
 }
@@ -530,7 +535,7 @@ async fn a_control_message_over_one_mib_ends_the_call_with_resource_exhausted() 
         .send(ConnectRequest {
             message: Some(connect_request::Message::NextCertificateReceived(
                 NextCertificateReceived {
-                    fingerprint: "A".repeat(1024 * 1024 + 1),
+                    fingerprint: Bytes::from(vec![0xAA; 1024 * 1024 + 1]),
                 },
             )),
         })
@@ -820,7 +825,7 @@ async fn a_frame_sent_before_opened_is_bad_frame() {
     let connection = grpc(&server).await;
     let (frames, rx) = tokio::sync::mpsc::channel(4);
     for frame in [
-        open_request::Frame::Open(skakel_proto::v2::StreamOpen {
+        open_request::Frame::Open(skakel_proto::v3::StreamOpen {
             stream_type: "echo".into(),
             target: Bytes::from_static(b"late"),
         }),
@@ -853,7 +858,7 @@ async fn a_second_open_or_an_empty_frame_after_opened_ends_the_stream_with_bad_f
     again
         .frames
         .send(OpenRequest {
-            frame: Some(open_request::Frame::Open(skakel_proto::v2::StreamOpen {
+            frame: Some(open_request::Frame::Open(skakel_proto::v3::StreamOpen {
                 stream_type: "echo".into(),
                 target: Bytes::new(),
             })),
@@ -1092,7 +1097,7 @@ async fn the_serial_stream_type_speaks_the_messages_of_serial_proto() {
         .send_control(
             SerialClientMessage {
                 message: Some(serial_client_message::Message::ModemLines(
-                    skakel_proto::v2::ModemLines {
+                    skakel_proto::serial::ModemLines {
                         dtr: Some(true),
                         rts: None,
                     },

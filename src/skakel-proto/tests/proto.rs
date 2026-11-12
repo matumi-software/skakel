@@ -1,4 +1,4 @@
-//! The .proto files of protocol version 2 in `src/proto` compile, and the services, calls and
+//! The .proto files of protocol version 3 in `src/proto` compile, and the services, calls and
 //! field numbers are the ones `docs/protocol.md` gives. Field numbers are the wire format, so a
 //! change to one here is a protocol change.
 
@@ -21,9 +21,9 @@ fn compile() -> DescriptorPool {
     assert_eq!(
         files,
         [
-            "skakel/v2/control.proto",
-            "skakel/v2/serial.proto",
-            "skakel/v2/streams.proto"
+            "skakel/streams/serial/v1/serial.proto",
+            "skakel/v3/control.proto",
+            "skakel/v3/streams.proto"
         ]
     );
 
@@ -57,11 +57,16 @@ fn named(pairs: &[(&str, u32)]) -> Vec<(String, u32)> {
 }
 
 #[test]
-fn the_proto_files_compile_in_package_skakel_v2() {
+fn the_proto_files_compile_in_their_packages() {
     let pool = compile();
 
     for file in pool.files() {
-        assert_eq!(file.package_name(), "skakel.v2", "{}", file.name());
+        let expected = if file.name().starts_with("skakel/streams/serial/") {
+            "skakel.streams.serial.v1"
+        } else {
+            "skakel.v3"
+        };
+        assert_eq!(file.package_name(), expected, "{}", file.name());
     }
 }
 
@@ -69,7 +74,7 @@ fn the_proto_files_compile_in_package_skakel_v2() {
 fn the_control_service_has_connect_both_ways_and_hello_unary() {
     let pool = compile();
     let service = pool
-        .get_service_by_name("skakel.v2.ControlService")
+        .get_service_by_name("skakel.v3.ControlService")
         .expect("the control service");
 
     let calls: Vec<_> = service
@@ -92,15 +97,15 @@ fn the_control_service_has_connect_both_ways_and_hello_unary() {
                 "Connect".to_owned(),
                 true,
                 true,
-                "skakel.v2.ConnectRequest".to_owned(),
-                "skakel.v2.ConnectResponse".to_owned()
+                "skakel.v3.ConnectRequest".to_owned(),
+                "skakel.v3.ConnectResponse".to_owned()
             ),
             (
                 "Hello".to_owned(),
                 false,
                 false,
-                "skakel.v2.HelloRequest".to_owned(),
-                "skakel.v2.HelloResponse".to_owned()
+                "skakel.v3.HelloRequest".to_owned(),
+                "skakel.v3.HelloResponse".to_owned()
             ),
         ]
     );
@@ -110,15 +115,15 @@ fn the_control_service_has_connect_both_ways_and_hello_unary() {
 fn the_stream_service_opens_a_stream_both_ways() {
     let pool = compile();
     let service = pool
-        .get_service_by_name("skakel.v2.StreamService")
+        .get_service_by_name("skakel.v3.StreamService")
         .expect("the stream service");
     let open = service.methods().next().expect("one call");
 
     assert_eq!(service.methods().len(), 1);
     assert_eq!(open.name(), "Open");
     assert!(open.is_client_streaming() && open.is_server_streaming());
-    assert_eq!(open.input().full_name(), "skakel.v2.OpenRequest");
-    assert_eq!(open.output().full_name(), "skakel.v2.OpenResponse");
+    assert_eq!(open.input().full_name(), "skakel.v3.OpenRequest");
+    assert_eq!(open.output().full_name(), "skakel.v3.OpenResponse");
 }
 
 #[test]
@@ -126,11 +131,11 @@ fn control_messages_keep_their_field_numbers() {
     let pool = compile();
 
     assert_eq!(
-        oneof_fields(&pool, "skakel.v2.ConnectRequest", "message"),
+        oneof_fields(&pool, "skakel.v3.ConnectRequest", "message"),
         named(&[("next_certificate_received", 1)])
     );
     assert_eq!(
-        oneof_fields(&pool, "skakel.v2.ConnectResponse", "message"),
+        oneof_fields(&pool, "skakel.v3.ConnectResponse", "message"),
         named(&[("certificates", 1), ("closing", 2)])
     );
 }
@@ -140,14 +145,14 @@ fn stream_frames_keep_their_field_numbers_and_carry_bytes() {
     let pool = compile();
 
     assert_eq!(
-        oneof_fields(&pool, "skakel.v2.OpenRequest", "frame"),
+        oneof_fields(&pool, "skakel.v3.OpenRequest", "frame"),
         named(&[("open", 1), ("data", 2), ("control", 3)])
     );
     assert_eq!(
-        oneof_fields(&pool, "skakel.v2.OpenResponse", "frame"),
+        oneof_fields(&pool, "skakel.v3.OpenResponse", "frame"),
         named(&[("opened", 1), ("data", 2), ("control", 3)])
     );
-    for message in ["skakel.v2.OpenRequest", "skakel.v2.OpenResponse"] {
+    for message in ["skakel.v3.OpenRequest", "skakel.v3.OpenResponse"] {
         let message = pool.get_message_by_name(message).unwrap();
         for name in ["data", "control"] {
             let field = message.get_field_by_name(name).unwrap();
@@ -161,7 +166,11 @@ fn serial_messages_keep_their_field_numbers() {
     let pool = compile();
 
     assert_eq!(
-        oneof_fields(&pool, "skakel.v2.SerialClientMessage", "message"),
+        oneof_fields(
+            &pool,
+            "skakel.streams.serial.v1.SerialClientMessage",
+            "message"
+        ),
         named(&[
             ("line_settings", 1),
             ("modem_lines", 2),
@@ -170,7 +179,11 @@ fn serial_messages_keep_their_field_numbers() {
         ])
     );
     assert_eq!(
-        oneof_fields(&pool, "skakel.v2.SerialServerMessage", "message"),
+        oneof_fields(
+            &pool,
+            "skakel.streams.serial.v1.SerialServerMessage",
+            "message"
+        ),
         named(&[
             ("opened", 1),
             ("line_settings", 2),
@@ -178,7 +191,9 @@ fn serial_messages_keep_their_field_numbers() {
             ("error", 4)
         ])
     );
-    let target = pool.get_message_by_name("skakel.v2.SerialTarget").unwrap();
+    let target = pool
+        .get_message_by_name("skakel.streams.serial.v1.SerialTarget")
+        .unwrap();
     assert_eq!(target.get_field_by_name("port").unwrap().number(), 1);
 }
 
@@ -186,7 +201,7 @@ fn serial_messages_keep_their_field_numbers() {
 fn closing_reasons_keep_their_numbers() {
     let pool = compile();
     let reasons = pool
-        .get_enum_by_name("skakel.v2.ClosingReason")
+        .get_enum_by_name("skakel.v3.ClosingReason")
         .expect("the closing reasons");
 
     let values: Vec<_> = reasons

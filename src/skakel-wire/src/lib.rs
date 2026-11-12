@@ -1,4 +1,4 @@
-//! What Skakel clients and servers share: the numbers, paths and names of protocol version 2, the
+//! What Skakel clients and servers share: the numbers, paths and names of protocol version 3, the
 //! JSON contracts, certificate fingerprints, and the reasons a gRPC call is refused or ended. See
 //! `docs/protocol.md` at the repository root.
 //!
@@ -30,7 +30,7 @@ pub use reasons::{
 use std::time::Duration;
 
 /// The protocol version this crate speaks.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// The protocol versions this crate speaks, as a server lists them.
 pub const VERSIONS: &[u32] = &[VERSION];
@@ -39,13 +39,13 @@ pub const VERSIONS: &[u32] = &[VERSION];
 pub const INFO_PATH: &str = "/skakel/info";
 
 /// Every versioned path starts with this.
-pub const BASE_PATH: &str = "/skakel/v2";
+pub const BASE_PATH: &str = "/skakel/v3";
 
 /// Opens a pairing request: `POST`. Reveal, poll and withdraw are under `{PAIR_PATH}/{requestId}`.
-pub const PAIR_PATH: &str = "/skakel/v2/pair";
+pub const PAIR_PATH: &str = "/skakel/v3/pair";
 
 /// OAuth 2.0 client credentials: `POST`.
-pub const TOKEN_PATH: &str = "/skakel/v2/token";
+pub const TOKEN_PATH: &str = "/skakel/v3/token";
 
 /// The header that carries a pairing request's poll token.
 pub const PAIR_TOKEN_HEADER: &str = "X-Pair-Token";
@@ -127,9 +127,9 @@ mod tests {
         for path in [PAIR_PATH, TOKEN_PATH] {
             assert!(path.starts_with(&format!("{BASE_PATH}/")));
         }
-        assert_eq!(BASE_PATH, "/skakel/v2");
-        assert_eq!(PAIR_PATH, "/skakel/v2/pair");
-        assert_eq!(TOKEN_PATH, "/skakel/v2/token");
+        assert_eq!(BASE_PATH, "/skakel/v3");
+        assert_eq!(PAIR_PATH, "/skakel/v3/pair");
+        assert_eq!(TOKEN_PATH, "/skakel/v3/token");
     }
 
     #[test]
@@ -161,7 +161,7 @@ mod tests {
     fn an_apps_service_is_in_a_package_of_its_own() {
         assert!(is_app_service_name("koppel.v1.Devices"));
         assert!(is_app_service_name("skakelish.Things"));
-        assert!(!is_app_service_name("skakel.v2.ControlService"));
+        assert!(!is_app_service_name("skakel.v3.ControlService"));
         assert!(!is_app_service_name("skakel.Things"));
         assert!(!is_app_service_name("Things"));
     }

@@ -15,28 +15,36 @@ pub(super) async fn learn_certificates(
     address: &Url,
     certificates: Certificates,
 ) {
-    let next = Some(certificates.next_fingerprint.as_str()).filter(|n| !n.is_empty());
-    if fingerprints::normalize(&certificates.fingerprint).is_none()
-        || next.is_some_and(|next| fingerprints::normalize(next).is_none())
-    {
+    // The fingerprints are 32 bytes each, and the next one may be empty. Anything else is not a
+    // fingerprint.
+    let current = fingerprints::from_bytes(&certificates.fingerprint);
+    let next_text = if certificates.next_fingerprint.is_empty() {
+        None
+    } else {
+        fingerprints::from_bytes(&certificates.next_fingerprint)
+    };
+    let (Some(fingerprint), true) = (
+        current,
+        certificates.next_fingerprint.is_empty() || next_text.is_some(),
+    ) else {
         log::warn!("The server sent certificates that are not fingerprints; ignored");
         return;
-    }
+    };
+    let next = next_text.as_deref();
 
     let on_this_connection = connection
         .presented()
-        .is_some_and(|p| fingerprints::are_equal(&certificates.fingerprint, p));
-    if !on_this_connection && !presents(inner, address, &certificates.fingerprint).await {
+        .is_some_and(|p| fingerprints::are_equal(&fingerprint, p));
+    if !on_this_connection && !presents(inner, address, &fingerprint).await {
         log::warn!(
-            "The server spoke of its certificate {}, which it does not present; ignored",
-            certificates.fingerprint
+            "The server spoke of its certificate {fingerprint}, which it does not present; ignored"
         );
         return;
     }
 
     let after = {
         let mut pins = lock(&inner.pins);
-        let after = pins.with_server_certificates(&certificates.fingerprint, next);
+        let after = pins.with_server_certificates(&fingerprint, next);
         *pins = after.clone();
         after
     };
@@ -65,7 +73,9 @@ pub(super) async fn learn_certificates(
         let received = ConnectRequest {
             message: Some(connect_request::Message::NextCertificateReceived(
                 NextCertificateReceived {
-                    fingerprint: stored.to_owned(),
+                    fingerprint: fingerprints::to_bytes(stored)
+                        .map(|bytes| prost::bytes::Bytes::copy_from_slice(&bytes))
+                        .unwrap_or_default(),
                 },
             )),
         };

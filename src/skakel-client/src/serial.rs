@@ -2,19 +2,18 @@
 //! [`send`](SerialConnection::send) and [`recv`](SerialConnection::recv); the port's settings and
 //! lines are changed with the control messages, and what the server says about the port comes back
 //! as properties and events. A change to the line settings counts as done only when the server
-//! echoes it.
+//! answers it, by the request id the change carried.
 //!
 //! One task reads the stream, so control messages are seen while the app is not reading data. Data
 //! waits in a small buffer: an app that stops reading stops the reads, and the server slows down the
 //! port instead of losing bytes.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use prost::bytes::Bytes;
-use skakel_proto::v2::OpenRequest;
+use skakel_proto::v3::OpenRequest;
 use skakel_serial::{ClientMessage, ErrorCode, LineSettings, ModemStatus, ServerMessage};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -69,15 +68,24 @@ enum Answer {
 }
 
 struct Pending {
-    settings: LineSettings,
+    /// The `request_id` the change went out with; an answer carries it back.
+    request_id: u32,
     answer: oneshot::Sender<Answer>,
 }
 
-#[derive(Default)]
 struct Answers {
     change: Option<Pending>,
-    /// Changes that stopped waiting after they were sent: the next answers that come in are theirs.
-    owed: u32,
+    /// The next `request_id`: nonzero, and not the one the last change used.
+    next_id: u32,
+}
+
+impl Default for Answers {
+    fn default() -> Self {
+        Self {
+            change: None,
+            next_id: 1,
+        }
+    }
 }
 
 struct Shared {
@@ -233,10 +241,11 @@ impl SerialConnection {
         *lock(&self.change_timeout) = timeout;
     }
 
-    /// Changes the port's settings and waits until the server echoes them, or the port refuses. One
+    /// Changes the port's settings and waits until the server answers, or the port refuses. One
     /// change at a time; the server has 10 seconds to answer, so a change it never answers does not
-    /// hold up the next. An answer that comes after its change stopped waiting is not taken for the
-    /// next one.
+    /// hold up the next. Each change goes out with its own request id and only the answer that
+    /// carries it is taken, so one that comes after its change stopped waiting is not taken for the
+    /// next.
     ///
     /// Every setting is sent; the protocol has no partial change. Fails with
     /// [`FailureKind::ConnectionLost`] when the stream ended before the server answered, or
@@ -247,8 +256,13 @@ impl SerialConnection {
         let _changing = self.changing.lock().await;
         let (answer, answered) = oneshot::channel();
         let mut answered = answered;
-        lock(&self.shared.answers).change = Some(Pending { settings, answer });
-        let sent = AtomicBool::new(false);
+        let request_id = {
+            let mut answers = lock(&self.shared.answers);
+            let request_id = answers.next_id;
+            answers.next_id = request_id.checked_add(1).unwrap_or(1);
+            answers.change = Some(Pending { request_id, answer });
+            request_id
+        };
 
         let result = async {
             if self.stream.close_info().is_some() {
@@ -256,8 +270,11 @@ impl SerialConnection {
             }
             let timeout = *lock(&self.change_timeout);
             let waited = tokio::time::timeout(timeout, async {
-                self.send_control(&ClientMessage::LineSettings(settings)).await?;
-                sent.store(true, Ordering::SeqCst);
+                self.send_control(&ClientMessage::LineSettings {
+                    request_id,
+                    settings,
+                })
+                .await?;
                 match (&mut answered).await {
                     Ok(Answer::Applied(applied)) => Ok(SerialChange {
                         applied: true,
@@ -286,18 +303,7 @@ impl SerialConnection {
         }
         .await;
 
-        let mut answers = lock(&self.shared.answers);
-        // Sent and not answered: its answer is still on its way. Looked at while the change still
-        // holds the sending end, or the receiver would only say it is closed.
-        let unanswered = sent.load(Ordering::SeqCst)
-            && matches!(
-                answered.try_recv(),
-                Err(oneshot::error::TryRecvError::Empty)
-            );
-        answers.change = None;
-        if unanswered {
-            answers.owed += 1;
-        }
+        lock(&self.shared.answers).change = None;
         result
     }
 
@@ -368,10 +374,14 @@ fn handle(shared: &Shared, bytes: &[u8]) {
             shared.line_settings.send_replace(line_settings);
             shared.modem_status.send_replace(modem_status);
         }
-        ServerMessage::LineSettings(applied) => {
-            shared.line_settings.send_replace(applied);
-            if let Some(pending) = answer_for(shared, Some(&applied)) {
-                let _ = pending.send(Answer::Applied(applied));
+        ServerMessage::LineSettings {
+            request_id,
+            settings,
+        } => {
+            // The port's settings are what the server says, whichever change this answers.
+            shared.line_settings.send_replace(settings);
+            if let Some(pending) = answer_for(shared, request_id) {
+                let _ = pending.send(Answer::Applied(settings));
             }
         }
         ServerMessage::ModemStatus(status) => {
@@ -379,21 +389,21 @@ fn handle(shared: &Shared, bytes: &[u8]) {
             let _ = shared.events.send(SerialEvent::ModemStatus(status));
         }
         ServerMessage::Error {
-            code: ErrorCode::Unsupported,
+            request_id: 0,
+            code,
             detail,
-        } => match answer_for(shared, None) {
-            Some(pending) => {
+        } => {
+            let _ = shared.events.send(SerialEvent::Error { code, detail });
+        }
+        ServerMessage::Error {
+            request_id,
+            code: _,
+            detail,
+        } => {
+            // A refusal of a change. One that names a change no longer waiting is ignored.
+            if let Some(pending) = answer_for(shared, request_id) {
                 let _ = pending.send(Answer::Refused(detail));
             }
-            None => {
-                let _ = shared.events.send(SerialEvent::Error {
-                    code: ErrorCode::Unsupported,
-                    detail,
-                });
-            }
-        },
-        ServerMessage::Error { code, detail } => {
-            let _ = shared.events.send(SerialEvent::Error { code, detail });
         }
         other => {
             log::warn!("Ignored a serial control message this end does not use: {other:?}");
@@ -401,23 +411,14 @@ fn handle(shared: &Shared, bytes: &[u8]) {
     }
 }
 
-/// The change an answer belongs to, or `None`. Answers come in the order the changes went out, so
-/// one that arrives while an earlier change is still owed its answer is that change's, and is not
-/// taken for the pending one; only an echo of exactly the pending change's settings is always its
-/// own.
-fn answer_for(shared: &Shared, applied: Option<&LineSettings>) -> Option<oneshot::Sender<Answer>> {
+/// The change an answer belongs to, or `None` when it names no change that is waiting: an answer
+/// to a change that gave up, or one that carries no usable id.
+fn answer_for(shared: &Shared, request_id: u32) -> Option<oneshot::Sender<Answer>> {
     let mut answers = lock(&shared.answers);
-    if let (Some(applied), Some(pending)) = (applied, &answers.change)
-        && *applied == pending.settings
-    {
-        answers.owed = 0;
+    if request_id != 0 && answers.change.as_ref().map(|p| p.request_id) == Some(request_id) {
         return answers.change.take().map(|p| p.answer);
     }
-    if answers.owed > 0 {
-        answers.owed -= 1;
-        return None;
-    }
-    answers.change.take().map(|p| p.answer)
+    None
 }
 
 #[cfg(test)]
@@ -435,7 +436,7 @@ mod tests {
         }
     }
 
-    fn shared(pending: Option<(LineSettings, oneshot::Sender<Answer>)>, owed: u32) -> Shared {
+    fn shared(pending: Option<(u32, oneshot::Sender<Answer>)>) -> Shared {
         let (events, _) = broadcast::channel(8);
         Shared {
             line_settings: watch::channel(settings(9600)).0,
@@ -447,40 +448,51 @@ mod tests {
             })
             .0,
             answers: Mutex::new(Answers {
-                change: pending.map(|(settings, answer)| Pending { settings, answer }),
-                owed,
+                change: pending.map(|(request_id, answer)| Pending { request_id, answer }),
+                next_id: 1,
             }),
             events,
         }
     }
 
-    #[test]
-    fn an_echo_of_the_pending_change_is_its_answer() {
-        let (tx, mut rx) = oneshot::channel();
-        let shared = shared(Some((settings(115_200), tx)), 0);
+    fn applied(request_id: u32, baud: u32) -> Vec<u8> {
+        ServerMessage::LineSettings {
+            request_id,
+            settings: settings(baud),
+        }
+        .encode()
+    }
 
-        handle(
-            &shared,
-            &ServerMessage::LineSettings(settings(115_200)).encode(),
-        );
+    fn refused(request_id: u32, detail: &str) -> Vec<u8> {
+        ServerMessage::Error {
+            request_id,
+            code: ErrorCode::Unsupported,
+            detail: Some(detail.into()),
+        }
+        .encode()
+    }
+
+    #[test]
+    fn the_answer_that_carries_the_pending_requests_id_is_its_answer() {
+        let (tx, mut rx) = oneshot::channel();
+        let shared = shared(Some((5, tx)));
+
+        handle(&shared, &applied(5, 115_200));
 
         assert!(matches!(rx.try_recv(), Ok(Answer::Applied(s)) if s.baud == 115_200));
         assert_eq!(shared.line_settings.borrow().baud, 115_200);
     }
 
     #[test]
-    fn an_answer_that_comes_while_a_late_one_is_owed_is_not_taken_for_the_pending_change() {
+    fn an_answer_to_a_change_that_gave_up_is_not_taken_for_the_pending_one() {
         let (tx, mut rx) = oneshot::channel();
-        let shared = shared(Some((settings(1200), tx)), 1);
+        let shared = shared(Some((6, tx)));
 
-        // The slow change's echo, which is not what the pending change asked for.
-        handle(
-            &shared,
-            &ServerMessage::LineSettings(settings(4800)).encode(),
-        );
+        // The earlier changes' answers, with their own ids.
+        handle(&shared, &applied(5, 4800));
+        handle(&shared, &refused(4, "late"));
 
         assert!(rx.try_recv().is_err(), "still waiting");
-        assert_eq!(lock(&shared.answers).owed, 0);
         assert_eq!(
             shared.line_settings.borrow().baud,
             4800,
@@ -488,58 +500,61 @@ mod tests {
         );
 
         // Now the pending change's own refusal.
-        handle(
-            &shared,
-            &ServerMessage::Error {
-                code: ErrorCode::Unsupported,
-                detail: Some("no".into()),
-            }
-            .encode(),
-        );
+        handle(&shared, &refused(6, "no"));
 
         assert!(matches!(rx.try_recv(), Ok(Answer::Refused(Some(d))) if d == "no"));
     }
 
     #[test]
-    fn an_exact_echo_of_the_pending_change_is_its_own_even_when_answers_are_owed() {
+    fn an_answer_with_the_same_settings_but_another_id_is_not_the_pending_changes() {
         let (tx, mut rx) = oneshot::channel();
-        let shared = shared(Some((settings(1200), tx)), 2);
+        let shared = shared(Some((2, tx)));
 
-        handle(
-            &shared,
-            &ServerMessage::LineSettings(settings(1200)).encode(),
-        );
+        handle(&shared, &applied(1, 1200));
 
-        assert!(matches!(rx.try_recv(), Ok(Answer::Applied(_))));
-        assert_eq!(lock(&shared.answers).owed, 0);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
-    fn an_unsupported_error_with_no_change_waiting_is_an_event() {
-        let shared = shared(None, 0);
+    fn an_answer_with_no_request_id_is_not_an_answer_to_any_change() {
+        let (tx, mut rx) = oneshot::channel();
+        let shared = shared(Some((1, tx)));
+
+        handle(&shared, &applied(0, 1200));
+
+        assert!(rx.try_recv().is_err());
+        assert_eq!(shared.line_settings.borrow().baud, 1200);
+    }
+
+    #[test]
+    fn an_error_the_port_reported_on_its_own_is_an_event_and_does_not_refuse_the_change() {
+        let (tx, mut rx) = oneshot::channel();
+        let shared = shared(Some((1, tx)));
         let mut events = shared.events.subscribe();
 
         handle(
             &shared,
             &ServerMessage::Error {
-                code: ErrorCode::Unsupported,
-                detail: Some("x".into()),
+                request_id: 0,
+                code: ErrorCode::Parity,
+                detail: None,
             }
             .encode(),
         );
 
+        assert!(rx.try_recv().is_err(), "the change is still waiting");
         assert_eq!(
             events.try_recv().unwrap(),
             SerialEvent::Error {
-                code: ErrorCode::Unsupported,
-                detail: Some("x".into())
+                code: ErrorCode::Parity,
+                detail: None
             }
         );
     }
 
     #[test]
-    fn modem_status_and_other_errors_are_events_and_update_the_state() {
-        let shared = shared(None, 0);
+    fn modem_status_is_an_event_and_updates_the_state() {
+        let shared = shared(None);
         let mut events = shared.events.subscribe();
 
         handle(
@@ -552,29 +567,14 @@ mod tests {
             })
             .encode(),
         );
-        handle(
-            &shared,
-            &ServerMessage::Error {
-                code: ErrorCode::Parity,
-                detail: None,
-            }
-            .encode(),
-        );
 
         assert!(shared.modem_status.borrow().cts);
         assert!(matches!(events.try_recv().unwrap(), SerialEvent::ModemStatus(s) if s.dsr));
-        assert_eq!(
-            events.try_recv().unwrap(),
-            SerialEvent::Error {
-                code: ErrorCode::Parity,
-                detail: None
-            }
-        );
     }
 
     #[test]
     fn a_message_that_is_not_a_serial_message_is_dropped() {
-        let shared = shared(None, 0);
+        let shared = shared(None);
 
         handle(&shared, &[0x2A, 0x00]);
         handle(&shared, b"not protobuf");
@@ -583,18 +583,21 @@ mod tests {
     }
 
     #[test]
-    fn an_echo_with_a_value_this_end_does_not_know_still_answers_the_pending_change() {
+    fn an_answer_with_a_value_this_end_does_not_know_still_answers_the_pending_change() {
         let (tx, mut rx) = oneshot::channel();
-        let shared = shared(Some((settings(115_200), tx)), 0);
-        let echo = skakel_proto::v2::SerialServerMessage {
+        let shared = shared(Some((3, tx)));
+        let echo = skakel_proto::serial::SerialServerMessage {
             message: Some(
-                skakel_proto::v2::serial_server_message::Message::LineSettings(
-                    skakel_proto::v2::LineSettings {
-                        baud: 115_200,
-                        data_bits: 8,
-                        parity: 42,
-                        stop_bits: 1,
-                        flow_control: 1,
+                skakel_proto::serial::serial_server_message::Message::LineSettings(
+                    skakel_proto::serial::LineSettingsApplied {
+                        request_id: 3,
+                        settings: Some(skakel_proto::serial::LineSettings {
+                            baud: 115_200,
+                            data_bits: 8,
+                            parity: 42,
+                            stop_bits: 1,
+                            flow_control: 1,
+                        }),
                     },
                 ),
             ),
@@ -607,30 +610,5 @@ mod tests {
             "the change is answered at once, not left to time out"
         );
         assert_eq!(shared.line_settings.borrow().parity, Parity::Unknown(42));
-    }
-
-    #[test]
-    fn an_error_code_this_end_does_not_know_is_an_event_and_does_not_refuse_the_change() {
-        let (tx, mut rx) = oneshot::channel();
-        let shared = shared(Some((settings(1200), tx)), 0);
-        let mut events = shared.events.subscribe();
-
-        handle(
-            &shared,
-            &ServerMessage::Error {
-                code: ErrorCode::Unknown(77),
-                detail: None,
-            }
-            .encode(),
-        );
-
-        assert!(rx.try_recv().is_err(), "the change is still waiting");
-        assert_eq!(
-            events.try_recv().unwrap(),
-            SerialEvent::Error {
-                code: ErrorCode::Unknown(77),
-                detail: None
-            }
-        );
     }
 }

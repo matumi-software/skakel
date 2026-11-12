@@ -3,18 +3,19 @@
 
 use prost::Message;
 use prost::bytes::Bytes;
-use skakel_proto::v2::{
+use skakel_proto::serial::{SerialClientMessage, SerialTarget, serial_client_message};
+use skakel_proto::v3::{
     Certificates, Closing, ClosingReason, ConnectRequest, ConnectResponse, NextCertificateReceived,
-    OpenRequest, OpenResponse, SerialClientMessage, SerialTarget, StreamOpen, StreamOpened,
-    connect_request, connect_response, open_request, open_response, serial_client_message,
+    OpenRequest, OpenResponse, StreamOpen, StreamOpened, connect_request, connect_response,
+    open_request, open_response,
 };
 
 #[test]
 fn certificates_are_written_as_the_proto_numbers_them() {
     let message = ConnectResponse {
         message: Some(connect_response::Message::Certificates(Certificates {
-            fingerprint: "AB".into(),
-            next_fingerprint: "CD".into(),
+            fingerprint: Bytes::from_static(b"AB"),
+            next_fingerprint: Bytes::from_static(b"CD"),
         })),
     };
 
@@ -28,8 +29,8 @@ fn certificates_are_written_as_the_proto_numbers_them() {
 fn an_empty_next_fingerprint_is_left_out() {
     let message = ConnectResponse {
         message: Some(connect_response::Message::Certificates(Certificates {
-            fingerprint: "AB".into(),
-            next_fingerprint: String::new(),
+            fingerprint: Bytes::from_static(b"AB"),
+            next_fingerprint: Bytes::new(),
         })),
     };
 
@@ -55,7 +56,7 @@ fn next_certificate_received_is_the_clients_first_kind() {
     let message = ConnectRequest {
         message: Some(connect_request::Message::NextCertificateReceived(
             NextCertificateReceived {
-                fingerprint: "CD".into(),
+                fingerprint: Bytes::from_static(b"CD"),
             },
         )),
     };
@@ -159,7 +160,7 @@ fn data_is_read_as_bytes_that_share_the_buffer() {
 fn serial_control_messages_are_numbered_as_the_proto_says() {
     let message = SerialClientMessage {
         message: Some(serial_client_message::Message::BreakSignal(
-            skakel_proto::v2::BreakSignal { on: true },
+            skakel_proto::serial::BreakSignal { on: true },
         )),
     };
 

@@ -4,7 +4,7 @@
 //! peer sent, so a message from a newer peer is still a message. [`LineSettings::is_valid`] says
 //! whether a port can be asked for the settings.
 
-use skakel_proto::v2 as wire;
+use skakel_proto::serial as wire;
 
 /// Parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

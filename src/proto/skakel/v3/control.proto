@@ -1,9 +1,13 @@
-// Skakel protocol version 2: the control service. docs/protocol.md at the repository root is the
+// Skakel protocol version 3: the control service. docs/protocol.md at the repository root is the
 // contract; this file is its wire format for the control channel.
+//
+// Evolution rules: a field that is removed has its number and name `reserved`, a number is never
+// reused, an end ignores a oneof arm and an enum value it does not know, and a new kind of message
+// is a new oneof arm. A change that breaks these is a protocol version.
 
 syntax = "proto3";
 
-package skakel.v2;
+package skakel.v3;
 
 // Skakel's own control calls. Every call carries the bearer token as `authorization: Bearer
 // <token>` metadata. An app's own calls are services of its own beside this one, never messages
@@ -37,17 +41,17 @@ message ConnectResponse {
 
 // The server's certificate and, while a handover is prepared, the next one.
 message Certificates {
-  // The certificate the server presents now: 32 hex pairs separated by colons.
-  string fingerprint = 1;
-  // The certificate it will present after the switch, written the same way, or empty when none is
-  // prepared.
-  string next_fingerprint = 2;
+  // The SHA-256 of the certificate the server presents now: 32 bytes.
+  bytes fingerprint = 1;
+  // The SHA-256 of the certificate it will present after the switch, 32 bytes, or empty when none
+  // is prepared.
+  bytes next_fingerprint = 2;
 }
 
 // The client stored the next certificate, so the server can show who has it.
 message NextCertificateReceived {
-  // The next certificate's fingerprint, as `Certificates.next_fingerprint` gave it.
-  string fingerprint = 1;
+  // The next certificate's fingerprint, as `Certificates.next_fingerprint` gave it: 32 bytes.
+  bytes fingerprint = 1;
 }
 
 // Sent just before the server ends every call of this client.

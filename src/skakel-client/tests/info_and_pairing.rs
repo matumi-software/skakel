@@ -25,8 +25,8 @@ async fn read_info_gives_the_servers_name_app_and_versions() {
     assert_eq!(info.name, "bench");
     assert_eq!(info.app.id, "test-app");
     assert_eq!(info.app.version, "1.2.3");
-    assert_eq!(info.versions, [2]);
-    assert_eq!(require_version(&info.versions).unwrap(), 2);
+    assert_eq!(info.versions, [3]);
+    assert_eq!(require_version(&info.versions).unwrap(), 3);
 }
 
 #[tokio::test]
@@ -72,7 +72,7 @@ async fn a_server_of_another_version_is_a_version_mismatch_with_both_sides_named
     assert_eq!(error.kind(), FailureKind::VersionMismatch);
     assert_eq!(
         error.to_string(),
-        "This server speaks Skakel 1 and this app speaks Skakel 2. Update the server."
+        "This server speaks Skakel 1 and this app speaks Skakel 3. Update the server."
     );
 }
 

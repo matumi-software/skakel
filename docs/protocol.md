@@ -1,16 +1,18 @@
 # Skakel protocol
 
-Version 2. This is the contract between Skakel clients and servers, and between apps built on them.
+Version 3. This is the contract between Skakel clients and servers, and between apps built on them.
 A change to what goes over the wire changes this file in the same pull request.
 
 The control channel and the data streams are gRPC, and their wire format is the `.proto` files in
-[`src/proto/skakel/v2/`](../src/proto/skakel/v2/), from which a client or server in any language can
+[`src/proto/skakel/v3/`](../src/proto/skakel/v3/), from which a client or server in any language can
 be generated. This file says what the messages mean and how the two ends behave.
 
-Version 1 (Skakel 0.1.0) had a SignalR hub and WebSocket streams; version 2 keeps its discovery,
-info, pairing, tokens and certificate handover, and moves the hub and the streams to gRPC. The two
-do not talk to each other (see "Changes from version 1"). The server and the client crates in this
-repository speak version 2; version 1's text is this file at commit `aa0399b`.
+Version 3 is Skakel 0.3.0. Version 2 (Skakel 0.2.0 and 0.2.1) moved the hub and the streams of
+version 1 (Skakel 0.1.0) to gRPC, and version 3 changes the details that were worth changing once
+(see "Changes from version 2"). Each version speaks only itself: a version 3 end does not talk to a
+version 2 or version 1 end, and says so in words (see "Versions"). The server and the client crates
+in this repository speak version 3; version 2's text is this file at the tag `v0.2.1`, and version
+1's at commit `aa0399b`.
 
 ## Roles
 
@@ -22,18 +24,26 @@ repository speak version 2; version 1's text is this file at commit `aa0399b`.
 ## Versions
 
 - Every path a client calls, except the info endpoint and discovery, carries the protocol version:
-  `/skakel/v2/...` for the HTTPS calls, and the package `skakel.v2` in the gRPC calls, such as
-  `/skakel.v2.ControlService/Connect`.
+  `/skakel/v3/...` for the HTTPS calls, and the package `skakel.v3` in the gRPC calls, such as
+  `/skakel.v3.ControlService/Connect`.
 - Before anything else, a client learns which versions a server speaks, from discovery or from
   `GET /skakel/info`, and picks the highest one both speak.
 - When there is none, the client says so in words a person can act on, naming both sides' versions,
-  such as "This server speaks Skakel 2 and this app speaks Skakel 1. Update the app." It never
+  such as "This server speaks Skakel 2 and this app speaks Skakel 3. Update the server." It never
   tries a path it already knows the server does not serve.
 - A server keeps every version it lists working until a release that says otherwise.
 
-A version 2 server lists `[2]`, so a version 1 client finds no version both speak and says so, as it
-does today for any version it does not know. A version 2 client does the same with a version 1
-server.
+A version 3 server lists `[3]`, so a version 2 or version 1 client finds no version both speak and
+says so, as it does for any version it does not know. A version 3 client does the same with a
+version 2 or version 1 server.
+
+**How the protocol evolves.** Inside a version, nothing a deployed end relies on changes. A field,
+a oneof arm or an enum value may be added: an end ignores a oneof arm and an enum value it does not
+know (the enum keeps its number, so it can be written back as it came), and a new kind of message is
+a new oneof arm. A field that is removed has its number and its name `reserved` in the `.proto` file,
+and a number is never reused. Anything else, such as a changed meaning, a changed type or a removed
+message, is a new protocol version. A stream type that versions apart from the core has a package of
+its own (`skakel.streams.serial.v1`).
 
 ## Ports
 
@@ -72,7 +82,7 @@ Skakel server". gRPC messages have limits of their own (see "One port for HTTPS 
      "port": 5240,
      "fingerprint": "EF:8E:...:29",
      "app": { "id": "koppel", "version": "0.1.1" },
-     "versions": [2]
+     "versions": [3]
    }
    ```
 
@@ -127,7 +137,7 @@ Broadcasts stay on the local network: a server elsewhere is entered by address.
 {
   "name": "pi-lab",
   "app": { "id": "koppel", "version": "0.1.1" },
-  "versions": [2]
+  "versions": [3]
 }
 ```
 
@@ -149,7 +159,7 @@ discovery, with no token.
    uppercase hex SHA-256 of the tag `skakel-commit-v2` and the nonce's UTF-8 bytes, each after its
    length (see below):
 
-   `POST /skakel/v2/pair` with `{ "clientName": "...", "commitment": "<64 hex digits>" }`
+   `POST /skakel/v3/pair` with `{ "clientName": "...", "commitment": "<64 hex digits>" }`
 
    `clientName` is 1 to 80 characters (Unicode scalar values) once the server has taken out Unicode
    control and format characters (categories Cc and Cf: line breaks, NUL, direction overrides,
@@ -157,7 +167,7 @@ discovery, with no token.
    made from the name exactly as the client sent it. The server answers
    `{ "requestId", "serverNonce", "expiresAt", "pollToken" }`. Only the opener gets the poll token.
    A body that breaks these rules gets 400.
-2. The client reveals its nonce: `POST /skakel/v2/pair/{requestId}/reveal` with
+2. The client reveals its nonce: `POST /skakel/v3/pair/{requestId}/reveal` with
    `{ "clientNonce": "..." }`. The server checks it against the commitment and answers 204, or 404,
    or 429 when it takes no more revealed requests for now (see the limits below).
 3. Both ends derive the code:
@@ -174,7 +184,7 @@ discovery, with no token.
    carries its length, so where one part ends and the next begins is never open to doubt.
 
 4. The person types the code on the server, in the app's own screen. A match registers the client.
-5. The client polls `GET /skakel/v2/pair/{requestId}` with the header `X-Pair-Token: <pollToken>`
+5. The client polls `GET /skakel/v3/pair/{requestId}` with the header `X-Pair-Token: <pollToken>`
    and gets `{ "state" }`, and once approved `{ "state", "clientId", "clientSecret" }`. The state is
    `waiting`, `approved`, `denied` (refused on the server, or the code was wrong three times) or
    `expired`. The poll that sees `approved` carries the credentials, once; after it the request is
@@ -224,7 +234,7 @@ A client paired with several servers holds one client ID and secret for each.
 
 ## Tokens
 
-- OAuth 2.0 client credentials at `POST /skakel/v2/token`, HTTPS only, as a form
+- OAuth 2.0 client credentials at `POST /skakel/v3/token`, HTTPS only, as a form
   (`application/x-www-form-urlencoded`) with `grant_type=client_credentials`, `client_id` and
   `client_secret`. A server also takes the id and secret as HTTP Basic credentials (each part
   form-encoded as RFC 6749 says, so a literal `&` in either is written `%26`; a part with more than
@@ -280,6 +290,11 @@ A client acts on `certificates` only when its `fingerprint` is the certificate t
 connection presented, or the one a new connection to the server presents, as right after a switch,
 when the control connection still runs on the old certificate. Anything else it ignores.
 
+On the control channel a fingerprint is its 32 bytes (the SHA-256 of the certificate), not text,
+and `next_fingerprint` is empty when none is prepared. A message whose fingerprint is not 32 bytes
+is ignored. Discovery and info, which are JSON, still write a fingerprint as 32 hex pairs separated
+by colons.
+
 A server presents its current certificate on every new connection, so a connection made after the
 switch never shows the old one. The Rust server turns TLS session resumption off for this: a resumed
 session shows the client no certificate, and a client that proves a certificate by what a new
@@ -303,6 +318,9 @@ it runs makes it look once more when it is done.
 
 Everything on TCP runs over one TLS listener on the app's port, with the pinned certificate.
 
+- **TLS 1.3 only.** Both ends speak TLS 1.3 and nothing older: a client that offers only TLS 1.2
+  gets a failed handshake. Every check on the certificate is the pin, so there is nothing an older
+  version would add.
 - **ALPN picks HTTP/2.** The server offers `h2` and `http/1.1` and picks `h2` when the client offers
   it. gRPC runs only over HTTP/2: a client makes gRPC calls only on a connection where ALPN chose
   `h2`, and a server that picks anything else for a client that offered `h2` did not answer like a
@@ -311,7 +329,7 @@ Everything on TCP runs over one TLS listener on the app's port, with the pinned 
 - **The content type tells a gRPC call.** A request whose content type is `application/grpc`, or
   starts with `application/grpc+`, goes to the server's gRPC services; every other request goes to
   its HTTPS routes. The paths never meet either: a gRPC path is `/<package>.<Service>/<Method>`,
-  such as `/skakel.v2.StreamService/Open`, and Skakel's HTTPS paths start with `/skakel/`.
+  such as `/skakel.v3.StreamService/Open`, and Skakel's HTTPS paths start with `/skakel/`.
 - **No compression.** Messages go uncompressed (`grpc-encoding` is `identity` or left out). A
   server need accept no other encoding; the Rust server refuses a call in any other with
   `UNIMPLEMENTED`. USB and serial data rarely compress, and a small server would spend more on
@@ -387,7 +405,7 @@ their own and a client reads or drops each call it makes on the control connecti
 
 ## Control channel
 
-The control channel is `skakel.v2.ControlService`, in `control.proto`, on one long-lived HTTP/2
+The control channel is `skakel.v3.ControlService`, in `control.proto`, on one long-lived HTTP/2
 connection per client and server. The app's own calls should share that connection (see "An app's
 own calls"); data streams should not (see "Streams").
 
@@ -460,7 +478,7 @@ can tell it to do.
 
 ## Streams
 
-A stream is one call to `skakel.v2.StreamService.Open`, in `streams.proto`, that carries one thing:
+A stream is one call to `skakel.v3.StreamService.Open`, in `streams.proto`, that carries one thing:
 a USB device, a serial port, or whatever an app defines as a stream type.
 
 - **A connection each.** A client should open each stream on a connection of its own, pinned and
@@ -523,7 +541,8 @@ own, carried as bytes. The data, which is what has to be fast, is a plain `bytes
 ## The serial stream type
 
 Type `serial`: one serial port on the server, used by one client at a time. Its messages are in
-`serial.proto`.
+`serial.proto`, package `skakel.streams.serial.v1`: the stream type versions apart from the core
+protocol.
 
 **Opening:** `open { stream_type: "serial", target }`, where `target` is a `SerialTarget { port }`
 and `port` is the port's id from the app's own list of ports. A second client gets `IN_USE`.
@@ -537,7 +556,7 @@ bytes.
 
 | Message | Fields | What |
 |---|---|---|
-| `line_settings` | `baud` (1 or more), `data_bits` (5 to 8), `parity` (none, odd, even, mark, space), `stop_bits` (one, one and a half, two), `flow_control` (none, RTS/CTS, XON/XOFF) | Change the port's settings. Every field is required: a zero or an unspecified value is a change the server answers with `unsupported` |
+| `line_settings` | `request_id` (nonzero), `settings`: `baud` (1 or more), `data_bits` (5 to 8), `parity` (none, odd, even, mark, space), `stop_bits` (one, one and a half, two), `flow_control` (none, RTS/CTS, XON/XOFF) | Change the port's settings. Every field of `settings` is required: a zero or an unspecified value is a change the server answers with `unsupported`. A `request_id` of 0 is not a change the server can answer by name, and it is dropped |
 | `modem_lines` | `dtr`, `rts` (booleans, either may be left out) | Set the output lines |
 | `break_signal` | `on` (boolean) | Start or end a break |
 | `purge` | `input`, `output` (booleans, false when left out) | Throw away what is buffered on the server |
@@ -547,9 +566,9 @@ bytes.
 | Message | Fields | What |
 |---|---|---|
 | `opened` | `line_settings`, `modem_status` | The first control message after `opened`: the port as it is now |
-| `line_settings` | The fields above | The settings now on the port, after a change was applied. A client treats a change as done only when this comes back |
+| `line_settings` | `request_id`, `settings` | The answer to a change that was applied: the `request_id` of that change and the settings now on the port. A client treats a change as done only when this comes back |
 | `modem_status` | `cts`, `dsr`, `dcd`, `ri` (booleans) | Whenever an input line changes |
-| `error` | `code` (`unsupported`, `framing`, `parity`, `overrun`), `detail` | A change the port refused, or errors the port reported. A refused change leaves the settings as they were |
+| `error` | `code` (`unsupported`, `framing`, `parity`, `overrun`), `detail`, `request_id` | A change the port refused (`request_id` is that change's), or an error the port reported on its own (`request_id` is 0). A refused change leaves the settings as they were |
 
 **Rules:**
 
@@ -564,10 +583,12 @@ bytes.
   carries one with `unsupported`. A newer end may add values.
 - A port the server cannot set a value on (a baud rate it does not support, one and a half stop
   bits with 8 data bits) gets an `error` with `unsupported`.
-- The server answers each `line_settings` change once, with `line_settings` or an `unsupported`
-  `error`, in the order the changes came. A client waits 10 seconds for the answer. An answer that
-  comes after its change stopped waiting is taken as that change's, not the next one's, unless it
-  echoes exactly what the next one asked for.
+- The server answers each `line_settings` change once, with `line_settings` or an `error`, both
+  carrying the `request_id` of the change. A client makes one change at a time, gives each its own
+  `request_id` (nonzero, and not the one before), and waits 10 seconds for the answer that carries
+  it. An answer with another `request_id`, one that comes after its change stopped waiting or one
+  with 0, is not taken for the change that waits; the settings it carries are still what is on the
+  port.
 
 **Ending:** `ABORTED`, domain `skakel.streams.serial`, reason `PORT_FAULT`: the port reported a
 fault and was closed. It was close code 4100 in version 1.
@@ -595,7 +616,22 @@ round: both ends update together, and each tells a person so through the version
 | Serial control messages as JSON with `op` | `SerialClientMessage` and `SerialServerMessage` in `serial.proto`; `break` is `break_signal`; close code 4100 is `PORT_FAULT` |
 | Streams share nothing but the port | Each stream should run on a connection of its own |
 
-## Not in version 2
+## Changes from version 2
+
+Version 2 is Skakel 0.2.0 and 0.2.1. A version 2 end cannot talk to a version 3 end, or the other way
+round: both ends update together, and each tells a person so through the version check.
+
+| Version 2 | Version 3 |
+|---|---|
+| `"versions": [2]` | `"versions": [3]` |
+| `/skakel/v2/pair`, `/skakel/v2/token` | `/skakel/v3/pair`, `/skakel/v3/token` |
+| Package `skakel.v2` for the control and stream services and the serial messages | `skakel.v3` for the control and stream services, `skakel.streams.serial.v1` for the serial messages, in their own file under `src/proto/skakel/streams/serial/v1/` |
+| `Certificates.fingerprint`, `next_fingerprint` and `NextCertificateReceived.fingerprint` are colon-separated hex strings | The same fields are `bytes`, the 32 bytes of the SHA-256; empty means none. Discovery and info JSON keep the colon form |
+| A serial `line_settings` change is answered by an echo of its settings, matched by what it asked for and by order | The change carries a nonzero `request_id` and the answer (`line_settings` or `error`) carries it back; `error` has a `request_id` too (0 for the port's own errors) |
+| TLS 1.2 and 1.3 | TLS 1.3 only |
+| No rule for removed fields | A removed field is `reserved` by number and name, and numbers are not reused ("Versions") |
+
+## Not in version 3
 
 - Several apps behind one port.
 - Resuming a stream after the connection drops: a client opens a new one.

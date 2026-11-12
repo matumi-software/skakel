@@ -1,4 +1,4 @@
-//! Serve Skakel clients, protocol version 2: discovery answers, pairing approval, OAuth tokens,
+//! Serve Skakel clients, protocol version 3: discovery answers, pairing approval, OAuth tokens,
 //! revoking clients, the control channel and data streams over gRPC, and the certificate with its
 //! handover. The wire format is in [`docs/protocol.md`](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md)
 //! and the parts are in [`docs/parts.md`](https://github.com/matumi-software/skakel/blob/main/docs/parts.md),

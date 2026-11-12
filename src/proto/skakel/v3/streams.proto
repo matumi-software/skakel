@@ -1,9 +1,13 @@
-// Skakel protocol version 2: the stream service. docs/protocol.md at the repository root is the
+// Skakel protocol version 3: the stream service. docs/protocol.md at the repository root is the
 // contract; this file is its wire format for data streams.
+//
+// Evolution rules: a field that is removed has its number and name `reserved`, a number is never
+// reused, an end ignores a oneof arm and an enum value it does not know, and a new kind of message
+// is a new oneof arm. A change that breaks these is a protocol version.
 
 syntax = "proto3";
 
-package skakel.v2;
+package skakel.v3;
 
 // Data streams. A stream carries one thing: a USB device, a serial port, or whatever an app
 // defines as a stream type. Every call carries the bearer token as `authorization: Bearer
