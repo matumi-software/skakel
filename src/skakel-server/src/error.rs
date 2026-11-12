@@ -7,6 +7,7 @@ use crate::crypto::CryptoError;
 
 /// An error from the server's own work.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ServerError {
     /// The store could not load or save the state.
     Store(io::Error),

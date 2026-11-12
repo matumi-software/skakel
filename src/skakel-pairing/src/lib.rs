@@ -14,11 +14,13 @@
 //! takes. The code is never sent.
 
 mod bodies;
+mod name;
 
 pub use bodies::{
     PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpenRequest, PairOpened, PairPoll,
     PairRevealRequest, PairState,
 };
+pub use name::clean_client_name;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

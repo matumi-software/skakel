@@ -26,6 +26,7 @@ const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
 /// Who a valid token is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Principal {
     /// The client's id.
     pub client_id: String,

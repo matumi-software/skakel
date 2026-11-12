@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `skakel-server`: public API clean-up, breaking for apps that match or construct these types.
+  `#[non_exhaustive]` is now on `ServerEvent`, `ServerError`, `StreamOpen` and `Approval` (a `match`
+  needs a wildcard arm) and on the structs `PairingRequest`, `PairingOverview`, `PairingDecision`,
+  `ClientView`, `KeysView`, `CertificateSwitch`, `NewClient`, `StreamRequest`, `Principal`,
+  `SkakelState`, `ClientRecord`, `CertificateRecord` and `NextCertificateRecord` (fields can still be
+  read, and a store still saves and loads them through serde). `StreamOpen::Accept` now holds an
+  `Accepted`, which only `StreamOpen::accept` makes. `CryptoError`, which `ServerError::Crypto`
+  carries, can now be named. `clean_client_name` moved to `skakel-pairing`, which an app can use to
+  clean a name the same way. `InMemoryStore::state` and `SkakelServerBuilder::token_lifetime` are
+  test helpers and are there only with the new `test-util` feature. The crate forbids unsafe code and
+  warns on undocumented public items.
 - `skakel-server`: access tokens are random strings the server remembers, not signed JWTs. Clients
   never read a token, so nothing changes for them, but a server that restarts forgets its tokens
   and clients ask for new ones (they already do on `TOKEN_REFUSED`). Breaking for apps: the signing

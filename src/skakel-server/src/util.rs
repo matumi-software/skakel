@@ -10,7 +10,6 @@ use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use unicode_general_category::{GeneralCategory, get_general_category};
 
 const SHA256_PREFIX: &str = "sha256$";
 
@@ -125,21 +124,6 @@ pub(crate) fn address_key(address: IpAddr) -> String {
     }
 }
 
-/// A client's name as the server keeps it: control and format characters (categories Cc and Cf)
-/// taken out, then trimmed.
-pub fn clean_client_name(name: &str) -> String {
-    let kept: String = name
-        .chars()
-        .filter(|c| {
-            !matches!(
-                get_general_category(*c),
-                GeneralCategory::Control | GeneralCategory::Format
-            )
-        })
-        .collect();
-    kept.trim().to_owned()
-}
-
 pub(crate) fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
@@ -232,12 +216,5 @@ mod tests {
     fn address_text_is_the_whole_address_with_a_mapped_one_as_ipv4() {
         assert_eq!(address_text("::ffff:10.1.2.3".parse().unwrap()), "10.1.2.3");
         assert_eq!(address_text("2001:db8::1".parse().unwrap()), "2001:db8::1");
-    }
-
-    #[test]
-    fn client_names_lose_control_and_format_characters_and_the_spaces_around() {
-        assert_eq!(clean_client_name("  lab\u{0}\u{202E} pc \n"), "lab pc");
-        assert_eq!(clean_client_name("\u{200B}\u{0}"), "");
-        assert_eq!(clean_client_name("Zo\u{eb}"), "Zo\u{eb}");
     }
 }

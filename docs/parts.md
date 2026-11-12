@@ -74,8 +74,10 @@ short `vcam`.
   tonic servers with `server`.
 - **Discovery:** the UDP packet. The probe, the answer, building and reading them, the limits a
   client applies to an answer, and the cleaning of the name and app version a server announces.
-- **Pairing:** what both ends compute and send. The nonce, the commitment, the six-digit code, and
-  the JSON bodies of the pairing calls (open, reveal, poll) with their states.
+- **Pairing:** what both ends compute and send. The nonce, the commitment, the six-digit code, the
+  JSON bodies of the pairing calls (open, reveal, poll) with their states, and the cleaning of a
+  client's name (`clean_client_name`), which a server applies and an app may apply before it shows
+  one.
 - **Serial:** the serial stream type's wire format, whose messages are in
   `src/proto/skakel/v2/serial.proto`. The stream type and its target, line settings, modem lines,
   errors, and the control messages in both directions, as Rust types that encode to and decode from

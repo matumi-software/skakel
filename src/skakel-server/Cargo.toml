@@ -8,6 +8,10 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# What the server's own tests, and the tests of crates that run against it, need and an app does not.
+test-util = []
+
 [dependencies]
 skakel-protocol.workspace = true
 skakel-discovery.workspace = true
@@ -23,7 +27,6 @@ subtle.workspace = true
 getrandom.workspace = true
 base64.workspace = true
 time.workspace = true
-unicode-general-category.workspace = true
 # The one thing the server logs: a route that takes ClientPrincipal but is not served by Skakel,
 # where there is no server to send an event from.
 log.workspace = true
@@ -48,6 +51,7 @@ rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 serde_urlencoded = "0.7.1"
 
 [dev-dependencies]
+skakel-server = { path = ".", features = ["test-util"] }
 # The tests call the server with the generated gRPC clients, over HTTP/2 connections of their own.
 skakel-proto = { workspace = true, features = ["client"] }
 tonic-prost.workspace = true

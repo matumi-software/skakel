@@ -21,7 +21,7 @@ use http_body_util::Limited;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use skakel_pairing::{PairOpenRequest, PairRevealRequest};
+use skakel_pairing::{PairOpenRequest, PairRevealRequest, clean_client_name};
 use skakel_protocol::{
     ACCESS_TOKEN_LIFETIME, INFO_PATH, PAIR_PATH, PAIR_TOKEN_HEADER, PROBLEM_CONTENT_TYPE,
     SkakelInfo, TOKEN_PATH, VERSIONS,
@@ -31,7 +31,7 @@ use time::OffsetDateTime;
 use crate::pairing::Reveal;
 use crate::server::Shared;
 use crate::tokens::Principal;
-use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token, clean_client_name, utf16_len};
+use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token, utf16_len};
 
 /// The largest body the token and pairing paths read.
 pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024;

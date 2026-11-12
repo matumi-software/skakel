@@ -23,6 +23,7 @@ use crate::util;
 
 /// A client as the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ClientView {
     /// The client's id.
     pub id: String,
@@ -41,6 +42,7 @@ pub struct ClientView {
 /// A client that was just registered. The secret is shown here and nowhere again, unless the
 /// server was told to keep it. `Debug` leaves the secret out.
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NewClient {
     /// The client's id.
     pub client_id: String,
@@ -62,6 +64,7 @@ impl std::fmt::Debug for NewClient {
 
 /// The certificate now in use, and the next one during a handover.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct KeysView {
     /// The fingerprint of the certificate the server presents.
     pub fingerprint: String,
@@ -73,6 +76,7 @@ pub struct KeysView {
 
 /// What a certificate switch did.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CertificateSwitch {
     /// The fingerprint it switched from.
     pub from: String,
@@ -310,7 +314,7 @@ impl ServerState {
     }
 
     pub(crate) async fn register_client(&self, name: &str) -> Result<NewClient, ServerError> {
-        let clean = util::clean_client_name(name);
+        let clean = skakel_pairing::clean_client_name(name);
         if clean.is_empty() {
             return Err(ServerError::Invalid(
                 "The name is empty once control and format characters and the spaces around it are taken out.".into(),
