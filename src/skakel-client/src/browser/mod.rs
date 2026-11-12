@@ -75,7 +75,7 @@ impl DiscoveredServer {
         port: u16,
         fingerprint: impl Into<String>,
         app: SkakelApp,
-        versions: Vec<i32>,
+        versions: Vec<u32>,
     ) -> Self {
         Self {
             name: name.into(),
