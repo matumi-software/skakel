@@ -55,3 +55,7 @@ cd src && cargo build && cargo test && cargo clippy --all-targets -- -D warnings
 Work from an issue, in a worktree `<repo>/<type>/RVR/<name>` branched from `origin/main`. Open a
 pull request into `main` that says `Closes #N` and rebase-merge it. Releases are annotated `v*`
 tags on `main`.
+
+A pull request fills in `.github/pull_request_template.md`. `.github/CODEOWNERS` names the maintainers,
+who review every change. Issues come from the forms in `.github/ISSUE_TEMPLATE/`, which set the
+`type: ...` and `state: needs-triage` labels; add a `scope: ...` label when triaging.

@@ -1,0 +1,16 @@
+name: Feature request
+description: Something Skakel should do, or do differently.
+labels: ["type: feature", "state: needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The situation and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you picture it working. Rough is fine. Say if it changes the wire format in docs/protocol.md.
