@@ -7,7 +7,7 @@ repository is public.
 | File | What it does |
 |---|---|
 | `branches.json` | `main` cannot be deleted or force-pushed. No one bypasses it |
-| `main-pull-requests.json` | Changes reach `main` through a pull request with resolved conversations. Admins may still push directly, for a fix that cannot wait |
+| `main-pull-requests.json` | Changes reach `main` through a pull request with resolved conversations, and the CI workflow's checks (`.github/workflows/ci.yml`) must pass. Admins may still push directly, for a fix that cannot wait |
 | `release-tags.json` | `v*` tags cannot be deleted or moved once pushed |
 
 Apply them, or apply a change to one, with the GitHub CLI:
