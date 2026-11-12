@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use url::Url;
 
@@ -45,8 +45,8 @@ pub(crate) struct ServerMoves {
 
 #[derive(Default)]
 struct Times {
-    moved_to: HashMap<String, SystemTime>,
-    failed: HashMap<String, SystemTime>,
+    moved_to: HashMap<String, Instant>,
+    failed: HashMap<String, Instant>,
 }
 
 impl ServerMoves {
@@ -76,7 +76,7 @@ impl ServerMoves {
             return None;
         }
         let _searching = self.searching.lock().await;
-        let now = self.clock.now();
+        let now = self.clock.instant();
         self.forget(now);
         let saved_host = addresses_of(saved).await;
         let candidates = {
@@ -102,13 +102,13 @@ impl ServerMoves {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .failed
-                .insert(key, self.clock.now());
+                .insert(key, self.clock.instant());
         }
         None
     }
 
     /// Drops what is older than [`HOLD_OFF`].
-    fn forget(&self, now: SystemTime) {
+    fn forget(&self, now: Instant) {
         let mut times = self.times.lock().unwrap_or_else(|e| e.into_inner());
         times.moved_to.retain(|_, at| since(now, *at) < HOLD_OFF);
         times.failed.retain(|_, at| since(now, *at) < HOLD_OFF);
@@ -126,11 +126,11 @@ pub(crate) fn candidates(
     servers: &[DiscoveredServer],
     saved_host: &[IpAddr],
     held_off: &dyn Fn(&str) -> bool,
-    failed_at: &dyn Fn(&str) -> Option<SystemTime>,
+    failed_at: &dyn Fn(&str) -> Option<Instant>,
 ) -> Vec<Url> {
     let saved_authority = authority(saved);
     let mut seen: Vec<String> = Vec::new();
-    let mut all: Vec<(bool, Url, Option<SystemTime>)> = Vec::new();
+    let mut all: Vec<(bool, Url, Option<Instant>)> = Vec::new();
     for server in servers.iter().filter(|s| pins.trusts(&s.fingerprint)) {
         let same_host = saved_host.contains(&plain(server.address));
         let url = if same_host {
@@ -230,7 +230,7 @@ mod tests {
         false
     }
 
-    fn never(_: &str) -> Option<SystemTime> {
+    fn never(_: &str) -> Option<Instant> {
         None
     }
 
@@ -292,7 +292,7 @@ mod tests {
             found([10, 0, 0, 2], 1, "AB"),
             found([10, 0, 0, 3], 1, "AB"),
         ];
-        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
+        let base = Instant::now();
         let failed = |a: &str| match a {
             "10.0.0.1:1" => Some(base + Duration::from_secs(20)),
             "10.0.0.2:1" => Some(base),

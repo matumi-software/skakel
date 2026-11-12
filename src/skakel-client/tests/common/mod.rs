@@ -14,7 +14,7 @@ use std::future::Future;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::Router;
 use axum::routing::get;
@@ -621,8 +621,10 @@ impl<T: Clone + Send + 'static> Recorder<T> {
 
 /// A clock a test moves by hand: time passes only when it says so, and waits end then.
 pub struct ManualClock {
-    now: Mutex<SystemTime>,
-    sleepers: Mutex<Vec<(SystemTime, oneshot::Sender<()>)>>,
+    wall: SystemTime,
+    mono: Instant,
+    elapsed: Mutex<Duration>,
+    sleepers: Mutex<Vec<(Duration, oneshot::Sender<()>)>>,
     changed: Notify,
     advanced: AtomicBool,
 }
@@ -630,7 +632,9 @@ pub struct ManualClock {
 impl ManualClock {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            now: Mutex::new(SystemTime::now()),
+            wall: SystemTime::now(),
+            mono: Instant::now(),
+            elapsed: Mutex::new(Duration::ZERO),
             sleepers: Mutex::new(Vec::new()),
             changed: Notify::new(),
             advanced: AtomicBool::new(false),
@@ -639,9 +643,9 @@ impl ManualClock {
 
     pub fn advance(&self, by: Duration) {
         let now = {
-            let mut now = self.now.lock().unwrap();
-            *now += by;
-            *now
+            let mut elapsed = self.elapsed.lock().unwrap();
+            *elapsed += by;
+            *elapsed
         };
         self.advanced.store(true, Ordering::SeqCst);
         let mut sleepers = self.sleepers.lock().unwrap();
@@ -687,11 +691,15 @@ impl ManualClock {
 
 impl Clock for ManualClock {
     fn now(&self) -> SystemTime {
-        *self.now.lock().unwrap()
+        self.wall + *self.elapsed.lock().unwrap()
+    }
+
+    fn instant(&self) -> Instant {
+        self.mono + *self.elapsed.lock().unwrap()
     }
 
     fn sleep(&self, duration: Duration) -> Sleep {
-        let at = self.now() + duration;
+        let at = *self.elapsed.lock().unwrap() + duration;
         let (wake, woken) = oneshot::channel();
         self.sleepers.lock().unwrap().push((at, wake));
         self.changed.notify_waiters();
