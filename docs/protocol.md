@@ -166,7 +166,8 @@ discovery, with no token.
    zero-width characters) and trimmed it; that is the name it keeps and shows. The code below is
    made from the name exactly as the client sent it. The server answers
    `{ "requestId", "serverNonce", "expiresAt", "pollToken" }`. Only the opener gets the poll token.
-   A body that breaks these rules gets 400.
+   A body that breaks these rules gets 400. A server takes a new request only while its **pairing
+   window** is open (see below); outside it the call gets 403 (nothing is read or counted).
 2. The client reveals its nonce: `POST /skakel/v3/pair/{requestId}/reveal` with
    `{ "clientNonce": "..." }`. The server checks it against the commitment and answers 204, or 404,
    or 429 when it takes no more revealed requests for now (see the limits below).
@@ -220,15 +221,23 @@ from any address in it, so counting single IPv6 addresses would let one host spe
 often as it likes. Every per-address limit in this document counts addresses this way. What the
 server shows the app as where a request came from is still the whole address.
 
-Many `/64`s that each open and reveal can still spend the server's 60 for everyone. A pairing
-window that a person opens on the server, outside which it takes no requests, is the planned answer;
-it is not in this version.
+**The pairing window.** A server takes new pairing requests only while a person has opened a
+window on it, for a time the app chooses (at least one minute and at most one hour; opening a window
+again moves its end). Outside the window `POST /skakel/v3/pair` gets 403 with the problem JSON
+`reason` `pairing-closed` and a `detail` such as "This server is not taking pairing requests. Open
+pairing on the server and try again." The refusal reads no body and spends none of the limits above
+(the general 120 calls a minute per address still count it). A window decides only whether a new
+request is taken: requests already open can still be revealed, approved, denied, polled and
+withdrawn after it closes. A server that nobody sits at may be built to take requests always, with no
+window. Without a window, many `/64`s that each open and reveal could spend the server's 60 for
+everyone at any time; with it, they can only do so while a person is there to see it.
 
 **Limits a client applies:** a `requestId` and `pollToken` of 1 to 128 printable ASCII characters,
 or the answer is one the client cannot use. It polls until the earlier of `expiresAt` and five
 minutes after it opened, by its own clock, plus 30 seconds for a clock that differs, and then takes
 the request as expired. A 429 on opening or revealing means the server takes no more requests for
-now.
+now. A 403 with the reason `pairing-closed` on opening means nobody has opened pairing on the
+server: the client says so in words a person can act on and starts no request.
 
 A client paired with several servers holds one client ID and secret for each.
 
@@ -631,6 +640,7 @@ round: both ends update together, and each tells a person so through the version
 | TLS 1.2 and 1.3 | TLS 1.3 only |
 | The pairing code is 6 digits from a `|`-joined hash of the fingerprint and both nonces (`skakel-pair-v1`) | 8 digits from a length-prefixed hash that also covers the client name (`skakel-pair-v2`, commitment `skakel-commit-v2`); see "Pairing" |
 | Name and version limits count UTF-16 code units; discovery answers use .NET-style JSON escaping | The limits count Unicode scalar values and the answer is plain JSON (non-ASCII is UTF-8) |
+| A server takes pairing requests from any address at any time | A server takes new requests only while its app has opened a pairing window; outside it `POST /skakel/v3/pair` gets 403 with the reason `pairing-closed` ("Pairing") |
 | No rule for removed fields | A removed field is `reserved` by number and name, and numbers are not reused ("Versions") |
 
 ## Not in version 3

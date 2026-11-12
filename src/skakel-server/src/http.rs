@@ -40,8 +40,16 @@ use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token};
 /// The largest body the token and pairing paths read.
 pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024;
 
+/// The `reason` of the problem answer to a pairing request outside the pairing window.
+pub(crate) const PAIRING_CLOSED: &str = "pairing-closed";
+
 /// A problem answer: `application/problem+json` with a `detail` a person can read.
 pub(crate) fn problem(status: StatusCode, detail: &str) -> Response {
+    problem_with(status, detail, None)
+}
+
+/// A problem answer with a `reason` a client acts on, such as `pairing-closed`.
+pub(crate) fn problem_with(status: StatusCode, detail: &str, reason: Option<&str>) -> Response {
     let (kind, title) = match status.as_u16() {
         400 => (
             "https://tools.ietf.org/html/rfc9110#section-15.5.1",
@@ -50,6 +58,10 @@ pub(crate) fn problem(status: StatusCode, detail: &str) -> Response {
         401 => (
             "https://tools.ietf.org/html/rfc9110#section-15.5.2",
             "Unauthorized",
+        ),
+        403 => (
+            "https://tools.ietf.org/html/rfc9110#section-15.5.4",
+            "Forbidden",
         ),
         404 => (
             "https://tools.ietf.org/html/rfc9110#section-15.5.5",
@@ -73,7 +85,11 @@ pub(crate) fn problem(status: StatusCode, detail: &str) -> Response {
         ),
         _ => ("about:blank", status.canonical_reason().unwrap_or("Error")),
     };
-    let body = json!({ "type": kind, "title": title, "status": status.as_u16(), "detail": detail });
+    let mut body =
+        json!({ "type": kind, "title": title, "status": status.as_u16(), "detail": detail });
+    if let Some(reason) = reason {
+        body["reason"] = json!(reason);
+    }
     (
         status,
         [(CONTENT_TYPE, HeaderValue::from_static(PROBLEM_CONTENT_TYPE))],
@@ -295,6 +311,15 @@ async fn pair_open(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
+    // Outside the pairing window nothing is read and nothing is counted: the refusal costs the
+    // server no more than the general per-address limit the gate already took.
+    if !shared.pairing.is_open() {
+        return problem_with(
+            StatusCode::FORBIDDEN,
+            "This server is not taking pairing requests. Open pairing on the server and try again.",
+            Some(PAIRING_CLOSED),
+        );
+    }
     let Some(request) = read_json::<PairOpenRequest>(&headers, body).await else {
         return problem(
             StatusCode::BAD_REQUEST,

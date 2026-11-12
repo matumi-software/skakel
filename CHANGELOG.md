@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `skakel-server`, `skakel-client` and the wire: a server takes new pairing requests only while its
+  app has opened a pairing window. Breaking for apps: pairing is **closed by default**, so an app
+  calls `SkakelServer::open_pairing(duration)` (or `Pairing::open_pairing`; held to one minute up to
+  one hour, calling it again moves the end) while a person is at the server, and `close_pairing()`
+  to end it. `pairing_window()` says whether it is open and for how long, and a new
+  `ServerEvent::PairingWindow` tells the app when it opens or closes (the window runs out by itself).
+  An unattended server keeps today's behaviour with `SkakelServerBuilder::pairing_always_open()`.
+  Outside the window `POST /skakel/v2/pair` gets 403 with the problem `reason` `pairing-closed`,
+  reads no body and spends no pairing limit; requests already open carry on. The client reports it
+  as the new `PairingError::Closed` and `FailureKind::PairingClosed` with the fixed wording "This
+  server is not taking pairing requests. Open pairing on the server and try again." Apps with a test
+  server that pairs build it with `pairing_always_open()`.
 - Protocol version 3, pairing: the code a person compares is 8 digits, not 6, and is made from the
   client's name as well as the certificate and both nonces, so a man in the middle that shows the
   person another name than the client sent gets a code that does not match. Every hash input is

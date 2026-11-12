@@ -216,7 +216,17 @@ pub fn bench_builder() -> SkakelServerBuilder {
     bench_builder_with(Arc::new(InMemoryStore::new()))
 }
 
+/// The bench server as an app builds it by default: pairing is closed until the app opens a
+/// window. Most tests want it open (see `bench_builder_with`).
+pub fn closed_builder() -> SkakelServerBuilder {
+    base_builder(Arc::new(InMemoryStore::new()))
+}
+
 pub fn bench_builder_with(store: Arc<InMemoryStore>) -> SkakelServerBuilder {
+    base_builder(store).pairing_always_open()
+}
+
+fn base_builder(store: Arc<InMemoryStore>) -> SkakelServerBuilder {
     SkakelServerBuilder::new(APP_ID, APP_VERSION, store)
         .name(NAME)
         .listen("127.0.0.1:0".parse().unwrap())

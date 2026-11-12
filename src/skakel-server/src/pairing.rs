@@ -30,6 +30,12 @@ pub(crate) const UNREVEALED_LIFETIME: Duration = Duration::from_secs(30);
 const DENIED_VISIBLE_FOR: Duration = Duration::from_secs(15);
 /// How often the server looks for requests that ran out.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The shortest pairing window `open_pairing` opens; a shorter one is made this long.
+pub const MIN_PAIRING_WINDOW: Duration = Duration::from_secs(60);
+
+/// The longest pairing window `open_pairing` opens; a longer one is cut to this.
+pub const MAX_PAIRING_WINDOW: Duration = Duration::from_secs(60 * 60);
 /// The window the open and reveal budgets count over.
 const OPEN_WINDOW: Duration = Duration::from_secs(5 * 60);
 /// Revealed requests the whole server takes per window.
@@ -280,6 +286,50 @@ pub struct Pairing {
 struct Inner {
     state: Arc<ServerState>,
     data: Mutex<Data>,
+    window: std::sync::Mutex<Window>,
+}
+
+/// When the server takes new pairing requests.
+#[derive(Default)]
+struct Window {
+    /// Never closes: the app asked for it at build time.
+    always: bool,
+    /// The window the app opened closes at this time.
+    until: Option<Instant>,
+    /// Counts the windows opened, so the task of an old one does not close a newer one.
+    generation: u64,
+}
+
+impl Window {
+    fn open_at(&self, now: Instant) -> bool {
+        self.always || self.until.is_some_and(|until| now < until)
+    }
+
+    fn view(&self, now: Instant) -> PairingWindow {
+        PairingWindow {
+            open: self.open_at(now),
+            always_open: self.always,
+            remaining: match self.until {
+                Some(until) if !self.always && now < until => Some(until - now),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// Whether the server takes new pairing requests, and for how long. See
+/// [`Pairing::open_pairing`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PairingWindow {
+    /// New requests are taken now.
+    pub open: bool,
+    /// The server was built to take them always
+    /// ([`SkakelServerBuilder::pairing_always_open`](crate::SkakelServerBuilder::pairing_always_open)).
+    pub always_open: bool,
+    /// How long until the window the app opened closes. `None` when it is closed, or open for
+    /// good.
+    pub remaining: Option<Duration>,
 }
 
 impl Pairing {
@@ -288,8 +338,90 @@ impl Pairing {
             inner: Arc::new(Inner {
                 state,
                 data: Mutex::new(Data::default()),
+                window: std::sync::Mutex::new(Window::default()),
             }),
         }
+    }
+
+    /// Takes new pairing requests for `duration`, from now. A new request is taken only while a
+    /// window is open; the server starts with it closed, unless it was built with
+    /// [`SkakelServerBuilder::pairing_always_open`](crate::SkakelServerBuilder::pairing_always_open).
+    /// The duration is held to between [`MIN_PAIRING_WINDOW`] (one minute) and
+    /// [`MAX_PAIRING_WINDOW`] (one hour). Opening a window that is already open replaces its end
+    /// time, so it can be extended or shortened. A [`ServerEvent::PairingWindow`] says it opened,
+    /// and another when it closes.
+    ///
+    /// A window decides only whether a new request is taken. Requests already open keep their
+    /// lifecycle (they can be revealed, approved or denied after the window closed), and the
+    /// limits on pairing stay as they are. A client that tries to open a request outside the
+    /// window is refused with 403 and the reason `pairing-closed`.
+    pub fn open_pairing(&self, duration: Duration) {
+        let duration = duration.clamp(MIN_PAIRING_WINDOW, MAX_PAIRING_WINDOW);
+        let now = Instant::now();
+        let until = now + duration;
+        let (view, generation) = {
+            let mut window = self.window();
+            window.generation += 1;
+            window.until = Some(until);
+            (window.view(now), window.generation)
+        };
+        self.inner
+            .state
+            .events
+            .emit(ServerEvent::PairingWindow(view));
+
+        let weak = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            tokio::time::sleep_until(until).await;
+            let Some(inner) = weak.upgrade() else { return };
+            let view = {
+                let mut window = inner.window.lock().unwrap_or_else(|e| e.into_inner());
+                if window.generation != generation || window.until != Some(until) {
+                    return;
+                }
+                window.until = None;
+                window.view(Instant::now())
+            };
+            inner.state.events.emit(ServerEvent::PairingWindow(view));
+        });
+    }
+
+    /// Closes the window now. New requests are refused again; requests already open go on. Does
+    /// nothing when no window is open, and does not close a server built to take requests always.
+    pub fn close_pairing(&self) {
+        let now = Instant::now();
+        let view = {
+            let mut window = self.window();
+            if window.until.is_none() {
+                return;
+            }
+            window.generation += 1;
+            window.until = None;
+            window.view(now)
+        };
+        self.inner
+            .state
+            .events
+            .emit(ServerEvent::PairingWindow(view));
+    }
+
+    /// Whether new pairing requests are taken, and for how long.
+    pub fn pairing_window(&self) -> PairingWindow {
+        self.window().view(Instant::now())
+    }
+
+    /// The server takes new requests always, as it did before there were windows.
+    pub(crate) fn set_always_open(&self) {
+        self.window().always = true;
+    }
+
+    /// Whether a new request is taken now.
+    pub(crate) fn is_open(&self) -> bool {
+        self.window().open_at(Instant::now())
+    }
+
+    fn window(&self) -> std::sync::MutexGuard<'_, Window> {
+        self.inner.window.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Looks for requests that ran out every few seconds until the server is dropped.
@@ -1148,5 +1280,78 @@ mod tests {
                 .await
                 .is_some()
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_window_closes_when_its_time_is_up_and_the_app_is_told() {
+        let (pairing, state) = pairing().await;
+        let mut events = state.events.subscribe();
+        assert!(!pairing.is_open());
+
+        pairing.open_pairing(Duration::from_secs(120));
+        assert!(pairing.is_open());
+        tokio::time::sleep(Duration::from_secs(119)).await;
+        assert!(pairing.is_open());
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        assert!(!pairing.is_open());
+        assert!(matches!(
+            events.try_recv(),
+            Some(ServerEvent::PairingWindow(w)) if w.open
+        ));
+        assert!(matches!(
+            events.try_recv(),
+            Some(ServerEvent::PairingWindow(w)) if !w.open && w.remaining.is_none()
+        ));
+        assert!(events.try_recv().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn opening_a_window_again_moves_its_end_and_the_old_one_does_not_close_the_new_one() {
+        let (pairing, state) = pairing().await;
+        let mut events = state.events.subscribe();
+
+        pairing.open_pairing(Duration::from_secs(120));
+        tokio::time::sleep(Duration::from_secs(100)).await;
+        pairing.open_pairing(Duration::from_secs(120));
+        // Past the first window's end, inside the second's.
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert!(pairing.is_open());
+        assert_eq!(
+            pairing.pairing_window().remaining,
+            Some(Duration::from_secs(60))
+        );
+        tokio::time::sleep(Duration::from_secs(61)).await;
+
+        assert!(!pairing.is_open());
+        let mut seen = vec![];
+        while let Some(ServerEvent::PairingWindow(w)) = events.try_recv() {
+            seen.push(w.open);
+        }
+        assert_eq!(seen, [true, true, false]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn closing_a_window_by_hand_leaves_no_task_to_close_a_later_one() {
+        let (pairing, _state) = pairing().await;
+
+        pairing.open_pairing(Duration::from_secs(120));
+        pairing.close_pairing();
+        pairing.open_pairing(Duration::from_secs(600));
+        tokio::time::sleep(Duration::from_secs(130)).await;
+
+        assert!(pairing.is_open());
+    }
+
+    #[tokio::test]
+    async fn a_server_built_to_take_requests_always_stays_open() {
+        let (pairing, _state) = pairing().await;
+
+        pairing.set_always_open();
+
+        assert!(pairing.is_open());
+        pairing.close_pairing();
+        assert!(pairing.is_open());
+        assert!(pairing.pairing_window().always_open);
     }
 }

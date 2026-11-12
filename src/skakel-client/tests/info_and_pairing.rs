@@ -185,6 +185,32 @@ async fn wait_reports_a_refusal() {
 }
 
 #[tokio::test]
+async fn opening_is_refused_with_the_fixed_wording_while_the_server_takes_no_pairing_requests() {
+    let mut bench = common::Bench::new();
+    let server = bench.server_with_pairing_closed().await;
+
+    let error = PairingClient::open(
+        &server.address(),
+        &server.fingerprint,
+        "laptop",
+        &ClientOptions::default(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, PairingError::Closed), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "This server is not taking pairing requests. Open pairing on the server and try again."
+    );
+
+    // Once the app opens a window the same call works.
+    bench.open_pairing_window(&server);
+    let pairing = open(&server).await;
+    assert!(code_is_eight_digits(pairing.code()));
+}
+
+#[tokio::test]
 async fn withdraw_takes_a_waiting_request_off_the_server() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;

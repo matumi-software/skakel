@@ -38,7 +38,7 @@ use crate::events::{Events, ServerEvents};
 use crate::grpc::Guarded;
 use crate::http::{self, looks_like_tls, plain_http_answer};
 use crate::limits::Limits;
-use crate::pairing::Pairing;
+use crate::pairing::{Pairing, PairingWindow};
 use crate::service::{Routers, SkakelService, connection_builder};
 use crate::sessions::Sessions;
 use crate::state::{CertificateSwitch, CertificatesView, ClientView, NewClient, ServerState};
@@ -83,6 +83,7 @@ pub struct SkakelServerBuilder {
     discovery_port: Option<u16>,
     token_requests_per_minute: u32,
     pair_requests_per_minute: u32,
+    pairing_always_open: bool,
     keep_client_secrets: bool,
     certificate_host_name: String,
     token_lifetime: Duration,
@@ -119,6 +120,7 @@ impl SkakelServerBuilder {
             discovery_port: None,
             token_requests_per_minute: 60,
             pair_requests_per_minute: 120,
+            pairing_always_open: false,
             keep_client_secrets: false,
             certificate_host_name: machine,
             token_lifetime: skakel_wire::ACCESS_TOKEN_LIFETIME,
@@ -172,6 +174,16 @@ impl SkakelServerBuilder {
     /// Pairing calls, polls included, one address may make a minute. Defaults to 120.
     pub fn pair_requests_per_minute(mut self, limit: u32) -> Self {
         self.pair_requests_per_minute = limit;
+        self
+    }
+
+    /// Takes new pairing requests always, with no window to open, as a server did before pairing
+    /// had windows. For an unattended setup with nobody to open one. By default a server takes
+    /// no new pairing request until the app calls [`SkakelServer::open_pairing`], so a person is
+    /// there when one arrives, and a stranger on the network cannot fill the server's pairing
+    /// budget at any time. See [`Pairing::open_pairing`].
+    pub fn pairing_always_open(mut self) -> Self {
+        self.pairing_always_open = true;
         self
     }
 
@@ -323,6 +335,9 @@ impl SkakelServerBuilder {
         )
         .await?;
         let pairing = Pairing::new(state.clone());
+        if self.pairing_always_open {
+            pairing.set_always_open();
+        }
         pairing.spawn_sweeper();
         let sessions = Sessions::new(state.clone());
         sessions.spawn_watch();
@@ -507,6 +522,23 @@ impl SkakelServer {
     /// The pairing requests.
     pub fn pairing(&self) -> Pairing {
         self.shared.pairing.clone()
+    }
+
+    /// Takes new pairing requests for `duration` (held to between one minute and one hour). The
+    /// same as [`Pairing::open_pairing`], which says what a window does and does not do.
+    pub fn open_pairing(&self, duration: Duration) {
+        self.shared.pairing.open_pairing(duration);
+    }
+
+    /// Closes the pairing window now. The same as [`Pairing::close_pairing`].
+    pub fn close_pairing(&self) {
+        self.shared.pairing.close_pairing();
+    }
+
+    /// Whether new pairing requests are taken now, and for how long. The same as
+    /// [`Pairing::pairing_window`].
+    pub fn pairing_window(&self) -> PairingWindow {
+        self.shared.pairing.pairing_window()
     }
 
     /// What happens on the server, as a stream the app can read. A slow reader misses events

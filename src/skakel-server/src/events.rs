@@ -3,7 +3,7 @@
 
 use tokio::sync::broadcast;
 
-use crate::pairing::{PairingDecision, PairingOverview};
+use crate::pairing::{PairingDecision, PairingOverview, PairingWindow};
 use crate::state::{CertificatesView, ClientView};
 
 /// Something that changed on the server.
@@ -14,6 +14,8 @@ pub enum ServerEvent {
     Pairing(PairingOverview),
     /// A request was approved or refused.
     Decided(PairingDecision),
+    /// The pairing window opened, was moved, or closed (by the app or because it ran out).
+    PairingWindow(PairingWindow),
     /// The list of clients changed.
     Clients(Vec<ClientView>),
     /// The certificate, or the next one being prepared, changed.

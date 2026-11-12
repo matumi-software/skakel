@@ -98,6 +98,7 @@ async fn start() -> SkakelServer {
         .listen("127.0.0.1:0".parse().unwrap())
         .discovery_bind("127.0.0.1".parse().unwrap())
         .discovery_port(0)
+        .pairing_always_open()
         .grpc_service(greeter::Greeter)
         .stream("echo", echo())
         .stream("serial", serial())

@@ -6,8 +6,10 @@
 //!
 //! An app builds a server with [`SkakelServerBuilder`], gives it a [`SkakelStore`] to keep its
 //! state in, adds its own gRPC services ([`SkakelServerBuilder::grpc_service`]), stream types
-//! ([`StreamHandler`]) and HTTPS routes, and starts it. Pairing needs a person: the app shows the requests it is told of (see
-//! [`SkakelServer::subscribe`]) and calls [`Pairing::approve`] with the code the person typed.
+//! ([`StreamHandler`]) and HTTPS routes, and starts it. Pairing needs a person: the app opens a pairing window while someone is at the
+//! server ([`SkakelServer::open_pairing`]; outside a window the server takes no new request, unless
+//! it was built with [`SkakelServerBuilder::pairing_always_open`]), shows the requests it is told of
+//! (see [`SkakelServer::subscribe`]) and calls [`Pairing::approve`] with the code the person typed.
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), skakel_server::ServerError> {
@@ -19,6 +21,9 @@
 //!     .start()
 //!     .await?;
 //! println!("pinned to {}", server.fingerprint());
+//!
+//! // When a person asks to add a client, take pairing requests for five minutes.
+//! server.open_pairing(std::time::Duration::from_secs(300));
 //!
 //! // What happens on the server arrives as events, on a task of the app's own.
 //! let mut events = server.subscribe();
@@ -132,7 +137,10 @@ pub use crypto::CryptoError;
 pub use error::{OptionProblem, ServerError, StateError};
 pub use events::{ServerEvent, ServerEvents};
 pub use http::ClientPrincipal;
-pub use pairing::{Approval, Pairing, PairingDecision, PairingOverview, PairingRequest};
+pub use pairing::{
+    Approval, MAX_PAIRING_WINDOW, MIN_PAIRING_WINDOW, Pairing, PairingDecision, PairingOverview,
+    PairingRequest, PairingWindow,
+};
 pub use server::{Certificates, Clients, SkakelServer, SkakelServerBuilder};
 pub use service::{SkakelService, connection_builder};
 pub use state::{CertificateSwitch, CertificatesView, ClientView, NewClient};

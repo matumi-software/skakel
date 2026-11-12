@@ -20,7 +20,7 @@ use url::Url;
 use zeroize::Zeroize;
 
 use crate::clock::{Clock, since, wall_since};
-use crate::failure::{Error, FailureKind, Result, bad_answer};
+use crate::failure::{Error, FailureKind, Result, StatusError, bad_answer};
 use crate::http::{self, base_address};
 use crate::info::{read_info_with, require_version};
 use crate::options::ClientOptions;
@@ -48,6 +48,9 @@ pub enum PairingError {
     InvalidClientName,
     /// The operating system had no random numbers to make the pairing nonce from.
     NoRandomness(RandomError),
+    /// The server is not taking pairing requests: nobody has opened pairing on it. Someone opens
+    /// pairing in the server's own app, and the client tries again.
+    Closed,
     /// The server could not be reached, presented another certificate, speaks no common version, or
     /// refused the request.
     Failed(Error),
@@ -58,6 +61,7 @@ impl fmt::Display for PairingError {
         match self {
             Self::InvalidClientName => f.write_str("Give the client a name of 1 to 80 characters."),
             Self::NoRandomness(error) => error.fmt(f),
+            Self::Closed => f.write_str(FailureKind::PairingClosed.message()),
             Self::Failed(error) => error.fmt(f),
         }
     }
@@ -68,7 +72,7 @@ impl std::error::Error for PairingError {
         match self {
             Self::Failed(error) => Some(error),
             Self::NoRandomness(error) => Some(error),
-            Self::InvalidClientName => None,
+            Self::InvalidClientName | Self::Closed => None,
         }
     }
 }
@@ -77,6 +81,19 @@ impl From<Error> for PairingError {
     fn from(error: Error) -> Self {
         Self::Failed(error)
     }
+}
+
+/// Whether a refusal says the server is not taking pairing requests: a problem answer whose
+/// `reason` is `pairing-closed`.
+fn is_pairing_closed(response: &crate::request::Response) -> bool {
+    response
+        .json::<serde_json::Value>()
+        .ok()
+        .and_then(|body| {
+            body.get("reason")
+                .and_then(|r| r.as_str().map(str::to_owned))
+        })
+        .is_some_and(|reason| reason == "pairing-closed")
 }
 
 /// How many polls in a row may fail on the network before the wait gives up.
@@ -152,6 +169,12 @@ impl PairingClient {
                 })
                 .send()
                 .await?;
+            if open.status() == StatusCode::FORBIDDEN && is_pairing_closed(&open) {
+                return Err(Error::caused(
+                    FailureKind::PairingClosed,
+                    StatusError(StatusCode::FORBIDDEN.as_u16()),
+                ));
+            }
             let opened: PairOpened = open.read_json()?;
             if opened.server_nonce.is_empty()
                 || !is_id(&opened.request_id)
@@ -216,7 +239,11 @@ impl PairingClient {
                 "Pairing with {} failed: {error:?}",
                 http::authority(&server)
             );
-            PairingError::Failed(error)
+            if error.kind() == FailureKind::PairingClosed {
+                PairingError::Closed
+            } else {
+                PairingError::Failed(error)
+            }
         })
     }
 
