@@ -160,7 +160,53 @@ impl Error {
         };
         Self::Camera {
             action,
-            source: format!("{e}{hint}").into(),
+            source: Box::new(CameraCall { error: e, hint }),
         }
+    }
+}
+
+/// A Windows error with a hint for the person, so the message says what to do and the error, with
+/// its HRESULT, is still there for a program: it is this error's `source()`.
+#[cfg(windows)]
+#[derive(Debug)]
+struct CameraCall {
+    error: windows::core::Error,
+    hint: &'static str,
+}
+
+#[cfg(windows)]
+impl fmt::Display for CameraCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.error, self.hint)
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for CameraCall {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use windows::Win32::Foundation::E_ACCESSDENIED;
+
+    #[test]
+    fn a_camera_call_error_keeps_its_hresult() {
+        let error = Error::from_camera_call(E_ACCESSDENIED.into(), "start the camera");
+        let text = error.to_string();
+        assert!(text.contains("could not start the camera"), "{text}");
+        assert!(text.contains("camera access may be off"), "{text}");
+        let mut source = std::error::Error::source(&error);
+        let mut code = None;
+        while let Some(e) = source {
+            if let Some(windows_error) = e.downcast_ref::<windows::core::Error>() {
+                code = Some(windows_error.code());
+            }
+            source = e.source();
+        }
+        assert_eq!(code, Some(E_ACCESSDENIED));
     }
 }

@@ -296,6 +296,15 @@ pub fn read_format(region: &Region) -> Result<Format, HeaderError> {
     }
 }
 
+/// A version no earlier idle frame has: the milliseconds since 1970, which stays far below
+/// `WRITING` for the foreseeable future.
+fn fresh_idle_base() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| d.as_millis() as u64)
+        .max(1)
+}
+
 /// The producer's side of the ring. It never waits: a frame goes into the slot after the latest one
 /// whether or not the source is still reading the oldest.
 #[derive(Debug)]
@@ -318,9 +327,13 @@ impl FrameWriter {
         region
             .u32_at(offsets::PRODUCER_STATE)
             .store(1, Ordering::Release);
-        // A producer that died mid-write leaves WRITING behind; count on from zero then.
+        // A producer that died mid-write leaves WRITING behind, and the version a reader last took
+        // is lost with it. Counting on from zero could give the new idle frame a version the reader
+        // already has, and it would skip the frame. Count on from the clock instead: milliseconds
+        // since 1970 is far above any version a counter reaches, and above the base of any earlier
+        // attach.
         let idle_version = match region.u64_at(offsets::IDLE_SEQ).load(Ordering::Acquire) {
-            WRITING => 0,
+            WRITING => fresh_idle_base(),
             v => v,
         };
         Ok(Self {
@@ -654,6 +667,27 @@ mod tests {
         assert_eq!(reader.read_new_idle(&mut frame), None);
         writer.write_idle(|slot| slot.fill(43));
         assert_eq!(reader.read_new_idle(&mut frame), Some(2));
+    }
+
+    #[test]
+    fn a_new_producer_after_a_dead_one_is_not_taken_for_the_old_idle_frame() {
+        let (_buffer, region, format) = setup(16, 16);
+        let mut first = FrameWriter::attach(region, 7, 0).unwrap();
+        let mut reader = FrameReader::open(region).unwrap();
+        let mut frame = vec![0; format.frame_size()];
+        first.write_idle(|slot| slot.fill(1));
+        assert_eq!(reader.read_new_idle(&mut frame), Some(1));
+        // The producer dies while it writes the next idle frame.
+        region
+            .u64_at(offsets::IDLE_SEQ)
+            .store(WRITING, Ordering::Release);
+        let mut second = FrameWriter::attach(region, 8, 0).unwrap();
+        second.write_idle(|slot| slot.fill(2));
+        assert!(
+            reader.read_new_idle(&mut frame).is_some(),
+            "the new idle frame shows"
+        );
+        assert!(frame.iter().all(|&b| b == 2));
     }
 
     #[test]

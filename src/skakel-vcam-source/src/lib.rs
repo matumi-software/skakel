@@ -20,9 +20,13 @@ mod source;
 mod stream;
 
 use std::ffi::{c_char, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use windows::Win32::Foundation::{CLASS_E_CLASSNOTAVAILABLE, E_POINTER, HMODULE, S_FALSE, S_OK};
+use windows::Win32::Foundation::{
+    CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_POINTER, HMODULE, S_FALSE, S_OK,
+};
 use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 use windows::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -66,6 +70,41 @@ pub(crate) fn log(message: &str) {
     unsafe { OutputDebugStringW(&text) };
 }
 
+/// Locks `mutex`, and goes on with what is in it when a panic poisoned it. A panic is caught at the
+/// COM boundary (see `guard`) and must not make every later call on the object panic too.
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "no message".to_owned())
+}
+
+/// Runs the body of a COM method or export. A panic must not unwind out of an `extern "system"`
+/// function: since Rust 1.81 that aborts the process, and this DLL runs inside the Frame Server,
+/// shared with every camera on the machine. It is logged and becomes `E_FAIL` instead.
+pub(crate) fn guard<T>(
+    what: &str,
+    body: impl FnOnce() -> windows::core::Result<T>,
+) -> windows::core::Result<T> {
+    catch_unwind(AssertUnwindSafe(body)).unwrap_or_else(|payload| {
+        log(&format!("{what} panicked: {}", panic_text(&*payload)));
+        Err(E_FAIL.into())
+    })
+}
+
+/// `guard` for an export that returns an `HRESULT`.
+fn guard_hresult(what: &str, body: impl FnOnce() -> HRESULT) -> HRESULT {
+    catch_unwind(AssertUnwindSafe(body)).unwrap_or_else(|payload| {
+        log(&format!("{what} panicked: {}", panic_text(&*payload)));
+        E_FAIL
+    })
+}
+
 /// From olectl.h: registration failed.
 const SELFREG_E_CLASS: HRESULT = HRESULT(0x8004_0201_u32 as i32);
 
@@ -90,14 +129,14 @@ pub unsafe extern "system" fn DllGetClassObject(
     if clsid.is_null() || iid.is_null() || out.is_null() {
         return E_POINTER;
     }
-    unsafe {
+    guard_hresult("DllGetClassObject", || unsafe {
         *out = std::ptr::null_mut();
         if *clsid != GUID::from_u128(SOURCE_CLSID) {
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         let factory: IUnknown = factory::ClassFactory::new().into();
         factory.query(iid, out)
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -113,26 +152,31 @@ pub extern "system" fn DllCanUnloadNow() -> HRESULT {
 /// file to Program Files under its versioned name.
 #[unsafe(no_mangle)]
 pub extern "system" fn DllRegisterServer() -> HRESULT {
-    match own_path()
-        .and_then(|path| skakel_vcam::install::register(&path).map_err(|e| e.to_string()))
-    {
-        Ok(()) => S_OK,
-        Err(e) => {
-            log(&format!("DllRegisterServer failed: {e}"));
-            SELFREG_E_CLASS
+    guard_hresult("DllRegisterServer", || {
+        match own_path()
+            .and_then(|path| skakel_vcam::install::register(&path).map_err(|e| e.to_string()))
+        {
+            Ok(()) => S_OK,
+            Err(e) => {
+                log(&format!("DllRegisterServer failed: {e}"));
+                SELFREG_E_CLASS
+            }
         }
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn DllUnregisterServer() -> HRESULT {
-    match skakel_vcam::install::unregister() {
-        Ok(()) => S_OK,
-        Err(e) => {
-            log(&format!("DllUnregisterServer failed: {e}"));
-            SELFREG_E_CLASS
-        }
-    }
+    guard_hresult(
+        "DllUnregisterServer",
+        || match skakel_vcam::install::unregister() {
+            Ok(()) => S_OK,
+            Err(e) => {
+                log(&format!("DllUnregisterServer failed: {e}"));
+                SELFREG_E_CLASS
+            }
+        },
+    )
 }
 
 /// This DLL's own path.
@@ -174,6 +218,29 @@ mod tests {
     use skakel_vcam::convert::luma;
 
     const MF_VERSION: u32 = 0x0002_0070;
+
+    #[test]
+    fn a_panic_in_a_com_body_becomes_an_error_not_an_abort() {
+        let failed: windows::core::Result<()> = guard("test", || panic!("boom"));
+        assert_eq!(failed.unwrap_err().code(), E_FAIL);
+        assert_eq!(guard("test", || Ok(5)).unwrap(), 5);
+        let hr = guard_hresult("test", || panic!("boom"));
+        assert_eq!(hr, E_FAIL);
+    }
+
+    #[test]
+    fn a_poisoned_lock_is_still_usable() {
+        let mutex = Mutex::new(1);
+        let _ = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _guard = mutex.lock().unwrap();
+                panic!("poison it");
+            })
+            .join()
+        });
+        assert!(mutex.is_poisoned());
+        assert_eq!(*lock(&mutex), 1);
+    }
 
     struct Started;
 

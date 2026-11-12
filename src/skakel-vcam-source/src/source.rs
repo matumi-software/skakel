@@ -84,7 +84,7 @@ impl MediaSource {
             });
             let stream = MediaStream::create(source.cast::<IMFMediaSource>()?, config)?;
             let descriptor = MFCreatePresentationDescriptor(Some(&[Some(stream.descriptor())]))?;
-            let mut inner = source.inner.lock().unwrap();
+            let mut inner = crate::lock(&source.inner);
             inner.descriptor = Some(descriptor);
             inner.stream = Some(stream);
             drop(inner);
@@ -94,7 +94,7 @@ impl MediaSource {
 
     /// Shuts the source down: what `IMFMediaSource::Shutdown` does.
     pub fn shutdown(&self) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = crate::lock(&self.inner);
         inner.state = State::Shutdown;
         if let Some(queue) = inner.queue.take() {
             let _ = unsafe { queue.Shutdown() };
@@ -110,7 +110,7 @@ impl MediaSource {
     }
 
     fn live(&self) -> Result<std::sync::MutexGuard<'_, Inner>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = crate::lock(&self.inner);
         match inner.state {
             State::Shutdown => Err(MF_E_SHUTDOWN.into()),
             _ if inner.queue.is_none() || inner.stream.is_none() => Err(E_UNEXPECTED.into()),
@@ -119,7 +119,7 @@ impl MediaSource {
     }
 
     fn queue(&self) -> Result<IMFMediaEventQueue> {
-        Ok(self.live()?.queue.clone().unwrap())
+        self.live()?.queue.clone().ok_or(E_UNEXPECTED.into())
     }
 }
 
@@ -162,8 +162,10 @@ impl IMFMediaSource_Impl for MediaSource_Impl {
     }
 
     fn CreatePresentationDescriptor(&self) -> Result<IMFPresentationDescriptor> {
-        let inner = self.live()?;
-        unsafe { inner.descriptor.as_ref().ok_or(E_UNEXPECTED)?.Clone() }
+        crate::guard("CreatePresentationDescriptor", || {
+            let inner = self.live()?;
+            unsafe { inner.descriptor.as_ref().ok_or(E_UNEXPECTED)?.Clone() }
+        })
     }
 
     fn Start(
@@ -172,80 +174,83 @@ impl IMFMediaSource_Impl for MediaSource_Impl {
         time_format: *const GUID,
         _start: *const PROPVARIANT,
     ) -> Result<()> {
-        let mut inner = self.live()?;
-        let requested = descriptor
-            .ok()
-            .map_err(|_| windows::core::Error::from(E_INVALIDARG))?;
-        if !time_format.is_null() && unsafe { *time_format } != NO_GUID {
-            return Err(MF_E_UNSUPPORTED_TIME_FORMAT.into());
-        }
-        unsafe {
-            if requested.GetStreamDescriptorCount()? != 1 {
-                return Err(E_INVALIDARG.into());
+        crate::guard("Start", || {
+            let mut inner = self.live()?;
+            let requested = descriptor
+                .ok()
+                .map_err(|_| windows::core::Error::from(E_INVALIDARG))?;
+            if !time_format.is_null() && unsafe { *time_format } != NO_GUID {
+                return Err(MF_E_UNSUPPORTED_TIME_FORMAT.into());
             }
-            let mut selected = BOOL::default();
-            let mut requested_stream = None;
-            requested.GetStreamDescriptorByIndex(0, &mut selected, &mut requested_stream)?;
-            let requested_stream = requested_stream.ok_or(E_INVALIDARG)?;
-            if requested_stream.GetStreamIdentifier()? != 0 {
-                return Err(MF_E_NOT_FOUND.into());
-            }
-            let ours = inner.descriptor.clone().ok_or(E_UNEXPECTED)?;
-            let mut was_selected = BOOL::default();
-            let mut ours_stream = None;
-            ours.GetStreamDescriptorByIndex(0, &mut was_selected, &mut ours_stream)?;
+            unsafe {
+                if requested.GetStreamDescriptorCount()? != 1 {
+                    return Err(E_INVALIDARG.into());
+                }
+                let mut selected = BOOL::default();
+                let mut requested_stream = None;
+                requested.GetStreamDescriptorByIndex(0, &mut selected, &mut requested_stream)?;
+                let requested_stream = requested_stream.ok_or(E_INVALIDARG)?;
+                if requested_stream.GetStreamIdentifier()? != 0 {
+                    return Err(MF_E_NOT_FOUND.into());
+                }
+                let ours = inner.descriptor.clone().ok_or(E_UNEXPECTED)?;
+                let mut was_selected = BOOL::default();
+                let mut ours_stream = None;
+                ours.GetStreamDescriptorByIndex(0, &mut was_selected, &mut ours_stream)?;
 
-            let queue = inner.queue.clone().unwrap();
-            let stream = inner.stream.clone().unwrap();
-            if selected.as_bool() {
-                ours.SelectStream(0)?;
-                let media_type = requested_stream
-                    .GetMediaTypeHandler()?
-                    .GetCurrentMediaType()?;
-                let event = if was_selected.as_bool() {
-                    MEUpdatedStream
-                } else {
-                    MENewStream
-                };
-                queue.QueueEventParamUnk(
-                    event.0 as u32,
-                    &NO_GUID,
-                    S_OK,
-                    &stream.to_interface::<IUnknown>(),
-                )?;
-                stream.start(&media_type)?;
-            } else if was_selected.as_bool() {
-                ours.DeselectStream(0)?;
-                stream.stop(false)?;
+                let queue = inner.queue.clone().ok_or(E_UNEXPECTED)?;
+                let stream = inner.stream.clone().ok_or(E_UNEXPECTED)?;
+                if selected.as_bool() {
+                    ours.SelectStream(0)?;
+                    let media_type = requested_stream
+                        .GetMediaTypeHandler()?
+                        .GetCurrentMediaType()?;
+                    let event = if was_selected.as_bool() {
+                        MEUpdatedStream
+                    } else {
+                        MENewStream
+                    };
+                    queue.QueueEventParamUnk(
+                        event.0 as u32,
+                        &NO_GUID,
+                        S_OK,
+                        &stream.to_interface::<IUnknown>(),
+                    )?;
+                    stream.start(&media_type)?;
+                } else if was_selected.as_bool() {
+                    ours.DeselectStream(0)?;
+                    stream.stop(false)?;
+                }
+                let now = PROPVARIANT::from(MFGetSystemTime());
+                queue.QueueEventParamVar(MESourceStarted.0 as u32, &NO_GUID, S_OK, &now)?;
+                inner.state = State::Started;
             }
-            let now = PROPVARIANT::from(MFGetSystemTime());
-            queue.QueueEventParamVar(MESourceStarted.0 as u32, &NO_GUID, S_OK, &now)?;
-            inner.state = State::Started;
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn Stop(&self) -> Result<()> {
-        let mut inner = self.live()?;
-        if inner.state != State::Started {
-            return Err(MF_E_INVALID_STATE_TRANSITION.into());
-        }
-        inner.state = State::Stopped;
-        unsafe {
-            inner.stream.clone().unwrap().stop(true)?;
-            inner
-                .descriptor
-                .as_ref()
-                .ok_or(E_UNEXPECTED)?
-                .DeselectStream(0)?;
-            let now = PROPVARIANT::from(MFGetSystemTime());
-            inner.queue.as_ref().unwrap().QueueEventParamVar(
-                MESourceStopped.0 as u32,
-                &NO_GUID,
-                S_OK,
-                &now,
-            )
-        }
+        crate::guard("Stop", || {
+            let mut inner = self.live()?;
+            if inner.state != State::Started {
+                return Err(MF_E_INVALID_STATE_TRANSITION.into());
+            }
+            inner.state = State::Stopped;
+            unsafe {
+                inner.stream.clone().ok_or(E_UNEXPECTED)?.stop(true)?;
+                inner
+                    .descriptor
+                    .as_ref()
+                    .ok_or(E_UNEXPECTED)?
+                    .DeselectStream(0)?;
+                let now = PROPVARIANT::from(MFGetSystemTime());
+                inner
+                    .queue
+                    .as_ref()
+                    .ok_or(E_UNEXPECTED)?
+                    .QueueEventParamVar(MESourceStopped.0 as u32, &NO_GUID, S_OK, &now)
+            }
+        })
     }
 
     fn Pause(&self) -> Result<()> {
@@ -254,7 +259,7 @@ impl IMFMediaSource_Impl for MediaSource_Impl {
     }
 
     fn Shutdown(&self) -> Result<()> {
-        self.shutdown()
+        crate::guard("Shutdown", || self.shutdown())
     }
 }
 
@@ -269,7 +274,7 @@ impl IMFMediaSourceEx_Impl for MediaSource_Impl {
         if stream_id != 0 {
             return Err(MF_E_NOT_FOUND.into());
         }
-        Ok(inner.stream.as_ref().unwrap().attributes())
+        Ok(inner.stream.as_ref().ok_or(E_UNEXPECTED)?.attributes())
     }
 
     fn SetD3DManager(&self, _manager: Ref<IUnknown>) -> Result<()> {
@@ -299,7 +304,11 @@ impl IMFSampleAllocatorControl_Impl for MediaSource_Impl {
             return Err(MF_E_NOT_FOUND.into());
         }
         let allocator: IMFVideoSampleAllocator = allocator.ok()?.cast()?;
-        inner.stream.as_ref().unwrap().set_allocator(allocator)
+        inner
+            .stream
+            .as_ref()
+            .ok_or(E_UNEXPECTED)?
+            .set_allocator(allocator)
     }
 
     fn GetAllocatorUsage(

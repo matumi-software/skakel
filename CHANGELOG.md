@@ -9,6 +9,17 @@
 - `skakel-server`: approving a pairing request no longer holds the pairing lock while the store
   saves the client, so a slow store does not stall other pairing calls, and a failed save leaves the
   request waiting for another try.
+- `skakel-vcam`: `Section::region` is `unsafe`. The `Region` it returns is a `Copy` view with no
+  lifetime, so safe code could write to memory after the section was unmapped. Apps that only use
+  `VirtualCamera` are not affected.
+- `skakel-vcam`: `Error::Camera`'s source is now the Windows error with its HRESULT (the message
+  still carries the hint), where it was a formatted string.
+- `skakel-vcam-source`: a panic inside the media source is logged and becomes `E_FAIL`, where it
+  aborted the Frame Server process. A buffer that reports a negative or too short row pitch is
+  refused instead of read out of range.
+- Virtual camera layout contract: a producer that attaches after one died mid-write of the idle frame
+  starts the idle version from the time, so readers no longer skip its first idle frame
+  (`docs/virtual-camera.md`). Layout version 1 is unchanged.
 
 ## 0.2.1 (2026-11-12)
 

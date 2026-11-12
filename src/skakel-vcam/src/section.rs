@@ -135,8 +135,14 @@ impl Section {
     }
 
     /// The mapped bytes. Writable only when this side mapped it for writing.
-    pub fn region(&self) -> Region {
-        // Mapped for as long as `self` lives, and page aligned.
+    ///
+    /// # Safety
+    /// A `Region` is a `Copy` view with no lifetime: it stays valid only while this `Section` is
+    /// alive. The caller must drop every `Region` made from it, and every `FrameWriter` or
+    /// `FrameReader` built on one, before the `Section` is dropped (keep them in a struct with the
+    /// section declared after them, as `VirtualCamera` does).
+    pub unsafe fn region(&self) -> Region {
+        // Mapped for as long as `self` lives, and page aligned; the caller keeps to that.
         unsafe { Region::new(self.view.Value.cast(), self.len) }
     }
 

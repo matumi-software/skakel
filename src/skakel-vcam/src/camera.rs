@@ -196,7 +196,9 @@ impl VirtualCamera {
             layout::MIN_IDLE_TIMEOUT_MS.into(),
             layout::MAX_IDLE_TIMEOUT_MS.into(),
         ) as u32;
-        let mut writer = match FrameWriter::attach(section.region(), std::process::id(), timeout) {
+        // SAFETY: `Link` keeps the writer before the section, so the writer is dropped first.
+        let region = unsafe { section.region() };
+        let mut writer = match FrameWriter::attach(region, std::process::id(), timeout) {
             Ok(writer) => writer,
             // The source is still writing the header; try again next time.
             Err(layout::HeaderError::NotReady) => return Ok(()),

@@ -7,6 +7,7 @@
 //! request; VCamSample reports Teams sending nothing to the other side of a call that way.
 
 use std::collections::VecDeque;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -26,7 +27,7 @@ use skakel_vcam::layout::Format;
 use skakel_vcam::pacing::{Pacer, Tick};
 
 use crate::config::Config;
-use crate::frames::{Frames, copy_nv12_pitched};
+use crate::frames::{Frames, copy_nv12_pitched, usable_pitch};
 use crate::{ObjectCount, log};
 
 /// Samples the allocator keeps, as both samples use.
@@ -198,7 +199,7 @@ impl MediaStream {
 
     pub fn shutdown(&self) {
         {
-            let mut inner = self.shared.inner.lock().unwrap();
+            let mut inner = crate::lock(&self.shared.inner);
             inner.shutdown = true;
             inner.state = MF_STREAM_STATE_STOPPED;
             if let Some(queue) = inner.queue.take() {
@@ -217,7 +218,7 @@ impl MediaStream {
     }
 
     fn live(&self) -> Result<std::sync::MutexGuard<'_, Inner>> {
-        let inner = self.shared.inner.lock().unwrap();
+        let inner = crate::lock(&self.shared.inner);
         if inner.shutdown {
             Err(MF_E_SHUTDOWN.into())
         } else {
@@ -314,11 +315,11 @@ impl MediaStream {
     }
 
     fn start_pacing(&self) -> Result<()> {
-        let mut pacing = self.pacing.lock().unwrap();
+        let mut pacing = crate::lock(&self.pacing);
         if pacing.as_ref().is_some_and(|p| !p.thread.is_finished()) {
             return Ok(());
         }
-        let format = self.shared.inner.lock().unwrap().config.format;
+        let format = crate::lock(&self.shared.inner).config.format;
         unsafe {
             let stop = SendHandle(CreateEventW(None, true, false, PCWSTR::null())?);
             let timer = SendHandle(CreateWaitableTimerExW(
@@ -351,7 +352,7 @@ impl MediaStream {
 
     fn stop_pacing(&self) {
         // Taken out first: the thread may be waiting for the stream's lock, never for this one.
-        let Some(pacing) = self.pacing.lock().unwrap().take() else {
+        let Some(pacing) = crate::lock(&self.pacing).take() else {
             return;
         };
         unsafe {
@@ -388,10 +389,17 @@ fn run_pacing(shared: &Shared, stop: HANDLE, timer: HANDLE, format: Format) {
         if stopped {
             return;
         }
-        if let Some(tick) = pacer.poll(unsafe { MFGetSystemTime() })
-            && let Err(e) = shared.tick(tick)
-        {
-            log(&format!("frame {} not sent: {e}", tick.index));
+        if let Some(tick) = pacer.poll(unsafe { MFGetSystemTime() }) {
+            // A panic here would end the thread and, unlike one in a COM method, go unnoticed.
+            match catch_unwind(AssertUnwindSafe(|| shared.tick(tick))) {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => log(&format!("frame {} not sent: {e}", tick.index)),
+                Err(payload) => log(&format!(
+                    "frame {} panicked: {}",
+                    tick.index,
+                    crate::panic_text(&*payload)
+                )),
+            }
         }
     }
 }
@@ -399,7 +407,7 @@ fn run_pacing(shared: &Shared, stop: HANDLE, timer: HANDLE, format: Format) {
 impl Shared {
     /// One slot on the grid: take in the producer's latest, and answer the oldest request.
     fn tick(&self, tick: Tick) -> Result<()> {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = crate::lock(&self.inner);
         let inner = &mut *guard;
         if inner.shutdown || inner.state != MF_STREAM_STATE_RUNNING {
             return Ok(());
@@ -449,21 +457,20 @@ unsafe fn fill(sample: &IMFSample, picture: &[u8], format: &Format) -> Result<()
                 &mut start,
                 &mut len,
             )?;
-            let pitch = pitch as usize;
-            let available = (len as usize).saturating_sub(scan0 as usize - start as usize);
-            let needed =
-                (pitch * (height + height / 2)).saturating_sub(pitch.saturating_sub(width));
-            let result = if pitch >= width && available >= needed {
-                copy_nv12_pitched(
-                    picture,
-                    width,
-                    height,
-                    std::slice::from_raw_parts_mut(scan0, available),
-                    pitch,
-                );
-                Ok(())
-            } else {
-                Err(E_UNEXPECTED.into())
+            // The bytes from the first row to the end of the buffer. `scan0` lies inside
+            // `start..start + len`, but nothing here trusts that enough to subtract blindly.
+            let available =
+                (len as usize).saturating_sub((scan0 as usize).saturating_sub(start as usize));
+            let result = match usable_pitch(pitch, width, height, available) {
+                Some(pitch) if !scan0.is_null() => {
+                    let dst = std::slice::from_raw_parts_mut(scan0, available);
+                    if copy_nv12_pitched(picture, width, height, dst, pitch) {
+                        Ok(())
+                    } else {
+                        Err(E_UNEXPECTED.into())
+                    }
+                }
+                _ => Err(E_UNEXPECTED.into()),
             };
             buffer.Unlock2D()?;
             result
@@ -525,42 +532,46 @@ impl IMFMediaStream_Impl for MediaStream_Impl {
     }
 
     fn RequestSample(&self, token: Ref<IUnknown>) -> Result<()> {
-        let mut inner = self.live()?;
-        if inner.state != MF_STREAM_STATE_RUNNING || inner.pending.len() >= MAX_PENDING {
-            return Err(MF_E_INVALIDREQUEST.into());
-        }
-        inner.pending.push_back(token.cloned());
-        Ok(())
+        crate::guard("RequestSample", || {
+            let mut inner = self.live()?;
+            if inner.state != MF_STREAM_STATE_RUNNING || inner.pending.len() >= MAX_PENDING {
+                return Err(MF_E_INVALIDREQUEST.into());
+            }
+            inner.pending.push_back(token.cloned());
+            Ok(())
+        })
     }
 }
 
 impl IMFMediaStream2_Impl for MediaStream_Impl {
     fn SetStreamState(&self, state: MF_STREAM_STATE) -> Result<()> {
-        let mut inner = self.live()?;
-        if inner.state == state {
-            return Ok(());
-        }
-        match state {
-            MF_STREAM_STATE_PAUSED if inner.state == MF_STREAM_STATE_RUNNING => {
-                inner.state = MF_STREAM_STATE_PAUSED;
-                Ok(())
+        crate::guard("SetStreamState", || {
+            let mut inner = self.live()?;
+            if inner.state == state {
+                return Ok(());
             }
-            MF_STREAM_STATE_RUNNING => {
-                MediaStream::start_inner(&mut inner, false, None)?;
-                drop(inner);
-                self.start_pacing()
+            match state {
+                MF_STREAM_STATE_PAUSED if inner.state == MF_STREAM_STATE_RUNNING => {
+                    inner.state = MF_STREAM_STATE_PAUSED;
+                    Ok(())
+                }
+                MF_STREAM_STATE_RUNNING => {
+                    MediaStream::start_inner(&mut inner, false, None)?;
+                    drop(inner);
+                    self.start_pacing()
+                }
+                MF_STREAM_STATE_STOPPED => {
+                    MediaStream::stop_inner(&mut inner, false)?;
+                    drop(inner);
+                    self.stop_pacing();
+                    Ok(())
+                }
+                _ => Err(MF_E_INVALID_STATE_TRANSITION.into()),
             }
-            MF_STREAM_STATE_STOPPED => {
-                MediaStream::stop_inner(&mut inner, false)?;
-                drop(inner);
-                self.stop_pacing();
-                Ok(())
-            }
-            _ => Err(MF_E_INVALID_STATE_TRANSITION.into()),
-        }
+        })
     }
 
     fn GetStreamState(&self) -> Result<MF_STREAM_STATE> {
-        Ok(self.live()?.state)
+        crate::guard("GetStreamState", || Ok(self.live()?.state))
     }
 }

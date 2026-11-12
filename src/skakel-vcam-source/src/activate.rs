@@ -49,28 +49,34 @@ impl Activate {
 
 impl IMFActivate_Impl for Activate_Impl {
     fn ActivateObject(&self, iid: *const GUID, out: *mut *mut c_void) -> Result<()> {
-        if out.is_null() || iid.is_null() {
-            return Err(E_POINTER.into());
-        }
-        unsafe { *out = std::ptr::null_mut() };
-        let source = MediaSource::create(&self.store)
-            .inspect_err(|e| log(&format!("cannot create the media source: {e}")))?;
-        let unknown: IUnknown = source.to_interface();
-        unsafe { unknown.query(iid, out).ok()? };
-        *self.source.lock().unwrap() = Some(source);
-        Ok(())
+        crate::guard("ActivateObject", || {
+            if out.is_null() || iid.is_null() {
+                return Err(E_POINTER.into());
+            }
+            unsafe { *out = std::ptr::null_mut() };
+            let source = MediaSource::create(&self.store)
+                .inspect_err(|e| log(&format!("cannot create the media source: {e}")))?;
+            let unknown: IUnknown = source.to_interface();
+            unsafe { unknown.query(iid, out).ok()? };
+            *crate::lock(&self.source) = Some(source);
+            Ok(())
+        })
     }
 
     fn ShutdownObject(&self) -> Result<()> {
-        if let Some(source) = self.source.lock().unwrap().take() {
-            let _ = source.shutdown();
-        }
-        Ok(())
+        crate::guard("ShutdownObject", || {
+            if let Some(source) = crate::lock(&self.source).take() {
+                let _ = source.shutdown();
+            }
+            Ok(())
+        })
     }
 
     fn DetachObject(&self) -> Result<()> {
-        self.source.lock().unwrap().take();
-        Ok(())
+        crate::guard("DetachObject", || {
+            crate::lock(&self.source).take();
+            Ok(())
+        })
     }
 }
 

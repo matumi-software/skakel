@@ -30,15 +30,17 @@ impl IClassFactory_Impl for ClassFactory_Impl {
         iid: *const GUID,
         out: *mut *mut c_void,
     ) -> Result<()> {
-        if out.is_null() || iid.is_null() {
-            return Err(E_POINTER.into());
-        }
-        unsafe { *out = std::ptr::null_mut() };
-        if !outer.is_null() {
-            return Err(CLASS_E_NOAGGREGATION.into());
-        }
-        let activate: IUnknown = Activate::new()?.into();
-        unsafe { activate.query(iid, out).ok() }
+        crate::guard("CreateInstance", || {
+            if out.is_null() || iid.is_null() {
+                return Err(E_POINTER.into());
+            }
+            unsafe { *out = std::ptr::null_mut() };
+            if !outer.is_null() {
+                return Err(CLASS_E_NOAGGREGATION.into());
+            }
+            let activate: IUnknown = Activate::new()?.into();
+            unsafe { activate.query(iid, out).ok() }
+        })
     }
 
     fn LockServer(&self, lock: BOOL) -> Result<()> {
