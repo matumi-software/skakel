@@ -25,7 +25,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
-getrandom.workspace = true
 base64.workspace = true
 time.workspace = true
 # The one thing the server logs: a route that takes ClientPrincipal but is not served by Skakel,

@@ -1352,6 +1352,7 @@ dependencies = [
  "proptest",
  "prost",
  "protox",
+ "skakel-wire",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
@@ -1372,7 +1373,6 @@ version = "0.2.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
- "getrandom 0.4.3",
  "http-body",
  "http-body-util",
  "hyper",

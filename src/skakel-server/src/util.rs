@@ -9,6 +9,7 @@ use axum::http::header::AUTHORIZATION;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
+use skakel_wire::pairing::RandomError;
 use subtle::ConstantTimeEq;
 
 const SHA256_PREFIX: &str = "sha256$";
@@ -17,35 +18,70 @@ const SHA256_PREFIX: &str = "sha256$";
 /// the protocol counts in.
 pub(crate) const MAX_CLIENT_NAME_LENGTH: usize = 80;
 
-pub(crate) fn random<const N: usize>() -> [u8; N] {
-    let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes).expect("the operating system gave no random bytes");
-    bytes
+/// `N` random bytes from the operating system, or [`RandomError`] when it has none to give. The
+/// server never panics for that: the call that needed them is refused and the error is logged.
+pub(crate) fn random<const N: usize>() -> Result<[u8; N], RandomError> {
+    #[cfg(test)]
+    if failing::is_on() {
+        return Err(RandomError::new());
+    }
+    skakel_wire::pairing::random_bytes()
+}
+
+/// Makes `random` fail on this thread while the guard lives, so a test can see what the server does
+/// when the operating system has no random bytes.
+#[cfg(test)]
+pub(crate) mod failing {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn is_on() -> bool {
+        ON.with(Cell::get)
+    }
+
+    pub(crate) struct Guard;
+
+    pub(crate) fn random_fails() -> Guard {
+        ON.with(|on| on.set(true));
+        Guard
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            ON.with(|on| on.set(false));
+        }
+    }
 }
 
 /// A client secret: 32 random bytes as base64url, without padding.
-pub(crate) fn new_secret() -> String {
-    URL_SAFE_NO_PAD.encode(random::<32>())
+pub(crate) fn new_secret() -> Result<String, RandomError> {
+    Ok(URL_SAFE_NO_PAD.encode(random::<32>()?))
 }
 
 /// An id such as `client-3fa9c01b2e`.
-pub(crate) fn new_id(prefix: &str) -> String {
-    format!("{prefix}-{}", hex_lower(&random::<5>()))
+pub(crate) fn new_id(prefix: &str) -> Result<String, RandomError> {
+    Ok(format!("{prefix}-{}", hex_lower(&random::<5>()?)))
 }
 
 /// The first id `make` gives that `taken` does not claim.
-pub(crate) fn first_free(mut make: impl FnMut() -> String, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn first_free(
+    mut make: impl FnMut() -> Result<String, RandomError>,
+    taken: impl Fn(&str) -> bool,
+) -> Result<String, RandomError> {
     loop {
-        let id = make();
+        let id = make()?;
         if !taken(&id) {
-            return id;
+            return Ok(id);
         }
     }
 }
 
 /// A poll token: 32 random bytes as uppercase hex.
-pub(crate) fn new_token() -> String {
-    hex_upper(&random::<32>())
+pub(crate) fn new_token() -> Result<String, RandomError> {
+    Ok(hex_upper(&random::<32>()?))
 }
 
 pub(crate) fn hex_upper(bytes: &[u8]) -> String {
@@ -136,14 +172,14 @@ mod tests {
     fn first_free_skips_the_ids_that_are_taken() {
         let mut ids = ["a", "b", "c"].into_iter().map(String::from);
 
-        let id = first_free(|| ids.next().unwrap(), |id| id != "c");
+        let id = first_free(|| Ok(ids.next().unwrap()), |id| id != "c");
 
-        assert_eq!(id, "c");
+        assert_eq!(id, Ok("c".to_owned()));
     }
 
     #[test]
     fn secrets_are_43_url_safe_characters_and_never_repeat() {
-        let secret = new_secret();
+        let secret = new_secret().unwrap();
 
         assert_eq!(secret.len(), 43);
         assert!(
@@ -151,17 +187,17 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         );
-        assert_ne!(secret, new_secret());
+        assert_ne!(secret, new_secret().unwrap());
     }
 
     #[test]
     fn ids_and_tokens_have_their_pinned_shapes() {
-        let id = new_id("client");
+        let id = new_id("client").unwrap();
 
         assert!(id.starts_with("client-"));
         assert_eq!(id.len(), "client-".len() + 10);
-        assert_eq!(new_token().len(), 64);
-        assert!(new_token().bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(new_token().unwrap().len(), 64);
+        assert!(new_token().unwrap().bytes().all(|b| b.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -260,5 +296,19 @@ mod properties {
         fn utf16_length_is_the_encoders(text in ".{0,100}") {
             prop_assert_eq!(utf16_len(&text), text.encode_utf16().count());
         }
+    }
+
+    #[test]
+    fn no_random_bytes_is_an_error_not_a_panic() {
+        let _guard = failing::random_fails();
+
+        assert_eq!(random::<4>(), Err(RandomError::new()));
+        assert_eq!(new_secret(), Err(RandomError::new()));
+        assert_eq!(new_id("client"), Err(RandomError::new()));
+        assert_eq!(new_token(), Err(RandomError::new()));
+        assert_eq!(
+            first_free(|| new_id("x"), |_| false),
+            Err(RandomError::new())
+        );
     }
 }

@@ -35,6 +35,19 @@ pub const DIGITS: usize = 6;
 #[non_exhaustive]
 pub struct RandomError;
 
+impl RandomError {
+    /// The error for a source of random numbers that gave none.
+    pub const fn new() -> Self {
+        RandomError
+    }
+}
+
+impl Default for RandomError {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl std::fmt::Display for RandomError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("The operating system gave no random bytes.")
@@ -43,12 +56,17 @@ impl std::fmt::Display for RandomError {
 
 impl std::error::Error for RandomError {}
 
+/// `N` random bytes from the operating system, or [`RandomError`] when it has none to give.
+pub fn random_bytes<const N: usize>() -> Result<[u8; N], RandomError> {
+    let mut bytes = [0u8; N];
+    getrandom::fill(&mut bytes).map_err(|_| RandomError)?;
+    Ok(bytes)
+}
+
 /// A fresh random nonce: 32 bytes as base64url, without padding, or [`RandomError`] when the
 /// operating system has no random numbers to give.
 pub fn new_nonce() -> Result<String, RandomError> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|_| RandomError)?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
+    Ok(URL_SAFE_NO_PAD.encode(random_bytes::<32>()?))
 }
 
 /// The commitment a client sends before revealing its nonce: the uppercase hex SHA-256 of its

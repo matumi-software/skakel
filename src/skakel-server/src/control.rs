@@ -88,11 +88,7 @@ fn certificates(certificates: Certificates) -> ConnectResponse {
 }
 
 fn closing(reason: Reason) -> ConnectResponse {
-    let reason = match reason {
-        Reason::Revoked => ClosingReason::Revoked,
-        Reason::Rotated => ClosingReason::Rotated,
-        _ => ClosingReason::Stopping,
-    };
+    let reason = ClosingReason::from(reason);
     ConnectResponse {
         message: Some(connect_response::Message::Closing(Closing {
             reason: reason as i32,

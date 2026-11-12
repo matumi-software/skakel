@@ -8,6 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::sign::CertifiedKey;
+use skakel_wire::pairing::RandomError;
 use skakel_wire::{ACCESS_TOKEN_LIFETIME, fingerprints};
 use time::OffsetDateTime;
 use tokio::sync::watch;
@@ -165,6 +166,19 @@ impl ServerState {
     ) -> Result<Arc<Self>, ServerError> {
         let now = OffsetDateTime::now_utc();
         let state = match store.load().await.map_err(ServerError::Store)? {
+            Some(state) if state.held_signing_keys() => {
+                // Access tokens are no longer signed, so the keys a server of an earlier build left
+                // in the saved state are dead weight and a private key at rest, in whatever the
+                // store keeps them: save once without them. When that fails the next save drops
+                // them, so it is no reason to stop.
+                let state = state.without_signing_keys();
+                if let Err(error) = store.save(&state).await {
+                    log::warn!(
+                        "The saved state still holds old signing keys and could not be saved without them: {error}"
+                    );
+                }
+                state
+            }
             Some(state) => state,
             None => {
                 let state = SkakelState {
@@ -175,6 +189,8 @@ impl ServerState {
                         now,
                     )?,
                     next_certificate: None,
+                    legacy_signing_key: None,
+                    legacy_retired_signing_keys: None,
                 };
                 store.save(&state).await.map_err(ServerError::Store)?;
                 state
@@ -247,7 +263,11 @@ impl ServerState {
     }
 
     #[cfg(test)]
-    pub(crate) fn issue_token(&self, client_id: &str, generation: u32) -> (String, OffsetDateTime) {
+    pub(crate) fn issue_token(
+        &self,
+        client_id: &str,
+        generation: u32,
+    ) -> Result<(String, OffsetDateTime), RandomError> {
         self.issue_token_for(client_id, generation, ACCESS_TOKEN_LIFETIME)
     }
 
@@ -257,7 +277,7 @@ impl ServerState {
         client_id: &str,
         generation: u32,
         lifetime: std::time::Duration,
-    ) -> (String, OffsetDateTime) {
+    ) -> Result<(String, OffsetDateTime), RandomError> {
         let loaded = self.loaded();
         self.tokens.issue(
             client_id,
@@ -321,16 +341,20 @@ impl ServerState {
         if clean.is_empty() {
             return Err(ServerError::InvalidName);
         }
-        let secret = util::new_secret();
+        let secret = util::new_secret()?;
         let secret_hash = util::hash_secret(&secret);
         let kept = self.keep_client_secrets.then(|| secret.clone());
         let mut registered = None;
+        let mut no_random = false;
         self.update(|state| {
             // An id another client already has is skipped, however unlikely it is.
-            let id = util::first_free(
+            let Ok(id) = util::first_free(
                 || util::new_id("client"),
                 |id| state.clients.iter().any(|c| c.id == id),
-            );
+            ) else {
+                no_random = true;
+                return None;
+            };
             let mut next = state.clone();
             next.clients.push(ClientRecord {
                 id: id.clone(),
@@ -344,6 +368,9 @@ impl ServerState {
             Some(next)
         })
         .await?;
+        if no_random {
+            return Err(RandomError::new().into());
+        }
         Ok(NewClient {
             client_id: registered.expect("the change ran"),
             name: clean,
@@ -355,7 +382,7 @@ impl ServerState {
         &self,
         client_id: &str,
     ) -> Result<Option<String>, ServerError> {
-        let secret = util::new_secret();
+        let secret = util::new_secret()?;
         let keep = self.keep_client_secrets;
         let hash = util::hash_secret(&secret);
         let mut found = false;
@@ -595,7 +622,7 @@ mod tests {
     async fn rotating_a_secret_raises_the_generation_and_stales_the_old_token() {
         let state = state().await;
         let client = state.register_client("lab pc").await.unwrap();
-        let (token, _) = state.issue_token(&client.client_id, 1);
+        let (token, _) = state.issue_token(&client.client_id, 1).unwrap();
         assert!(state.authenticate(&token).is_some());
 
         let secret = state
@@ -617,7 +644,7 @@ mod tests {
     async fn revoking_a_client_refuses_its_tokens_at_once_and_only_once() {
         let state = state().await;
         let client = state.register_client("lab pc").await.unwrap();
-        let (token, _) = state.issue_token(&client.client_id, 1);
+        let (token, _) = state.issue_token(&client.client_id, 1).unwrap();
 
         assert!(state.revoke_client(&client.client_id).await.unwrap());
 
@@ -631,13 +658,13 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let first = state_with(store.clone()).await;
         let client = first.register_client("lab pc").await.unwrap();
-        let (token, _) = first.issue_token(&client.client_id, 1);
+        let (token, _) = first.issue_token(&client.client_id, 1).unwrap();
         assert!(first.authenticate(&token).is_some());
 
         let second = state_with(store).await;
 
         assert!(second.authenticate(&token).is_none());
-        let (fresh, _) = second.issue_token(&client.client_id, 1);
+        let (fresh, _) = second.issue_token(&client.client_id, 1).unwrap();
         assert!(second.authenticate(&fresh).is_some());
     }
 
@@ -645,7 +672,7 @@ mod tests {
     async fn a_token_issued_for_an_old_generation_is_refused() {
         let state = state().await;
         let client = state.register_client("lab pc").await.unwrap();
-        let (stale, _) = state.issue_token(&client.client_id, 7);
+        let (stale, _) = state.issue_token(&client.client_id, 7).unwrap();
 
         assert!(state.authenticate(&stale).is_none());
     }
@@ -771,6 +798,122 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(store.state().unwrap(), before);
+        assert_eq!(state.loaded().state, before);
+    }
+
+    /// A store that holds a state as JSON, as a database-backed store of an app would, and counts
+    /// its saves.
+    struct JsonStore {
+        held: std::sync::Mutex<Option<String>>,
+        saves: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::store::SkakelStore for JsonStore {
+        fn load(&self) -> crate::store::StoreFuture<'_, Option<SkakelState>> {
+            Box::pin(async move {
+                let held = self.held.lock().unwrap().clone();
+                Ok(held.map(|json| serde_json::from_str(&json).unwrap()))
+            })
+        }
+
+        fn save<'a>(&'a self, state: &'a SkakelState) -> crate::store::StoreFuture<'a, ()> {
+            Box::pin(async move {
+                self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                *self.held.lock().unwrap() = Some(serde_json::to_string(state).unwrap());
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn any_store_that_still_holds_old_signing_keys_is_saved_once_without_them() {
+        let first = InMemoryStore::new();
+        let made = state_with(Arc::new(first)).await;
+        let mut json = serde_json::to_value(&made.loaded().state).unwrap();
+        json["signingKey"] = serde_json::json!({"keyId": "skakel-1", "privateKey": "SECRETKEY"});
+        json["retiredSigningKeys"] =
+            serde_json::json!([{"keyId": "skakel-0", "privateKey": "OLDKEY"}]);
+        let store = Arc::new(JsonStore {
+            held: std::sync::Mutex::new(Some(json.to_string())),
+            saves: std::sync::atomic::AtomicUsize::new(0),
+        });
+
+        let state = ServerState::start(
+            store.clone(),
+            false,
+            "pi-lab".into(),
+            "test-app".into(),
+            Events::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(store.saves.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let kept = store.held.lock().unwrap().clone().unwrap();
+        assert!(
+            !kept.contains("SECRETKEY") && !kept.contains("OLDKEY"),
+            "{kept}"
+        );
+        assert_eq!(state.fingerprint(), made.fingerprint());
+
+        // A second start finds nothing to drop and saves nothing.
+        ServerState::start(
+            store.clone(),
+            false,
+            "pi-lab".into(),
+            "test-app".into(),
+            Events::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.saves.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_file_store_is_rewritten_without_the_old_signing_keys_on_start() {
+        let folder = std::env::temp_dir().join(format!(
+            "skakel-store-legacy-{}",
+            util::new_id("t").unwrap()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("state.json");
+        let made = state_with(Arc::new(InMemoryStore::new())).await;
+        let mut json = serde_json::to_value(&made.loaded().state).unwrap();
+        json["signingKey"] = serde_json::json!({"keyId": "skakel-1", "privateKey": "SECRETKEY"});
+        std::fs::write(&path, json.to_string()).unwrap();
+
+        ServerState::start(
+            Arc::new(crate::store::FileStore::new(&path)),
+            false,
+            "pi-lab".into(),
+            "test-app".into(),
+            Events::new(),
+        )
+        .await
+        .unwrap();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("SECRETKEY"), "{on_disk}");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[tokio::test]
+    async fn no_random_bytes_refuses_a_client_a_new_secret_and_a_token_without_a_panic() {
+        let state = state().await;
+        let client = state.register_client("lab pc").await.unwrap();
+        let before = state.loaded().state.clone();
+
+        let _guard = util::failing::random_fails();
+
+        assert!(matches!(
+            state.register_client("other").await,
+            Err(ServerError::Random(_))
+        ));
+        assert!(matches!(
+            state.rotate_secret(&client.client_id).await,
+            Err(ServerError::Random(_))
+        ));
+        assert!(state.issue_token(&client.client_id, 1).is_err());
         assert_eq!(state.loaded().state, before);
     }
 }

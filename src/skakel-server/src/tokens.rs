@@ -16,6 +16,7 @@ use time::OffsetDateTime;
 use tokio::time::Instant;
 
 use crate::util;
+use skakel_wire::pairing::RandomError;
 
 /// The most tokens one client holds at once. A client asks for a new one about every 28 minutes, so
 /// this is far more than it needs; past it the client's oldest are forgotten.
@@ -71,9 +72,9 @@ impl Tokens {
         generation: u32,
         lifetime: Duration,
         is_current: impl Fn(&str, u32) -> bool,
-    ) -> (String, OffsetDateTime) {
+    ) -> Result<(String, OffsetDateTime), RandomError> {
         let now = Instant::now();
-        let token = util::new_token();
+        let token = util::new_token()?;
         let expires_at = OffsetDateTime::now_utc() + lifetime;
         let mut book = self.book.lock().expect("tokens lock");
         if book.last_sweep.is_none_or(|at| at + SWEEP_EVERY <= now) {
@@ -105,7 +106,7 @@ impl Tokens {
                 expires_at,
             },
         );
-        (token, expires_at)
+        Ok((token, expires_at))
     }
 
     /// Who `token` is for, when it is one the server issued and it has not expired. Whether its
@@ -150,7 +151,7 @@ mod tests {
     async fn a_token_is_read_back_as_its_client_until_it_expires() {
         let tokens = Tokens::default();
 
-        let (token, expires_at) = tokens.issue("client-1", 3, HALF_HOUR, current);
+        let (token, expires_at) = tokens.issue("client-1", 3, HALF_HOUR, current).unwrap();
 
         let principal = tokens.read(&token).expect("live");
         assert_eq!(principal.client_id, "client-1");
@@ -166,8 +167,8 @@ mod tests {
     async fn tokens_are_64_hex_characters_that_never_repeat() {
         let tokens = Tokens::default();
 
-        let (one, _) = tokens.issue("client-1", 1, HALF_HOUR, current);
-        let (two, _) = tokens.issue("client-1", 1, HALF_HOUR, current);
+        let (one, _) = tokens.issue("client-1", 1, HALF_HOUR, current).unwrap();
+        let (two, _) = tokens.issue("client-1", 1, HALF_HOUR, current).unwrap();
 
         assert_eq!(one.len(), 64);
         assert!(one.bytes().all(|b| b.is_ascii_hexdigit()));
@@ -177,7 +178,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_token_the_server_did_not_issue_is_not_read() {
         let tokens = Tokens::default();
-        let (token, _) = tokens.issue("client-1", 1, HALF_HOUR, current);
+        let (token, _) = tokens.issue("client-1", 1, HALF_HOUR, current).unwrap();
 
         assert!(tokens.read("").is_none());
         assert!(tokens.read("not a token").is_none());
@@ -192,14 +193,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_oldest_tokens_of_a_client_are_forgotten_past_the_cap() {
         let tokens = Tokens::default();
-        let (first, _) = tokens.issue("client-1", 1, HALF_HOUR, current);
-        let (other, _) = tokens.issue("client-2", 1, HALF_HOUR, current);
+        let (first, _) = tokens.issue("client-1", 1, HALF_HOUR, current).unwrap();
+        let (other, _) = tokens.issue("client-2", 1, HALF_HOUR, current).unwrap();
         tokio::time::advance(Duration::from_millis(1)).await;
 
         let mut last = String::new();
         for _ in 0..MAX_TOKENS_PER_CLIENT {
             tokio::time::advance(Duration::from_millis(1)).await;
-            last = tokens.issue("client-1", 1, HALF_HOUR, current).0;
+            last = tokens.issue("client-1", 1, HALF_HOUR, current).unwrap().0;
         }
 
         assert!(tokens.read(&first).is_none());
@@ -211,12 +212,16 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn expired_tokens_and_those_of_gone_clients_are_swept_as_new_ones_are_issued() {
         let tokens = Tokens::default();
-        tokens.issue("client-1", 1, Duration::from_secs(10), current);
-        tokens.issue("client-2", 1, HALF_HOUR, current);
-        tokens.issue("client-3", 1, HALF_HOUR, current);
+        tokens
+            .issue("client-1", 1, Duration::from_secs(10), current)
+            .unwrap();
+        tokens.issue("client-2", 1, HALF_HOUR, current).unwrap();
+        tokens.issue("client-3", 1, HALF_HOUR, current).unwrap();
         tokio::time::advance(Duration::from_secs(61)).await;
 
-        tokens.issue("client-4", 1, HALF_HOUR, |id, _| id != "client-3");
+        tokens
+            .issue("client-4", 1, HALF_HOUR, |id, _| id != "client-3")
+            .unwrap();
 
         assert_eq!(tokens.len(), 2);
     }
@@ -224,9 +229,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn forgetting_a_client_drops_all_its_tokens_and_only_its() {
         let tokens = Tokens::default();
-        let (a, _) = tokens.issue("client-1", 1, HALF_HOUR, current);
-        let (b, _) = tokens.issue("client-1", 1, HALF_HOUR, current);
-        let (c, _) = tokens.issue("client-2", 1, HALF_HOUR, current);
+        let (a, _) = tokens.issue("client-1", 1, HALF_HOUR, current).unwrap();
+        let (b, _) = tokens.issue("client-1", 1, HALF_HOUR, current).unwrap();
+        let (c, _) = tokens.issue("client-2", 1, HALF_HOUR, current).unwrap();
 
         tokens.forget_client("client-1");
 

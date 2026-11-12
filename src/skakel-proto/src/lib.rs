@@ -27,3 +27,55 @@ pub mod v2 {
 }
 
 pub use prost;
+
+use skakel_wire::{Reason, SkakelHello};
+
+/// The reasons the control channel can say a call is closing for are three of [`Reason`]; any other
+/// reason is not one the server closes calls for, so it counts as stopping.
+impl From<Reason> for v2::ClosingReason {
+    fn from(reason: Reason) -> Self {
+        match reason {
+            Reason::Revoked => Self::Revoked,
+            Reason::Rotated => Self::Rotated,
+            _ => Self::Stopping,
+        }
+    }
+}
+
+/// What a client does with a closing reason: revoked and rotated are those reasons, and anything
+/// else, an unspecified value included, counts as stopping.
+impl From<v2::ClosingReason> for Reason {
+    fn from(reason: v2::ClosingReason) -> Self {
+        match reason {
+            v2::ClosingReason::Revoked => Self::Revoked,
+            v2::ClosingReason::Rotated => Self::Rotated,
+            _ => Self::Stopping,
+        }
+    }
+}
+
+/// The reason a `Closing` message's `reason` number stands for. A number this end does not know
+/// counts as stopping, as the protocol says.
+pub fn closing_reason(number: i32) -> Reason {
+    v2::ClosingReason::try_from(number)
+        .map(Reason::from)
+        .unwrap_or(Reason::Stopping)
+}
+
+impl From<v2::HelloResponse> for SkakelHello {
+    fn from(hello: v2::HelloResponse) -> Self {
+        SkakelHello {
+            server: hello.server,
+            client_id: hello.client_id,
+        }
+    }
+}
+
+impl From<SkakelHello> for v2::HelloResponse {
+    fn from(hello: SkakelHello) -> Self {
+        v2::HelloResponse {
+            server: hello.server,
+            client_id: hello.client_id,
+        }
+    }
+}
