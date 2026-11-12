@@ -203,19 +203,20 @@ A client paired with several servers holds one client ID and secret for each.
   form-encoded as RFC 6749 says, so a literal `&` in either is written `%26`; a part with more than
   one field is refused), and answers `{ "access_token", "token_type": "Bearer", "expires_in" }`. Any other grant is `unsupported_grant_type`
   (400), a body that is not a form is `invalid_request` (400).
-- Access tokens last 30 minutes and are JWTs signed with a key whose id is in the token's `kid`
-  header. Clients do not read what is inside a token, so the algorithm is the server's own. Skakel's
-  server signs with ECDSA P-256 (`ES256`); the .NET server of Skakel 0.1 signed with RSA (`RS256`).
-  A server also takes tokens signed by the keys it replaced, until the tokens they signed would have
-  expired.
+- Access tokens last 30 minutes. A token is an opaque string and a client never reads what is in
+  it, so what it is, is the server's own business. Skakel's server issues 256 random bits as hex
+  and remembers in memory who each one is for, so it has no signing key, and a server that
+  restarts forgets its tokens: the next call is refused with `TOKEN_REFUSED` and the client gets a
+  new one, as it does for any refused token. (The .NET server of Skakel 0.1 signed JWTs with RSA,
+  and 0.2.1's Rust server with ECDSA; a client could not tell.)
 - A client takes a token to last what `expires_in` says, held to between 2 and 30 minutes.
-- Every token carries the issuer `https://skakel.invalid/`, whatever address or name the client
-  used, so a token issued at one of a server's addresses works at all of them. The server publishes
-  no OpenID Connect discovery document and no key set; the token endpoint is all there is.
-- Each registered client has a **generation**, which the server writes into its tokens as the claim
-  `skakel_generation`. Rotating a client's secret raises its generation, and revoking a client
-  removes it. Every token and call from an older generation, or from a removed client, is
-  refused, and every call still running is ended at once (see "Errors on gRPC calls").
+- A token works at every address and name of the server, because the server looks it up and does
+  not check where it was asked for. The server publishes no OpenID Connect discovery document and
+  no key set; the token endpoint is all there is.
+- Each registered client has a **generation**, which the server records with each token it issues.
+  Rotating a client's secret raises its generation, and revoking a client removes it. Every token
+  and call from an older generation, or from a removed client, is refused, and every call still
+  running is ended at once (see "Errors on gRPC calls").
 - `ControlService.Hello` with a token answers `server` and `client_id`. An app's Test button uses
   it to check credentials, and with them that gRPC works.
 

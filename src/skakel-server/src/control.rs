@@ -15,11 +15,11 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::crypto::Principal;
 use crate::grpc::{ending, read_failed, token_refused};
 use crate::http::ClientPrincipal;
 use crate::server::Shared;
 use crate::sessions::{ControlOut, SessionGuard, certificates_of};
+use crate::tokens::Principal;
 
 /// How long the `closing` message gets to leave before the call ends.
 const CLOSING_TIMEOUT: Duration = Duration::from_secs(2);

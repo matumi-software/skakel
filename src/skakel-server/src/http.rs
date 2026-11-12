@@ -28,9 +28,9 @@ use skakel_protocol::{
 };
 use time::OffsetDateTime;
 
-use crate::crypto::Principal;
 use crate::pairing::Reveal;
 use crate::server::Shared;
+use crate::tokens::Principal;
 use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token, clean_client_name, utf16_len};
 
 /// The largest body the token and pairing paths read.
@@ -444,17 +444,10 @@ async fn token(
         shared.limits.count_failure(&client_id, remote.ip());
         return invalid_client();
     };
-    let Ok((access_token, expires_at)) =
+    let (access_token, expires_at) =
         shared
             .state
-            .issue_token_for(&client_id, generation, shared.token_lifetime)
-    else {
-        return oauth_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            "The token could not be issued.",
-        );
-    };
+            .issue_token_for(&client_id, generation, shared.token_lifetime);
     let expires_in = (expires_at - OffsetDateTime::now_utc())
         .whole_seconds()
         .clamp(0, ACCESS_TOKEN_LIFETIME.as_secs() as i64);

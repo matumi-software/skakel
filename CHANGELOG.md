@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `skakel-server`: access tokens are random strings the server remembers, not signed JWTs. Clients
+  never read a token, so nothing changes for them, but a server that restarts forgets its tokens
+  and clients ask for new ones (they already do on `TOKEN_REFUSED`). Breaking for apps: the signing
+  key is gone, so `Keys::rotate_signing_key`, `KeysView::signing_key_id`,
+  `KeysView::signing_key_since`, `KeysView::retired_keys_until`, `store::KeyRecord`,
+  `SkakelState::signing_key`, `SkakelState::retired_signing_keys` and `ISSUER` are removed, and
+  `ServerEvent::Keys` now means the certificate changed. A state file that still holds key records
+  loads, and the next save drops them. `Principal` moves to a module of its own and keeps its
+  name and fields.
 - `skakel-server`: `Debug` of `NewClient`, `ClientRecord`, `KeyRecord` and `CertificateRecord` no
   longer prints client secrets or private keys. `FileStore` writes the state to a temporary file of
   its own, readable by the server's account only (mode 0600 on Unix), syncs it and renames it over

@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -13,16 +12,14 @@ use skakel_protocol::{ACCESS_TOKEN_LIFETIME, fingerprints};
 use time::OffsetDateTime;
 use tokio::sync::watch;
 
-use crate::crypto::{self, Principal, Signer, Verifier};
+use crate::crypto;
 use crate::error::ServerError;
 use crate::events::{Events, ServerEvent};
 use crate::store::{
-    CertificateRecord, ClientRecord, KeyRecord, NextCertificateRecord, SkakelState, SkakelStore,
+    CertificateRecord, ClientRecord, NextCertificateRecord, SkakelState, SkakelStore,
 };
+use crate::tokens::{Principal, Tokens};
 use crate::util;
-
-/// Tokens of a replaced signing key are taken a little past the lifetime of a token.
-const RETIRED_KEY_MARGIN: Duration = Duration::from_secs(5 * 60);
 
 /// A client as the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +60,7 @@ impl std::fmt::Debug for NewClient {
     }
 }
 
-/// The certificate and token key now in use.
+/// The certificate now in use, and the next one during a handover.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeysView {
     /// The fingerprint of the certificate the server presents.
@@ -72,12 +69,6 @@ pub struct KeysView {
     pub next_fingerprint: Option<String>,
     /// When the next one was prepared.
     pub next_prepared_at: Option<OffsetDateTime>,
-    /// The id of the key that signs tokens.
-    pub signing_key_id: String,
-    /// When that key was made.
-    pub signing_key_since: OffsetDateTime,
-    /// Until when tokens of replaced keys are still taken.
-    pub retired_keys_until: Option<OffsetDateTime>,
 }
 
 /// What a certificate switch did.
@@ -97,8 +88,6 @@ pub(crate) struct Loaded {
     pub certified: Arc<CertifiedKey>,
     pub fingerprint: String,
     pub next_fingerprint: Option<String>,
-    pub signer: Signer,
-    pub verifiers: Vec<Verifier>,
 }
 
 impl Loaded {
@@ -108,18 +97,11 @@ impl Loaded {
             Some(next) => Some(certified_fingerprint(&next.certificate)?),
             None => None,
         };
-        let signer = Signer::load(&state.signing_key)?;
-        let mut verifiers = vec![Verifier::load(&state.signing_key)?];
-        for retired in &state.retired_signing_keys {
-            verifiers.push(Verifier::load(retired)?);
-        }
         Ok(Self {
             state,
             certified: Arc::new(certified),
             fingerprint,
             next_fingerprint,
-            signer,
-            verifiers,
         })
     }
 
@@ -164,6 +146,7 @@ pub(crate) struct ServerState {
     write: tokio::sync::Mutex<()>,
     current: watch::Sender<Arc<Loaded>>,
     last_seen: Mutex<HashMap<String, OffsetDateTime>>,
+    tokens: Tokens,
     raised: Mutex<(Vec<ClientView>, KeysView)>,
     pub(crate) events: Events,
 }
@@ -178,22 +161,10 @@ impl ServerState {
     ) -> Result<Arc<Self>, ServerError> {
         let now = OffsetDateTime::now_utc();
         let state = match store.load().await.map_err(ServerError::Store)? {
-            Some(mut state) => {
-                if state
-                    .retired_signing_keys
-                    .iter()
-                    .any(|r| r.accept_until.is_some_and(|until| until <= now))
-                {
-                    state.retired_signing_keys = unexpired(&state.retired_signing_keys, now);
-                    store.save(&state).await.map_err(ServerError::Store)?;
-                }
-                state
-            }
+            Some(state) => state,
             None => {
                 let state = SkakelState {
                     clients: vec![],
-                    signing_key: crypto::create_signing_key(now)?,
-                    retired_signing_keys: vec![],
                     certificate: crypto::create_certificate(
                         &certificate_host_name,
                         &organization,
@@ -215,6 +186,7 @@ impl ServerState {
             write: tokio::sync::Mutex::new(()),
             current: watch::Sender::new(loaded),
             last_seen: Mutex::new(HashMap::new()),
+            tokens: Tokens::default(),
             raised: Mutex::new(raised),
             events,
         }))
@@ -244,12 +216,11 @@ impl ServerState {
         self.loaded().find(client_id).cloned()
     }
 
-    /// A token's principal, when its signature, issuer and lifetime hold and its client still
+    /// A token's principal, when the server issued it, it has not expired and its client still
     /// exists at the generation it was issued for.
     pub(crate) fn authenticate(&self, token: &str) -> Option<Principal> {
-        let loaded = self.loaded();
-        let principal = crypto::read_token(&loaded.verifiers, token, OffsetDateTime::now_utc())?;
-        loaded
+        let principal = self.tokens.read(token)?;
+        self.loaded()
             .is_current(&principal.client_id, principal.generation)
             .then_some(principal)
     }
@@ -269,11 +240,7 @@ impl ServerState {
     }
 
     #[cfg(test)]
-    pub(crate) fn issue_token(
-        &self,
-        client_id: &str,
-        generation: u32,
-    ) -> Result<(String, OffsetDateTime), ServerError> {
+    pub(crate) fn issue_token(&self, client_id: &str, generation: u32) -> (String, OffsetDateTime) {
         self.issue_token_for(client_id, generation, ACCESS_TOKEN_LIFETIME)
     }
 
@@ -283,15 +250,14 @@ impl ServerState {
         client_id: &str,
         generation: u32,
         lifetime: std::time::Duration,
-    ) -> Result<(String, OffsetDateTime), ServerError> {
+    ) -> (String, OffsetDateTime) {
         let loaded = self.loaded();
-        Ok(crypto::issue_token(
-            &loaded.signer,
+        self.tokens.issue(
             client_id,
             generation,
-            OffsetDateTime::now_utc(),
             lifetime.min(ACCESS_TOKEN_LIFETIME),
-        )?)
+            |id, generation| loaded.is_current(id, generation),
+        )
     }
 
     /// Applies `change` to the state, saves the result and makes it current. A change that
@@ -398,6 +364,9 @@ impl ServerState {
             Some(next)
         })
         .await?;
+        if found {
+            self.tokens.forget_client(client_id);
+        }
         Ok(found.then_some(secret))
     }
 
@@ -418,41 +387,8 @@ impl ServerState {
         })
         .await?;
         self.last_seen.lock().expect("lock").remove(client_id);
+        self.tokens.forget_client(client_id);
         Ok(found)
-    }
-
-    pub(crate) async fn rotate_signing_key(&self) -> Result<String, ServerError> {
-        let now = OffsetDateTime::now_utc();
-        let key = crypto::create_signing_key(now)?;
-        let id = key.key_id.clone();
-        self.update(move |state| {
-            let mut next = state.clone();
-            let mut retired = unexpired(&state.retired_signing_keys, now);
-            let mut old = state.signing_key.clone();
-            old.accept_until = Some(now + ACCESS_TOKEN_LIFETIME + RETIRED_KEY_MARGIN);
-            retired.push(old);
-            next.signing_key = key;
-            next.retired_signing_keys = retired;
-            Some(next)
-        })
-        .await?;
-        Ok(id)
-    }
-
-    /// Drops the replaced signing keys whose time is up.
-    pub(crate) async fn prune_retired_keys(&self) -> Result<(), ServerError> {
-        let now = OffsetDateTime::now_utc();
-        self.update(|state| {
-            state
-                .retired_signing_keys
-                .iter()
-                .any(|r| r.accept_until.is_some_and(|until| until <= now))
-                .then(|| SkakelState {
-                    retired_signing_keys: unexpired(&state.retired_signing_keys, now),
-                    ..state.clone()
-                })
-        })
-        .await
     }
 
     pub(crate) async fn prepare_certificate(&self) -> Result<Option<String>, ServerError> {
@@ -558,14 +494,6 @@ impl ServerState {
     }
 }
 
-fn unexpired(retired: &[KeyRecord], now: OffsetDateTime) -> Vec<KeyRecord> {
-    retired
-        .iter()
-        .filter(|r| r.accept_until.is_none_or(|until| until > now))
-        .cloned()
-        .collect()
-}
-
 fn clients_of(loaded: &Loaded, seen: &HashMap<String, OffsetDateTime>) -> Vec<ClientView> {
     loaded
         .state
@@ -592,13 +520,6 @@ fn keys_of(loaded: &Loaded) -> KeysView {
         fingerprint: loaded.fingerprint.clone(),
         next_fingerprint: loaded.next_fingerprint.clone(),
         next_prepared_at: state.next_certificate.as_ref().map(|n| n.prepared_at),
-        signing_key_id: state.signing_key.key_id.clone(),
-        signing_key_since: state.signing_key.created_at,
-        retired_keys_until: state
-            .retired_signing_keys
-            .iter()
-            .filter_map(|r| r.accept_until)
-            .max(),
     }
 }
 
@@ -669,7 +590,7 @@ mod tests {
     async fn rotating_a_secret_raises_the_generation_and_stales_the_old_token() {
         let state = state().await;
         let client = state.register_client("lab pc").await.unwrap();
-        let (token, _) = state.issue_token(&client.client_id, 1).unwrap();
+        let (token, _) = state.issue_token(&client.client_id, 1);
         assert!(state.authenticate(&token).is_some());
 
         let secret = state
@@ -691,7 +612,7 @@ mod tests {
     async fn revoking_a_client_refuses_its_tokens_at_once_and_only_once() {
         let state = state().await;
         let client = state.register_client("lab pc").await.unwrap();
-        let (token, _) = state.issue_token(&client.client_id, 1).unwrap();
+        let (token, _) = state.issue_token(&client.client_id, 1);
 
         assert!(state.revoke_client(&client.client_id).await.unwrap());
 
@@ -701,17 +622,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_rotated_signing_key_still_takes_the_old_tokens() {
+    async fn a_token_does_not_outlive_the_server_that_issued_it() {
+        let store = Arc::new(InMemoryStore::new());
+        let first = state_with(store.clone()).await;
+        let client = first.register_client("lab pc").await.unwrap();
+        let (token, _) = first.issue_token(&client.client_id, 1);
+        assert!(first.authenticate(&token).is_some());
+
+        let second = state_with(store).await;
+
+        assert!(second.authenticate(&token).is_none());
+        let (fresh, _) = second.issue_token(&client.client_id, 1);
+        assert!(second.authenticate(&fresh).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_token_issued_for_an_old_generation_is_refused() {
         let state = state().await;
         let client = state.register_client("lab pc").await.unwrap();
-        let (token, _) = state.issue_token(&client.client_id, 1).unwrap();
-        let before = state.keys().signing_key_id;
+        let (stale, _) = state.issue_token(&client.client_id, 7);
 
-        let after = state.rotate_signing_key().await.unwrap();
-
-        assert_ne!(before, after);
-        assert!(state.authenticate(&token).is_some());
-        assert!(state.keys().retired_keys_until.is_some());
+        assert!(state.authenticate(&stale).is_none());
     }
 
     #[tokio::test]
@@ -798,7 +729,7 @@ mod tests {
             .unwrap();
 
         state.register_client("lab pc").await.unwrap();
-        state.rotate_signing_key().await.unwrap();
+        state.prepare_certificate().await.unwrap();
 
         assert!(matches!(listener.try_recv(), Ok(ServerEvent::Clients(c)) if c.len() == 1));
         assert!(matches!(listener.try_recv(), Ok(ServerEvent::Keys(_))));

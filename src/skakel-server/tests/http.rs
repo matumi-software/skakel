@@ -7,22 +7,12 @@ mod common;
 use std::time::Duration;
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use common::*;
 use serde_json::{Value, json};
 use skakel_pairing::{commit, compute, new_nonce};
 use skakel_protocol::fingerprints;
 use skakel_server::{Approval, ClientPrincipal, InMemoryStore, ServerEvent, SkakelServerBuilder};
 use tokio::net::UdpSocket;
-
-fn part(token: &str, index: usize) -> Value {
-    serde_json::from_slice(
-        &URL_SAFE_NO_PAD
-            .decode(token.split('.').nth(index).unwrap())
-            .unwrap(),
-    )
-    .unwrap()
-}
 
 // ---- info and discovery ----
 
@@ -584,14 +574,9 @@ async fn the_token_endpoint_issues_a_thirty_minute_token_for_the_client_and_its_
     let expires_in = body["expires_in"].as_i64().unwrap();
     assert!((1795..=1800).contains(&expires_in), "{expires_in}");
     let token = body["access_token"].as_str().unwrap();
-    let claims = part(token, 1);
-    assert_eq!(claims["sub"], client.client_id.as_str());
-    assert_eq!(claims["skakel_generation"], "1");
-    assert_eq!(claims["iss"], "https://skakel.invalid/");
-    assert_eq!(
-        part(token, 0)["kid"],
-        server.keys().view().signing_key_id.as_str()
-    );
+    // An opaque token: 256 random bits as hex, not something a client can read.
+    assert_eq!(token.len(), 64, "{token}");
+    assert!(token.bytes().all(|b| b.is_ascii_hexdigit()), "{token}");
 }
 
 #[tokio::test]

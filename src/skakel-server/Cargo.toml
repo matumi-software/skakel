@@ -43,7 +43,6 @@ tower-service = "0.3.3"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 # Signs the access tokens (ECDSA P-256) and checks them.
-ring = "0.17.14"
 # The self-signed certificate.
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 serde_urlencoded = "0.7.1"

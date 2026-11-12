@@ -1635,7 +1635,6 @@ dependencies = [
  "log",
  "prost",
  "rcgen",
- "ring",
  "rustls",
  "serde",
  "serde_json",

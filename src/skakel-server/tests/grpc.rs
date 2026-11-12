@@ -90,11 +90,10 @@ async fn hello_refuses_no_token_a_bad_one_and_those_of_a_rotated_or_revoked_clie
 }
 
 #[tokio::test]
-async fn a_token_from_before_a_signing_key_rotation_still_works_and_one_from_after_does_too() {
+async fn a_token_still_works_beside_one_issued_to_the_same_client_after_it() {
     let server = start().await;
     let (client, old) = client_with_token(&server, "bench-1").await;
 
-    server.keys().rotate_signing_key().await.unwrap();
     let new = token_for(&server, &client.client_id, &client.client_secret).await;
     let connection = grpc(&server).await;
     let mut control = control(&connection);
