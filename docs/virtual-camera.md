@@ -178,7 +178,9 @@ finds. Only one producer should write a camera at a time; two would interleave t
 
 **The idle frame** works the same way with the idle sequence and the idle slot: store writing, fence,
 write, store the next version (1, 2, ...). A producer that finds the idle sequence at writing (a
-producer that died mid-write) counts on from 0.
+producer that died mid-write) has lost the version a reader last took, so it counts on from the
+current time in milliseconds since 1970 instead of from 0. That is above any version a counter
+reaches, so a reader never mistakes the new idle frame for the one it already has.
 
 **Attaching** is: write the idle timeout and process id, then store 1 in the producer state with
 release; then, if the app set an idle frame, write it. **Detaching** (the producer is disposed or

@@ -102,10 +102,13 @@ impl Frames {
                 return;
             }
         };
+        // SAFETY: the reader goes into `Link` before the section, so it is dropped first, and the
+        // regions used here end with this function or with the reader.
+        let region = unsafe { section.region() };
         if created {
-            layout::initialize(&section.region(), &format);
+            layout::initialize(&region, &format);
         }
-        match FrameReader::open(section.region()) {
+        match FrameReader::open(region) {
             Ok(reader) if reader.format() == format => {
                 log(&format!(
                     "{} {name} for {}x{} at {}/{}",
@@ -147,10 +150,38 @@ fn builtin_idle(format: &Format) -> Vec<u8> {
     solid_nv12(format.width, format.height, 24, 24, 24)
 }
 
+/// The row pitch to copy a `width` by `height` NV12 frame with, from what a 2-D buffer reported:
+/// its pitch (negative for a bottom-up buffer, which this source cannot fill) and how many bytes
+/// follow its first row. None when the pitch is negative or shorter than a row, or the bytes do not
+/// reach the end of the chroma plane. Nothing here can overflow, whatever the buffer says.
+pub fn usable_pitch(pitch: i32, width: usize, height: usize, available: usize) -> Option<usize> {
+    let pitch = usize::try_from(pitch).ok().filter(|&p| p >= width)?;
+    let rows = height.checked_add(height / 2)?;
+    // The last row needs `width` bytes only, not a whole pitch.
+    let needed = pitch.checked_mul(rows)?.checked_sub(pitch - width)?;
+    (available >= needed).then_some(pitch)
+}
+
 /// Copies a tightly packed NV12 frame into a buffer whose rows are `pitch` bytes apart, the chroma
-/// plane straight after the luma plane's `height` rows.
-pub fn copy_nv12_pitched(src: &[u8], width: usize, height: usize, dst: &mut [u8], pitch: usize) {
-    assert!(pitch >= width && dst.len() >= pitch * (height + height / 2) - (pitch - width));
+/// plane straight after the luma plane's `height` rows. Returns false and copies nothing when `pitch`
+/// or `dst` cannot hold the frame (see `usable_pitch`).
+pub fn copy_nv12_pitched(
+    src: &[u8],
+    width: usize,
+    height: usize,
+    dst: &mut [u8],
+    pitch: usize,
+) -> bool {
+    let rows = height + height / 2;
+    if pitch < width
+        || src.len() < width * rows
+        || pitch
+            .checked_mul(rows)
+            .and_then(|n| n.checked_sub(pitch - width))
+            .is_none_or(|needed| dst.len() < needed)
+    {
+        return false;
+    }
     for (row, line) in src
         .chunks_exact(width)
         .take(height + height / 2)
@@ -158,6 +189,7 @@ pub fn copy_nv12_pitched(src: &[u8], width: usize, height: usize, dst: &mut [u8]
     {
         dst[row * pitch..row * pitch + width].copy_from_slice(line);
     }
+    true
 }
 
 #[cfg(test)]
@@ -220,7 +252,7 @@ mod tests {
         let (w, h, pitch) = (4, 2, 6);
         let src: Vec<u8> = (1..=12).collect();
         let mut dst = vec![0; pitch * 3];
-        copy_nv12_pitched(&src, w, h, &mut dst, pitch);
+        assert!(copy_nv12_pitched(&src, w, h, &mut dst, pitch));
         assert_eq!(
             dst,
             [1, 2, 3, 4, 0, 0, 5, 6, 7, 8, 0, 0, 9, 10, 11, 12, 0, 0]
@@ -231,8 +263,35 @@ mod tests {
     fn copies_a_packed_frame_as_is() {
         let src: Vec<u8> = (0..384).map(|i| i as u8).collect();
         let mut dst = vec![0; 384];
-        copy_nv12_pitched(&src, 16, 16, &mut dst, 16);
+        assert!(copy_nv12_pitched(&src, 16, 16, &mut dst, 16));
         assert_eq!(src, dst);
+    }
+
+    #[test]
+    fn refuses_a_pitch_a_buffer_cannot_have() {
+        // Bottom-up buffers report a negative pitch; cast to usize it was a huge number.
+        assert_eq!(usable_pitch(-1280, 1280, 720, usize::MAX), None);
+        assert_eq!(usable_pitch(i32::MIN, 16, 16, usize::MAX), None);
+        // Shorter than a row.
+        assert_eq!(usable_pitch(8, 16, 16, usize::MAX), None);
+        // Too few bytes after the first row, and sizes that would overflow.
+        assert_eq!(usable_pitch(16, 16, 16, 383), None);
+        assert_eq!(usable_pitch(i32::MAX, 16, usize::MAX, usize::MAX), None);
+        // The right ones: the last row needs only `width` bytes.
+        assert_eq!(usable_pitch(16, 16, 16, 384), Some(16));
+        assert_eq!(usable_pitch(24, 16, 16, 24 * 24 - 8), Some(24));
+    }
+
+    #[test]
+    fn copies_nothing_into_a_buffer_too_small() {
+        let src = vec![1u8; 384];
+        let mut dst = vec![0; 100];
+        assert!(!copy_nv12_pitched(&src, 16, 16, &mut dst, 16));
+        assert!(dst.iter().all(|&b| b == 0));
+        let mut dst = vec![0; 384];
+        assert!(!copy_nv12_pitched(&src, 16, 16, &mut dst, 8));
+        assert!(!copy_nv12_pitched(&src[..10], 16, 16, &mut dst, 16));
+        assert!(!copy_nv12_pitched(&src, 16, 16, &mut dst, usize::MAX));
     }
 
     #[test]
