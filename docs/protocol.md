@@ -629,6 +629,8 @@ round: both ends update together, and each tells a person so through the version
 | `Certificates.fingerprint`, `next_fingerprint` and `NextCertificateReceived.fingerprint` are colon-separated hex strings | The same fields are `bytes`, the 32 bytes of the SHA-256; empty means none. Discovery and info JSON keep the colon form |
 | A serial `line_settings` change is answered by an echo of its settings, matched by what it asked for and by order | The change carries a nonzero `request_id` and the answer (`line_settings` or `error`) carries it back; `error` has a `request_id` too (0 for the port's own errors) |
 | TLS 1.2 and 1.3 | TLS 1.3 only |
+| The pairing code is 6 digits from a `|`-joined hash of the fingerprint and both nonces (`skakel-pair-v1`) | 8 digits from a length-prefixed hash that also covers the client name (`skakel-pair-v2`, commitment `skakel-commit-v2`); see "Pairing" |
+| Name and version limits count UTF-16 code units; discovery answers use .NET-style JSON escaping | The limits count Unicode scalar values and the answer is plain JSON (non-ASCII is UTF-8) |
 | No rule for removed fields | A removed field is `reserved` by number and name, and numbers are not reused ("Versions") |
 
 ## Not in version 3
