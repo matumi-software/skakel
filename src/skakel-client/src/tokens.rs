@@ -25,10 +25,19 @@ pub(crate) const MIN_LIFETIME: Duration = Duration::from_secs(2 * 60);
 pub(crate) const MAX_LIFETIME: Duration = ACCESS_TOKEN_LIFETIME;
 
 /// A token and when it expires.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Token {
     pub value: String,
     pub expires_at: Instant,
+}
+
+/// Never the token itself, so a log line cannot leak it.
+impl std::fmt::Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Token")
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) struct TokenClient {
