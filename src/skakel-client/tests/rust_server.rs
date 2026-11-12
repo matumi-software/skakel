@@ -1,5 +1,5 @@
 //! The Rust client against the Rust server (`skakel-server`, in this process, on loopback): the
-//! second criterion of issue #22, on protocol version 2. Discovery, info, pairing, the control
+//! second criterion of issue #22, on protocol version 3. Discovery, info, pairing, the control
 //! channel and the app's own gRPC service, streams, the serial stream, a revoke and a certificate
 //! handover, with the server's own API standing in for the app.
 
@@ -71,11 +71,16 @@ fn serial() -> impl skakel_server::StreamHandler {
                         }
                     }
                     StreamMessage::Control(control) => {
-                        if let Ok(skakel_serial::ClientMessage::LineSettings(change)) =
-                            skakel_serial::ClientMessage::decode(&control)
+                        if let Ok(skakel_serial::ClientMessage::LineSettings {
+                            request_id,
+                            settings: change,
+                        }) = skakel_serial::ClientMessage::decode(&control)
                         {
                             settings = change;
-                            let answer = skakel_serial::ServerMessage::LineSettings(settings);
+                            let answer = skakel_serial::ServerMessage::LineSettings {
+                                request_id,
+                                settings,
+                            };
                             if session.send_control(answer.encode()).await.is_err() {
                                 return;
                             }
@@ -161,7 +166,7 @@ async fn the_browser_finds_the_server_and_info_reads_what_it_says() {
             info.app.id.as_str(),
             info.versions.as_slice()
         ),
-        ("rust-bench", "test-app", [2].as_slice())
+        ("rust-bench", "test-app", [3].as_slice())
     );
 }
 

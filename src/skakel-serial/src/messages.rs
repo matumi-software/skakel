@@ -2,8 +2,8 @@
 //! encoded as `serial.proto` says.
 
 use prost::Message;
-use skakel_proto::v2 as wire;
-use skakel_proto::v2::{serial_client_message, serial_server_message};
+use skakel_proto::serial as wire;
+use skakel_proto::serial::{serial_client_message, serial_server_message};
 
 use crate::settings::{ErrorCode, LineSettings, ModemStatus};
 
@@ -11,8 +11,14 @@ use crate::settings::{ErrorCode, LineSettings, ModemStatus};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClientMessage {
-    /// `line_settings`: change the port's settings. Every field is required.
-    LineSettings(LineSettings),
+    /// `line_settings`: change the port's settings. Every field is required. The server answers
+    /// with the same `request_id`.
+    LineSettings {
+        /// Names this change in the answer. Nonzero.
+        request_id: u32,
+        /// The settings to put on the port.
+        settings: LineSettings,
+    },
     /// `modem_lines`: set the output lines. A line left out stays as it is. `rts` is ignored while
     /// flow control is RTS/CTS.
     ModemLines {
@@ -46,14 +52,22 @@ pub enum ServerMessage {
         /// The port's input lines.
         modem_status: ModemStatus,
     },
-    /// `line_settings`: the settings now on the port, after a change was applied. A client treats a
-    /// change as done only when this comes back.
-    LineSettings(LineSettings),
+    /// `line_settings`: the answer to a change that was applied, with the settings now on the port.
+    /// A client treats a change as done only when this comes back.
+    LineSettings {
+        /// The `request_id` of the change this answers.
+        request_id: u32,
+        /// The settings now on the port.
+        settings: LineSettings,
+    },
     /// `modem_status`: an input line changed.
     ModemStatus(ModemStatus),
     /// `error`: a change the port refused, which leaves the settings as they were, or errors the
     /// port reported.
     Error {
+        /// The `request_id` of the change this refuses, or 0 for an error the port reported on its
+        /// own.
+        request_id: u32,
         /// What kind of error.
         code: ErrorCode,
         /// What happened, for a person. Empty on the wire is `None`.
@@ -69,6 +83,8 @@ pub enum ClientMessageError {
     Malformed,
     /// A message of a kind this end does not know, which it ignores.
     UnknownKind,
+    /// A `line_settings` change with a `request_id` of 0, which the server cannot answer by name.
+    NoRequestId,
     /// A `line_settings` change that [`LineSettings::is_valid`] refuses: a baud rate of 0, or a
     /// field that is unspecified, a value this end does not know or out of range. The server
     /// answers it with an `unsupported` error.
@@ -80,6 +96,7 @@ impl std::fmt::Display for ClientMessageError {
         f.write_str(match self {
             Self::Malformed => "not a serial control message",
             Self::UnknownKind => "a serial control message of a kind this end does not know",
+            Self::NoRequestId => "a line settings change without a request id",
             Self::UnsupportedSettings => "line settings with a value the port cannot take",
         })
     }
@@ -95,7 +112,7 @@ pub enum ServerMessageError {
     Malformed,
     /// A message of a kind this end does not know, which it ignores.
     UnknownKind,
-    /// A message that lacks a part it needs: an `opened` without its line settings.
+    /// A message that lacks a part it needs: an `opened` or a `line_settings` without its settings.
     Incomplete,
 }
 
@@ -115,9 +132,13 @@ impl ClientMessage {
     /// The message, encoded, for a control frame.
     pub fn encode(&self) -> Vec<u8> {
         let message = match *self {
-            Self::LineSettings(settings) => {
-                serial_client_message::Message::LineSettings(settings.to_wire())
-            }
+            Self::LineSettings {
+                request_id,
+                settings,
+            } => serial_client_message::Message::LineSettings(wire::LineSettingsRequest {
+                request_id,
+                settings: Some(settings.to_wire()),
+            }),
             Self::ModemLines { dtr, rts } => {
                 serial_client_message::Message::ModemLines(wire::ModemLines { dtr, rts })
             }
@@ -141,12 +162,18 @@ impl ClientMessage {
             .message
             .ok_or(ClientMessageError::UnknownKind)?;
         Ok(match message {
-            serial_client_message::Message::LineSettings(settings) => {
-                let settings = LineSettings::from_wire(&settings);
+            serial_client_message::Message::LineSettings(request) => {
+                if request.request_id == 0 {
+                    return Err(ClientMessageError::NoRequestId);
+                }
+                let settings = LineSettings::from_wire(&request.settings.unwrap_or_default());
                 if !settings.is_valid() {
                     return Err(ClientMessageError::UnsupportedSettings);
                 }
-                Self::LineSettings(settings)
+                Self::LineSettings {
+                    request_id: request.request_id,
+                    settings,
+                }
             }
             serial_client_message::Message::ModemLines(lines) => Self::ModemLines {
                 dtr: lines.dtr,
@@ -172,18 +199,25 @@ impl ServerMessage {
                 line_settings: Some(line_settings.to_wire()),
                 modem_status: Some(modem_status.to_wire()),
             }),
-            Self::LineSettings(settings) => {
-                serial_server_message::Message::LineSettings(settings.to_wire())
-            }
+            Self::LineSettings {
+                request_id,
+                settings,
+            } => serial_server_message::Message::LineSettings(wire::LineSettingsApplied {
+                request_id: *request_id,
+                settings: Some(settings.to_wire()),
+            }),
             Self::ModemStatus(status) => {
                 serial_server_message::Message::ModemStatus(status.to_wire())
             }
-            Self::Error { code, detail } => {
-                serial_server_message::Message::Error(wire::SerialError {
-                    code: code.to_wire(),
-                    detail: detail.clone().unwrap_or_default(),
-                })
-            }
+            Self::Error {
+                request_id,
+                code,
+                detail,
+            } => serial_server_message::Message::Error(wire::SerialError {
+                code: code.to_wire(),
+                detail: detail.clone().unwrap_or_default(),
+                request_id: *request_id,
+            }),
         };
         wire::SerialServerMessage {
             message: Some(message),
@@ -213,13 +247,20 @@ impl ServerMessage {
                     .map(ModemStatus::from_wire)
                     .unwrap_or_default(),
             },
-            serial_server_message::Message::LineSettings(settings) => {
-                Self::LineSettings(LineSettings::from_wire(&settings))
-            }
+            serial_server_message::Message::LineSettings(applied) => Self::LineSettings {
+                request_id: applied.request_id,
+                settings: LineSettings::from_wire(
+                    applied
+                        .settings
+                        .as_ref()
+                        .ok_or(ServerMessageError::Incomplete)?,
+                ),
+            },
             serial_server_message::Message::ModemStatus(status) => {
                 Self::ModemStatus(ModemStatus::from_wire(&status))
             }
             serial_server_message::Message::Error(error) => Self::Error {
+                request_id: error.request_id,
                 code: ErrorCode::from_wire(error.code),
                 detail: Some(error.detail).filter(|d| !d.is_empty()),
             },
@@ -250,20 +291,24 @@ mod tests {
 
     #[test]
     fn line_settings_are_written_with_the_proto_numbers() {
-        let message = ClientMessage::LineSettings(settings(
-            115_200,
-            8,
-            Parity::None,
-            StopBits::OnePointFive,
-            FlowControl::RtsCts,
-        ));
+        let message = ClientMessage::LineSettings {
+            request_id: 7,
+            settings: settings(
+                115_200,
+                8,
+                Parity::None,
+                StopBits::OnePointFive,
+                FlowControl::RtsCts,
+            ),
+        };
 
-        // line_settings (1) { baud (1) 115200, data_bits (2) 8, parity (3) NONE = 1,
-        // stop_bits (4) ONE_POINT_FIVE = 2, flow_control (5) RTS_CTS = 2 }
+        // line_settings (1) { request_id (1) 7, settings (2) { baud (1) 115200, data_bits (2) 8,
+        // parity (3) NONE = 1, stop_bits (4) ONE_POINT_FIVE = 2, flow_control (5) RTS_CTS = 2 } }
         assert_eq!(
             message.encode(),
             [
-                0x0A, 0x0C, 0x08, 0x80, 0x84, 0x07, 0x10, 0x08, 0x18, 0x01, 0x20, 0x02, 0x28, 0x02
+                0x0A, 0x10, 0x08, 0x07, 0x12, 0x0C, 0x08, 0x80, 0x84, 0x07, 0x10, 0x08, 0x18, 0x01,
+                0x20, 0x02, 0x28, 0x02
             ]
         );
     }
@@ -295,13 +340,10 @@ mod tests {
     #[test]
     fn each_client_message_reads_back_as_written() {
         let cases = [
-            ClientMessage::LineSettings(settings(
-                9600,
-                8,
-                Parity::Odd,
-                StopBits::One,
-                FlowControl::None,
-            )),
+            ClientMessage::LineSettings {
+                request_id: 1,
+                settings: settings(9600, 8, Parity::Odd, StopBits::One, FlowControl::None),
+            },
             ClientMessage::ModemLines {
                 dtr: Some(true),
                 rts: None,
@@ -352,7 +394,12 @@ mod tests {
 
         for settings in broken {
             let bytes = wire::SerialClientMessage {
-                message: Some(serial_client_message::Message::LineSettings(settings)),
+                message: Some(serial_client_message::Message::LineSettings(
+                    wire::LineSettingsRequest {
+                        request_id: 1,
+                        settings: Some(settings),
+                    },
+                )),
             }
             .encode_to_vec();
             assert_eq!(
@@ -361,6 +408,35 @@ mod tests {
                 "{settings:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_change_without_a_request_id_is_refused_and_one_answer_carries_the_id_it_echoes() {
+        let bytes = wire::SerialClientMessage {
+            message: Some(serial_client_message::Message::LineSettings(
+                wire::LineSettingsRequest {
+                    request_id: 0,
+                    settings: Some(
+                        settings(9600, 8, Parity::Odd, StopBits::One, FlowControl::None).to_wire(),
+                    ),
+                },
+            )),
+        }
+        .encode_to_vec();
+        assert_eq!(
+            ClientMessage::decode(&bytes),
+            Err(ClientMessageError::NoRequestId)
+        );
+
+        let answer = ServerMessage::LineSettings {
+            request_id: 300,
+            settings: settings(9600, 8, Parity::Odd, StopBits::One, FlowControl::None),
+        };
+        // line_settings (2) { request_id (1) 300 = 0xAC 0x02, settings (2) { ... } }
+        let bytes = answer.encode();
+        assert_eq!(&bytes[..2], [0x12, 0x10]);
+        assert_eq!(&bytes[2..6], [0x08, 0xAC, 0x02, 0x12]);
+        assert_eq!(ServerMessage::decode(&bytes), Ok(answer));
     }
 
     #[test]
@@ -397,10 +473,12 @@ mod tests {
     fn errors_and_status_read_back_and_an_empty_detail_is_none() {
         let cases = [
             ServerMessage::Error {
+                request_id: 4,
                 code: ErrorCode::Unsupported,
                 detail: Some("1.5 stop bits with 8 data bits".into()),
             },
             ServerMessage::Error {
+                request_id: 0,
                 code: ErrorCode::Overrun,
                 detail: None,
             },
@@ -410,13 +488,10 @@ mod tests {
                 dcd: false,
                 ri: true,
             }),
-            ServerMessage::LineSettings(settings(
-                300,
-                5,
-                Parity::Mark,
-                StopBits::One,
-                FlowControl::None,
-            )),
+            ServerMessage::LineSettings {
+                request_id: 9,
+                settings: settings(300, 5, Parity::Mark, StopBits::One, FlowControl::None),
+            },
         ];
 
         for message in cases {
@@ -456,6 +531,7 @@ mod tests {
             message: Some(serial_server_message::Message::Error(wire::SerialError {
                 code: 9,
                 detail: "a code from a newer server".into(),
+                request_id: 0,
             })),
         }
         .encode_to_vec();
@@ -465,6 +541,7 @@ mod tests {
         assert_eq!(
             message,
             ServerMessage::Error {
+                request_id: 0,
                 code: ErrorCode::Unknown(9),
                 detail: Some("a code from a newer server".into()),
             }

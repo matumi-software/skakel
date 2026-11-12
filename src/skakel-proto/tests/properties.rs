@@ -4,10 +4,11 @@
 use proptest::prelude::*;
 use prost::Message;
 use prost::bytes::Bytes;
-use skakel_proto::v2::{
+use skakel_proto::serial::{SerialClientMessage, SerialServerMessage};
+use skakel_proto::v3::{
     Certificates, Closing, ConnectRequest, ConnectResponse, HelloResponse, NextCertificateReceived,
-    OpenRequest, OpenResponse, SerialClientMessage, SerialServerMessage, StreamOpen,
-    connect_request, connect_response, open_request, open_response,
+    OpenRequest, OpenResponse, StreamOpen, connect_request, connect_response, open_request,
+    open_response,
 };
 
 fn bytes() -> impl Strategy<Value = Bytes> {
@@ -49,7 +50,7 @@ fn open_responses() -> impl Strategy<Value = OpenResponse> {
 
 fn connect_responses() -> impl Strategy<Value = ConnectResponse> {
     prop_oneof![
-        (".{0,95}", ".{0,95}").prop_map(|(fingerprint, next_fingerprint)| ConnectResponse {
+        (bytes(), bytes()).prop_map(|(fingerprint, next_fingerprint)| ConnectResponse {
             message: Some(connect_response::Message::Certificates(Certificates {
                 fingerprint,
                 next_fingerprint,
@@ -72,7 +73,7 @@ proptest! {
     #[test]
     fn control_messages_read_back_as_written(
         response in connect_responses(),
-        fingerprint in ".{0,95}",
+        fingerprint in bytes(),
         server in ".{0,40}",
         client_id in ".{0,40}",
     ) {

@@ -1,4 +1,4 @@
-//! Reach Skakel servers, protocol version 2: find them, pair, get tokens, pin the certificate, keep
+//! Reach Skakel servers, protocol version 3: find them, pair, get tokens, pin the certificate, keep
 //! the control channel up, call the app's own gRPC services and open data streams. See
 //! `docs/protocol.md` and `docs/parts.md` at the repository root.
 //!

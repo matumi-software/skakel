@@ -17,7 +17,7 @@ pub const PAIR_DENIED: &str = "denied";
 /// The request ran out of time.
 pub const PAIR_EXPIRED: &str = "expired";
 
-/// Opens a pairing request: `POST /skakel/v2/pair`.
+/// Opens a pairing request: `POST /skakel/v3/pair`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairOpenRequest {
@@ -45,7 +45,7 @@ pub struct PairOpened {
     pub poll_token: String,
 }
 
-/// Reveals the client's nonce: `POST /skakel/v2/pair/{requestId}/reveal`.
+/// Reveals the client's nonce: `POST /skakel/v3/pair/{requestId}/reveal`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairRevealRequest {
@@ -54,7 +54,7 @@ pub struct PairRevealRequest {
     pub client_nonce: Option<String>,
 }
 
-/// What a poll answers: `GET /skakel/v2/pair/{requestId}`. `Debug` leaves the client's secret out.
+/// What a poll answers: `GET /skakel/v3/pair/{requestId}`. `Debug` leaves the client's secret out.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairPoll {

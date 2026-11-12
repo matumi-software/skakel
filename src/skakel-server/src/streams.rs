@@ -1,4 +1,4 @@
-//! Data streams, `skakel.v2.StreamService.Open`: one call that carries one thing.
+//! Data streams, `skakel.v3.StreamService.Open`: one call that carries one thing.
 //!
 //! The app registers a handler per stream type. The handler looks at the request (the client, the
 //! target) and either refuses it, with words a person can read, or accepts it and gets a
@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use axum::extract::ConnectInfo;
 use prost::bytes::Bytes;
-use skakel_proto::v2::stream_service_server::StreamService;
-use skakel_proto::v2::{OpenRequest, OpenResponse, StreamOpened, open_request, open_response};
+use skakel_proto::v3::stream_service_server::StreamService;
+use skakel_proto::v3::{OpenRequest, OpenResponse, StreamOpened, open_request, open_response};
 use skakel_wire::{
     OPEN_TIMEOUT, Reason, STREAM_MESSAGE_LIMIT, is_reason, is_stream_type, stream_type_domain,
 };

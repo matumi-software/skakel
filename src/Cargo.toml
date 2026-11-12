@@ -45,7 +45,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "t
 tokio-util = "0.7"
 # Wipes a secret when it is dropped (RustCrypto; MIT or Apache-2.0, depends on nothing here).
 zeroize = "1.8"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # Which networks to probe on, and with it the IPv6 ones.
 if-addrs = "0.15.0"
 # UDP sockets that are IPv6 only (so one can sit beside an IPv4 socket on the same port on every

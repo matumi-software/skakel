@@ -130,7 +130,7 @@ async fn answer_with(mut tls: TlsStream<TcpStream>, body: Vec<u8>) {
 #[tokio::test]
 async fn an_info_answer_over_the_size_cap_is_refused() {
     let big = {
-        let mut body = info(&[2]).into_bytes();
+        let mut body = info(&[3]).into_bytes();
         body.extend(std::iter::repeat_n(b' ', 200 * 1024));
         body
     };
@@ -213,9 +213,9 @@ async fn a_control_call_that_answers_with_garbage_never_connects_and_the_link_st
                 let response = match path.as_str() {
                 "/skakel/info" => hyper::Response::builder()
                     .header("content-type", "application/json")
-                    .body(Full::new(Bytes::from(info(&[2]))))
+                    .body(Full::new(Bytes::from(info(&[3]))))
                     .unwrap(),
-                "/skakel/v2/token" => hyper::Response::builder()
+                "/skakel/v3/token" => hyper::Response::builder()
                     .header("content-type", "application/json")
                     .body(Full::new(Bytes::from(
                         json!({ "access_token": "t", "token_type": "Bearer", "expires_in": 1800 })
@@ -291,7 +291,7 @@ fn flood(udp: u16, addresses: u8, per_address: u32) -> tokio::task::JoinHandle<(
                             id: "test-app".into(),
                             version: "1.0.0".into(),
                         },
-                        versions: vec![2],
+                        versions: vec![3],
                     })
                     .unwrap();
                     let _ = socket.send_to(&answer, from).await;

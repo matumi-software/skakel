@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use common::within;
 use skakel_client::{
-    Bytes, ClientOptions, Credentials, DataBits, ErrorCode, FailureKind, FlowControl, Frame,
-    GrpcCode, LineSettings, Link, OpenResult, Parity, Pins, SerialEvent, StopBits,
-    StreamCloseReason, StreamRefusalReason,
+    Bytes, ClientOptions, Credentials, DataBits, FailureKind, FlowControl, Frame, GrpcCode,
+    LineSettings, Link, OpenResult, Parity, Pins, SerialEvent, StopBits, StreamCloseReason,
+    StreamRefusalReason,
 };
 
 fn data(bytes: &'static [u8]) -> Option<Frame> {
@@ -647,32 +647,40 @@ async fn a_second_client_gets_in_use_and_an_unknown_port_no_such_target() {
 }
 
 #[tokio::test]
-async fn an_unsupported_error_that_no_change_waits_for_is_an_event() {
+async fn a_refusal_that_no_change_waits_for_is_ignored_and_the_stream_goes_on() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
     let (link, _) = linked(&mut bench, &server).await;
     let serial = open_serial(&link, "COM1").await;
     let mut events = serial.events();
 
-    // Sent past the connection's own change handling, so nobody waits for the answer.
+    // Sent past the connection's own change handling, so nobody waits for the refusal, which
+    // names a request id no change is waiting for.
     serial
         .stream()
-        .send_control(skakel_serial::ClientMessage::LineSettings(settings(12_345)).encode())
+        .send_control(
+            skakel_serial::ClientMessage::LineSettings {
+                request_id: 4_000_000,
+                settings: settings(12_345),
+            }
+            .encode(),
+        )
         .await
         .unwrap();
 
-    let event = within(Duration::from_secs(20), events.recv())
-        .await
-        .unwrap();
-    assert!(
-        matches!(
-            event,
-            SerialEvent::Error {
-                code: ErrorCode::Unsupported,
-                ..
-            }
-        ),
-        "{event:?}"
+    // The stream still works: a change made the usual way is answered by its own id, and the
+    // refusal that came first was not taken for it, nor reported as the port's error.
+    let change = within(
+        Duration::from_secs(20),
+        serial.set_line_settings(settings(19_200)),
+    )
+    .await
+    .unwrap();
+    assert!(change.applied, "{change:?}");
+    assert_eq!(
+        events.try_recv().unwrap(),
+        None,
+        "the stale refusal is no event"
     );
     serial.close().await;
 }

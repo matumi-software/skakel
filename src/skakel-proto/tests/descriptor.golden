@@ -1,107 +1,114 @@
-file skakel/v2/control.proto
-package skakel.v2
-message skakel.v2.Certificates
-  fingerprint = 1 optional string
-  next_fingerprint = 2 optional string
-message skakel.v2.Closing
-  reason = 1 optional skakel.v2.ClosingReason
-message skakel.v2.ConnectRequest
-  next_certificate_received = 1 optional skakel.v2.NextCertificateReceived oneof message
-message skakel.v2.ConnectResponse
-  certificates = 1 optional skakel.v2.Certificates oneof message
-  closing = 2 optional skakel.v2.Closing oneof message
-message skakel.v2.HelloRequest
-message skakel.v2.HelloResponse
-  server = 1 optional string
-  client_id = 2 optional string
-message skakel.v2.NextCertificateReceived
-  fingerprint = 1 optional string
-enum skakel.v2.ClosingReason
-  CLOSING_REASON_UNSPECIFIED = 0
-  CLOSING_REASON_REVOKED = 1
-  CLOSING_REASON_ROTATED = 2
-  CLOSING_REASON_STOPPING = 3
-service skakel.v2.ControlService
-  rpc Connect(stream skakel.v2.ConnectRequest) returns (stream skakel.v2.ConnectResponse)
-  rpc Hello(skakel.v2.HelloRequest) returns (skakel.v2.HelloResponse)
-
-file skakel/v2/serial.proto
-package skakel.v2
-message skakel.v2.BreakSignal
+file skakel/streams/serial/v1/serial.proto
+package skakel.streams.serial.v1
+message skakel.streams.serial.v1.BreakSignal
   on = 1 optional bool
-message skakel.v2.LineSettings
+message skakel.streams.serial.v1.LineSettings
   baud = 1 optional uint32
   data_bits = 2 optional uint32
-  parity = 3 optional skakel.v2.Parity
-  stop_bits = 4 optional skakel.v2.StopBits
-  flow_control = 5 optional skakel.v2.FlowControl
-message skakel.v2.ModemLines
+  parity = 3 optional skakel.streams.serial.v1.Parity
+  stop_bits = 4 optional skakel.streams.serial.v1.StopBits
+  flow_control = 5 optional skakel.streams.serial.v1.FlowControl
+message skakel.streams.serial.v1.LineSettingsApplied
+  request_id = 1 optional uint32
+  settings = 2 optional skakel.streams.serial.v1.LineSettings
+message skakel.streams.serial.v1.LineSettingsRequest
+  request_id = 1 optional uint32
+  settings = 2 optional skakel.streams.serial.v1.LineSettings
+message skakel.streams.serial.v1.ModemLines
   dtr = 1 optional bool
   rts = 2 optional bool
-message skakel.v2.ModemStatus
+message skakel.streams.serial.v1.ModemStatus
   cts = 1 optional bool
   dsr = 2 optional bool
   dcd = 3 optional bool
   ri = 4 optional bool
-message skakel.v2.Purge
+message skakel.streams.serial.v1.Purge
   input = 1 optional bool
   output = 2 optional bool
-message skakel.v2.SerialClientMessage
-  line_settings = 1 optional skakel.v2.LineSettings oneof message
-  modem_lines = 2 optional skakel.v2.ModemLines oneof message
-  break_signal = 3 optional skakel.v2.BreakSignal oneof message
-  purge = 4 optional skakel.v2.Purge oneof message
-message skakel.v2.SerialError
-  code = 1 optional skakel.v2.SerialErrorCode
+message skakel.streams.serial.v1.SerialClientMessage
+  line_settings = 1 optional skakel.streams.serial.v1.LineSettingsRequest oneof message
+  modem_lines = 2 optional skakel.streams.serial.v1.ModemLines oneof message
+  break_signal = 3 optional skakel.streams.serial.v1.BreakSignal oneof message
+  purge = 4 optional skakel.streams.serial.v1.Purge oneof message
+message skakel.streams.serial.v1.SerialError
+  code = 1 optional skakel.streams.serial.v1.SerialErrorCode
   detail = 2 optional string
-message skakel.v2.SerialOpened
-  line_settings = 1 optional skakel.v2.LineSettings
-  modem_status = 2 optional skakel.v2.ModemStatus
-message skakel.v2.SerialServerMessage
-  opened = 1 optional skakel.v2.SerialOpened oneof message
-  line_settings = 2 optional skakel.v2.LineSettings oneof message
-  modem_status = 3 optional skakel.v2.ModemStatus oneof message
-  error = 4 optional skakel.v2.SerialError oneof message
-message skakel.v2.SerialTarget
+  request_id = 3 optional uint32
+message skakel.streams.serial.v1.SerialOpened
+  line_settings = 1 optional skakel.streams.serial.v1.LineSettings
+  modem_status = 2 optional skakel.streams.serial.v1.ModemStatus
+message skakel.streams.serial.v1.SerialServerMessage
+  opened = 1 optional skakel.streams.serial.v1.SerialOpened oneof message
+  line_settings = 2 optional skakel.streams.serial.v1.LineSettingsApplied oneof message
+  modem_status = 3 optional skakel.streams.serial.v1.ModemStatus oneof message
+  error = 4 optional skakel.streams.serial.v1.SerialError oneof message
+message skakel.streams.serial.v1.SerialTarget
   port = 1 optional string
-enum skakel.v2.FlowControl
+enum skakel.streams.serial.v1.FlowControl
   FLOW_CONTROL_UNSPECIFIED = 0
   FLOW_CONTROL_NONE = 1
   FLOW_CONTROL_RTS_CTS = 2
   FLOW_CONTROL_XON_XOFF = 3
-enum skakel.v2.Parity
+enum skakel.streams.serial.v1.Parity
   PARITY_UNSPECIFIED = 0
   PARITY_NONE = 1
   PARITY_ODD = 2
   PARITY_EVEN = 3
   PARITY_MARK = 4
   PARITY_SPACE = 5
-enum skakel.v2.SerialErrorCode
+enum skakel.streams.serial.v1.SerialErrorCode
   SERIAL_ERROR_CODE_UNSPECIFIED = 0
   SERIAL_ERROR_CODE_UNSUPPORTED = 1
   SERIAL_ERROR_CODE_FRAMING = 2
   SERIAL_ERROR_CODE_PARITY = 3
   SERIAL_ERROR_CODE_OVERRUN = 4
-enum skakel.v2.StopBits
+enum skakel.streams.serial.v1.StopBits
   STOP_BITS_UNSPECIFIED = 0
   STOP_BITS_ONE = 1
   STOP_BITS_ONE_POINT_FIVE = 2
   STOP_BITS_TWO = 3
 
-file skakel/v2/streams.proto
-package skakel.v2
-message skakel.v2.OpenRequest
-  open = 1 optional skakel.v2.StreamOpen oneof frame
+file skakel/v3/control.proto
+package skakel.v3
+message skakel.v3.Certificates
+  fingerprint = 1 optional bytes
+  next_fingerprint = 2 optional bytes
+message skakel.v3.Closing
+  reason = 1 optional skakel.v3.ClosingReason
+message skakel.v3.ConnectRequest
+  next_certificate_received = 1 optional skakel.v3.NextCertificateReceived oneof message
+message skakel.v3.ConnectResponse
+  certificates = 1 optional skakel.v3.Certificates oneof message
+  closing = 2 optional skakel.v3.Closing oneof message
+message skakel.v3.HelloRequest
+message skakel.v3.HelloResponse
+  server = 1 optional string
+  client_id = 2 optional string
+message skakel.v3.NextCertificateReceived
+  fingerprint = 1 optional bytes
+enum skakel.v3.ClosingReason
+  CLOSING_REASON_UNSPECIFIED = 0
+  CLOSING_REASON_REVOKED = 1
+  CLOSING_REASON_ROTATED = 2
+  CLOSING_REASON_STOPPING = 3
+service skakel.v3.ControlService
+  rpc Connect(stream skakel.v3.ConnectRequest) returns (stream skakel.v3.ConnectResponse)
+  rpc Hello(skakel.v3.HelloRequest) returns (skakel.v3.HelloResponse)
+
+file skakel/v3/streams.proto
+package skakel.v3
+message skakel.v3.OpenRequest
+  open = 1 optional skakel.v3.StreamOpen oneof frame
   data = 2 optional bytes oneof frame
   control = 3 optional bytes oneof frame
-message skakel.v2.OpenResponse
-  opened = 1 optional skakel.v2.StreamOpened oneof frame
+message skakel.v3.OpenResponse
+  opened = 1 optional skakel.v3.StreamOpened oneof frame
   data = 2 optional bytes oneof frame
   control = 3 optional bytes oneof frame
-message skakel.v2.StreamOpen
+message skakel.v3.StreamOpen
   stream_type = 1 optional string
   target = 2 optional bytes
-message skakel.v2.StreamOpened
-service skakel.v2.StreamService
-  rpc Open(stream skakel.v2.OpenRequest) returns (stream skakel.v2.OpenResponse)
+message skakel.v3.StreamOpened
+service skakel.v3.StreamService
+  rpc Open(stream skakel.v3.OpenRequest) returns (stream skakel.v3.OpenResponse)
 

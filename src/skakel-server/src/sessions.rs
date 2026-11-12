@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use skakel_proto::v2::Certificates;
-use skakel_wire::Reason;
+use skakel_proto::v3::Certificates;
+use skakel_wire::{Reason, fingerprints};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::state::ServerState;
@@ -236,9 +236,19 @@ fn end(session: &mut Session, reason: Reason) {
 /// an empty next fingerprint when none is prepared.
 pub(crate) fn certificates_of(state: &ServerState) -> Certificates {
     let loaded = state.loaded();
+    // The server's own fingerprints are well formed; if one were not, it goes out empty.
+    let bytes = |text: &str| {
+        fingerprints::to_bytes(text)
+            .map(|bytes| prost::bytes::Bytes::copy_from_slice(&bytes))
+            .unwrap_or_default()
+    };
     Certificates {
-        fingerprint: loaded.fingerprint.clone(),
-        next_fingerprint: loaded.next_fingerprint.clone().unwrap_or_default(),
+        fingerprint: bytes(&loaded.fingerprint),
+        next_fingerprint: loaded
+            .next_fingerprint
+            .as_deref()
+            .map(bytes)
+            .unwrap_or_default(),
     }
 }
 
@@ -351,8 +361,14 @@ mod tests {
 
         match tokio::time::timeout(Duration::from_secs(5), control_rx.recv()).await {
             Ok(Some(ControlOut::Certificates(certificates))) => {
-                assert_eq!(certificates.next_fingerprint, next);
-                assert_eq!(certificates.fingerprint, state.fingerprint());
+                assert_eq!(
+                    fingerprints::from_bytes(&certificates.next_fingerprint).as_deref(),
+                    Some(next.as_str())
+                );
+                assert_eq!(
+                    fingerprints::from_bytes(&certificates.fingerprint).unwrap(),
+                    state.fingerprint()
+                );
             }
             _ => panic!("no certificates"),
         }

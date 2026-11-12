@@ -7,8 +7,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use prost::bytes::Bytes;
-use skakel_proto::v2::stream_service_client::StreamServiceClient;
-use skakel_proto::v2::{OpenRequest, OpenResponse, StreamOpen, open_request, open_response};
+use skakel_proto::v3::stream_service_client::StreamServiceClient;
+use skakel_proto::v3::{OpenRequest, OpenResponse, StreamOpen, open_request, open_response};
 use skakel_wire::{Reason, STREAM_MESSAGE_LIMIT, STREAM_TYPE_DOMAIN_PREFIX};
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;

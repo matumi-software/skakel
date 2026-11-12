@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use prost::bytes::{Buf, Bytes};
-use skakel_proto::v2::OpenRequest;
+use skakel_proto::v3::OpenRequest;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::sync::PollSender;
 

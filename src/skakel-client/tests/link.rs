@@ -286,7 +286,7 @@ async fn a_server_of_another_version_is_a_version_mismatch() {
     assert_eq!(failure.kind(), FailureKind::VersionMismatch);
     assert_eq!(
         failure.message(),
-        "This server speaks Skakel 1 and this app speaks Skakel 2. Update the server."
+        "This server speaks Skakel 1 and this app speaks Skakel 3. Update the server."
     );
     link.stop().await;
 }

@@ -22,13 +22,14 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use serde_json::Value;
-use skakel_proto::v2::control_service_client::ControlServiceClient;
-use skakel_proto::v2::stream_service_client::StreamServiceClient;
-use skakel_proto::v2::{
-    FlowControl, LineSettings, ModemStatus, OpenRequest, OpenResponse, Parity, SerialClientMessage,
+use skakel_proto::serial::{
+    FlowControl, LineSettings, LineSettingsApplied, ModemStatus, Parity, SerialClientMessage,
     SerialError, SerialErrorCode, SerialOpened, SerialServerMessage, SerialTarget, StopBits,
-    StreamOpen, open_request, open_response, serial_client_message, serial_server_message,
+    serial_client_message, serial_server_message,
 };
+use skakel_proto::v3::control_service_client::ControlServiceClient;
+use skakel_proto::v3::stream_service_client::StreamServiceClient;
+use skakel_proto::v3::{OpenRequest, OpenResponse, StreamOpen, open_request, open_response};
 use skakel_server::{
     InMemoryStore, SkakelServer, SkakelServerBuilder, StreamEnd, StreamMessage,
     StreamOpen as Opening, StreamRequest, StreamSession, connection_builder,
@@ -172,17 +173,21 @@ async fn pretend_serial(mut session: StreamSession, port: String) {
                     .ok()
                     .and_then(|m| m.message)
                 {
-                    Some(serial_client_message::Message::LineSettings(change))
-                        if change.baud == 12345 =>
+                    Some(serial_client_message::Message::LineSettings(request))
+                        if request.settings.as_ref().is_some_and(|s| s.baud == 12345) =>
                     {
                         serial_server_message::Message::Error(SerialError {
                             code: SerialErrorCode::Unsupported as i32,
                             detail: "This port cannot run at 12345 baud.".into(),
+                            request_id: request.request_id,
                         })
                     }
-                    Some(serial_client_message::Message::LineSettings(change)) => {
-                        settings = change;
-                        serial_server_message::Message::LineSettings(settings)
+                    Some(serial_client_message::Message::LineSettings(request)) => {
+                        settings = request.settings.unwrap_or_default();
+                        serial_server_message::Message::LineSettings(LineSettingsApplied {
+                            request_id: request.request_id,
+                            settings: Some(settings),
+                        })
                     }
                     Some(serial_client_message::Message::ModemLines(lines))
                         if lines.dtr.is_some() =>
@@ -402,6 +407,11 @@ pub async fn tls(address: SocketAddr, http1_only: bool) -> (Tls, Vec<u8>) {
     (stream, presented)
 }
 
+/// A fingerprint written as text, as the 32 bytes the control channel carries.
+pub fn fingerprint_bytes(text: &str) -> Bytes {
+    Bytes::copy_from_slice(&skakel_wire::fingerprints::to_bytes(text).expect("a fingerprint"))
+}
+
 /// The fingerprint of the certificate the server presents now.
 pub async fn presented_fingerprint(address: SocketAddr) -> String {
     let (_, der) = tls(address, true).await;
@@ -603,7 +613,7 @@ pub async fn token_for(server: &SkakelServer, id: &str, secret: &str) -> String 
 }
 
 pub async fn token_request(server: &SkakelServer, id: &str, secret: &str) -> Reply {
-    Request::new("POST", "/skakel/v2/token")
+    Request::new("POST", "/skakel/v3/token")
         .form(&format!(
             "grant_type=client_credentials&client_id={id}&client_secret={secret}"
         ))
@@ -713,15 +723,15 @@ pub fn refused(status: &Status) -> (tonic::Code, String) {
 
 /// A control call's requests, and its answers.
 pub struct ControlCall {
-    pub requests: mpsc::Sender<skakel_proto::v2::ConnectRequest>,
-    pub answers: Streaming<skakel_proto::v2::ConnectResponse>,
+    pub requests: mpsc::Sender<skakel_proto::v3::ConnectRequest>,
+    pub answers: Streaming<skakel_proto::v3::ConnectResponse>,
 }
 
 impl ControlCall {
     /// The next answer, within ten seconds: `Ok(None)` when the call ended with `OK`.
     pub async fn next(
         &mut self,
-    ) -> Result<Option<skakel_proto::v2::connect_response::Message>, Status> {
+    ) -> Result<Option<skakel_proto::v3::connect_response::Message>, Status> {
         let answer = tokio::time::timeout(Duration::from_secs(10), self.answers.message())
             .await
             .expect("an answer within ten seconds")?;

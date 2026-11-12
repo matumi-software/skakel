@@ -41,8 +41,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use ::http::{Method, StatusCode};
-use skakel_proto::v2::control_service_client::ControlServiceClient;
-use skakel_proto::v2::{
+use skakel_proto::v3::control_service_client::ControlServiceClient;
+use skakel_proto::v3::{
     Certificates, ConnectRequest, ConnectResponse, HelloRequest, NextCertificateReceived,
     connect_request, connect_response,
 };

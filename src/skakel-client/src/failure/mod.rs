@@ -130,7 +130,7 @@ impl Failure {
     }
 
     /// The server speaks none of this client's protocol versions, worded with both sides' versions
-    /// and which one to update, such as "This server speaks Skakel 2 and this app speaks Skakel 1.
+    /// and which one to update, such as "This server speaks Skakel 4 and this app speaks Skakel 3.
     /// Update the app."
     pub(crate) fn version_mismatch(server_versions: &[u32]) -> Self {
         let Some(highest) = server_versions.iter().max() else {
@@ -275,16 +275,16 @@ mod tests {
     #[test]
     fn version_mismatch_names_both_sides_and_which_to_update() {
         assert_eq!(
-            Failure::version_mismatch(&[3]).message(),
-            "This server speaks Skakel 3 and this app speaks Skakel 2. Update the app."
+            Failure::version_mismatch(&[4]).message(),
+            "This server speaks Skakel 4 and this app speaks Skakel 3. Update the app."
         );
         assert_eq!(
-            Failure::version_mismatch(&[1]).message(),
-            "This server speaks Skakel 1 and this app speaks Skakel 2. Update the server."
+            Failure::version_mismatch(&[2]).message(),
+            "This server speaks Skakel 2 and this app speaks Skakel 3. Update the server."
         );
         assert_eq!(
-            Failure::version_mismatch(&[4, 3, 5, 3]).message(),
-            "This server speaks Skakel 3, 4 and 5 and this app speaks Skakel 2. Update the app."
+            Failure::version_mismatch(&[5, 4, 6, 4]).message(),
+            "This server speaks Skakel 4, 5 and 6 and this app speaks Skakel 3. Update the app."
         );
         assert_eq!(
             Failure::version_mismatch(&[]).kind(),

@@ -17,7 +17,7 @@ the Cargo workspace.
 |---|---|
 | `docs/` | The protocol (`protocol.md`), the parts and what each depends on (`parts.md`), the virtual camera's contract (`virtual-camera.md`) and decisions |
 | `src/` | The Cargo workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-wire` (the protocol constants and contracts, the discovery packet and the pairing code), `skakel-proto` (the code generated from `src/proto`), `skakel-serial`, `skakel-client`, `skakel-server`, `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
-| `src/proto/` | The `.proto` files of protocol version 2, the wire format of the control channel, the streams and the serial stream type. `skakel-proto` generates the Rust code from them at build time |
+| `src/proto/` | The `.proto` files of protocol version 3, the wire format of the control channel, the streams and the serial stream type. `skakel-proto` generates the Rust code from them at build time |
 
 Build and test from `src/`:
 

@@ -2,7 +2,7 @@
 //! channel's closing reasons mean, and the hello answer.
 
 use skakel_proto::closing_reason;
-use skakel_proto::v2::{ClosingReason, HelloResponse};
+use skakel_proto::v3::{ClosingReason, HelloResponse};
 use skakel_wire::{Reason, SkakelHello};
 
 #[test]

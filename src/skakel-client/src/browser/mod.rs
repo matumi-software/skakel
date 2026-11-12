@@ -634,7 +634,7 @@ mod tests {
                 id: "test-app".into(),
                 version: "1".into(),
             },
-            versions: vec![2],
+            versions: vec![3],
             other_endpoints: Vec::new(),
         }
     }
@@ -1022,7 +1022,7 @@ mod tests {
         let found = server("x", [192, 168, 1, 20], 5240, "AB");
 
         assert_eq!(found.url().as_str(), "https://192.168.1.20:5240/");
-        assert_eq!(found.version(), Some(2));
+        assert_eq!(found.version(), Some(3));
     }
 
     #[test]

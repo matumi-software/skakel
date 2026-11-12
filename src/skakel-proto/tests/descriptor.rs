@@ -132,8 +132,10 @@ fn the_golden_names_every_number_the_wire_pins_cannot_reach() {
     // The byte pins cover a few messages; the golden must hold the rest, at least these.
     let now = describe();
     for line in [
-        "  fingerprint = 1 optional string",
-        "  next_fingerprint = 2 optional string",
+        "  fingerprint = 1 optional bytes",
+        "  next_fingerprint = 2 optional bytes",
+        "  request_id = 1 optional uint32",
+        "  request_id = 3 optional uint32",
         "  server = 1 optional string",
         "  client_id = 2 optional string",
         "  baud = 1 optional uint32",

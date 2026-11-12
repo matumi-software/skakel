@@ -88,16 +88,27 @@ fn server_messages() -> impl Strategy<Value = ServerMessage> {
                 modem_status,
             }
         }),
-        settings().prop_map(ServerMessage::LineSettings),
+        (1..u32::MAX, settings()).prop_map(|(request_id, settings)| ServerMessage::LineSettings {
+            request_id,
+            settings
+        }),
         modem_status().prop_map(ServerMessage::ModemStatus),
-        (error_codes(), proptest::option::of(".{1,40}"))
-            .prop_map(|(code, detail)| ServerMessage::Error { code, detail }),
+        (any::<u32>(), error_codes(), proptest::option::of(".{1,40}")).prop_map(
+            |(request_id, code, detail)| ServerMessage::Error {
+                request_id,
+                code,
+                detail
+            }
+        ),
     ]
 }
 
 fn client_messages() -> impl Strategy<Value = ClientMessage> {
     prop_oneof![
-        settings().prop_map(ClientMessage::LineSettings),
+        (any::<u32>(), settings()).prop_map(|(request_id, settings)| ClientMessage::LineSettings {
+            request_id,
+            settings
+        }),
         (
             proptest::option::of(any::<bool>()),
             proptest::option::of(any::<bool>())
@@ -127,18 +138,20 @@ proptest! {
         match ClientMessage::decode(&bytes) {
             Ok(read) => prop_assert_eq!(read.encode(), bytes),
             Err(_) => {
-                let ClientMessage::LineSettings(settings) = message else {
+                let ClientMessage::LineSettings { settings, request_id } = message else {
                     return Err(TestCaseError::fail("only line settings are refused"));
                 };
-                prop_assert!(!settings.is_valid());
+                prop_assert!(!settings.is_valid() || request_id == 0);
             }
         }
     }
 
-    /// Settings that are valid are never refused.
+    /// Settings that are valid, with a request id, are never refused.
     #[test]
-    fn valid_settings_are_never_refused(settings in settings()) {
-        let read = ClientMessage::decode(&ClientMessage::LineSettings(settings).encode());
+    fn valid_settings_are_never_refused(settings in settings(), request_id in 1..u32::MAX) {
+        let read = ClientMessage::decode(
+            &ClientMessage::LineSettings { request_id, settings }.encode(),
+        );
         prop_assert_eq!(read.is_ok(), settings.is_valid());
     }
 

@@ -44,8 +44,8 @@ http-body-util = "0.1.5"
 # The stream a gRPC call's answers are read from.
 tokio-stream = { version = "0.1.19", default-features = false }
 tower-service = "0.3.3"
-tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 # Signs the access tokens (ECDSA P-256) and checks them.
 # The self-signed certificate.
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
@@ -57,6 +57,8 @@ skakel-server = { path = ".", features = ["test-util"] }
 # The tests call the server with the generated gRPC clients, over HTTP/2 connections of their own.
 skakel-proto = { workspace = true, features = ["client"] }
 tonic-prost.workspace = true
+# A client that speaks only TLS 1.2, to check the server refuses it.
+rustls = { workspace = true, features = ["tls12"] }
 tokio = { version = "1.54.1", features = ["process", "test-util"] }
 hyper = { version = "1.12.0", features = ["client", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }

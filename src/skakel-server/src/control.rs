@@ -1,15 +1,15 @@
-//! The control channel, `skakel.v2.ControlService`: `Connect`, which tells a client the
+//! The control channel, `skakel.v3.ControlService`: `Connect`, which tells a client the
 //! certificates and why its calls end, and `Hello`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use skakel_proto::v2::control_service_server::ControlService;
-use skakel_proto::v2::{
+use skakel_proto::v3::control_service_server::ControlService;
+use skakel_proto::v3::{
     Certificates, Closing, ClosingReason, ConnectRequest, ConnectResponse, HelloRequest,
     HelloResponse, connect_request, connect_response,
 };
-use skakel_wire::Reason;
+use skakel_wire::{Reason, fingerprints};
 use time::OffsetDateTime;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -147,10 +147,13 @@ async fn run(
                         .state
                         .loaded()
                         .is_current(&principal.client_id, principal.generation);
-                    if current && !received.fingerprint.is_empty() {
+                    // The fingerprint is 32 bytes; anything else is not one and is ignored.
+                    if let Some(fingerprint) = fingerprints::from_bytes(&received.fingerprint)
+                        && current
+                    {
                         let _ = shared
                             .state
-                            .mark_next_certificate_received(&principal.client_id, &received.fingerprint)
+                            .mark_next_certificate_received(&principal.client_id, &fingerprint)
                             .await;
                     }
                 }

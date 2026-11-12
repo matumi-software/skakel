@@ -45,8 +45,8 @@ it dials again behind the caller's back and shares one connection, where the cli
 every handshake, keep connections to once a second, and give each stream a connection of its own.
 The other crates take only small crates for JSON, hashing and randomness.
 
-The server and the client speak protocol version 2, gRPC for the control channel and the streams.
-Its wire format is the `.proto` files in `src/proto/skakel/v2/`. `skakel-proto` generates the Rust
+The server and the client speak protocol version 3, gRPC for the control channel and the streams.
+Its wire format is the `.proto` files in `src/proto/skakel/v3/` and, for the serial stream type, `src/proto/skakel/streams/serial/v1/`. `skakel-proto` generates the Rust
 code for them at build time, with `protox` compiling them in Rust (so no `protoc` is needed),
 `prost` writing the messages and `tonic` the services, and the server, the client and the serial
 part take their messages and services from it. Version 1's SignalR hub and WebSocket streams are
@@ -75,12 +75,12 @@ short `vcam`.
   and send (the nonce, the commitment, the eight-digit code, the JSON bodies of the pairing calls
   with their states, and the cleaning of a client's name, `clean_client_name`, which a server
   applies and an app may apply before it shows one).
-- **Proto:** the Rust code generated from the `.proto` files in `src/proto` (protocol version 2's
+- **Proto:** the Rust code generated from the `.proto` files in `src/proto` (protocol version 3's
   control and stream services and the serial stream type's messages), and the tests that pin their
   field numbers and wire bytes. Messages always; the tonic clients with the `client` feature and the
   tonic servers with `server`.
 - **Serial:** the serial stream type's wire format, whose messages are in
-  `src/proto/skakel/v2/serial.proto`. The stream type and its target, line settings, modem lines,
+  `src/proto/skakel/streams/serial/v1/serial.proto`. The stream type and its target, line settings, modem lines,
   errors, and the control messages in both directions, as Rust types that encode to and decode from
   the generated messages. Wire format only: the code that opens a real port stays in the app (see
   `CLAUDE.md`).

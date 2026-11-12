@@ -1,6 +1,6 @@
 //! The HTTPS side: info, pairing and tokens, the extractor an app's own endpoints take the bearer
 //! token with, and the gate that limits the token and pairing paths before anything else reads the
-//! request. Hello and the streams are gRPC in version 2.
+//! request. Hello and the streams are gRPC in version 3.
 
 use std::future::Future;
 use std::net::SocketAddr;

@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 /// How many hex digits a fingerprint has.
 pub const HEX_DIGITS: usize = 64;
 
+/// How many bytes a fingerprint has.
+pub const BYTES: usize = 32;
+
 /// The fingerprint of a certificate given as its DER bytes, in colon form (uppercase).
 pub fn of_der(certificate: &[u8]) -> String {
     let hash = Sha256::digest(certificate);
@@ -19,6 +22,38 @@ pub fn of_der(certificate: &[u8]) -> String {
         text.push_str(&format!("{byte:02X}"));
     }
     text
+}
+
+/// The fingerprint of a certificate given as its DER bytes, as the 32 bytes the control channel
+/// carries.
+pub fn bytes_of_der(certificate: &[u8]) -> [u8; BYTES] {
+    Sha256::digest(certificate).into()
+}
+
+/// The 32 bytes of a fingerprint written as text (with or without colons), or `None` unless the
+/// text is exactly 64 hex digits.
+pub fn to_bytes(text: &str) -> Option<[u8; BYTES]> {
+    let normal = normalize(text)?;
+    let mut bytes = [0u8; BYTES];
+    for (slot, pair) in bytes.iter_mut().zip(normal.split(':')) {
+        *slot = u8::from_str_radix(pair, 16).ok()?;
+    }
+    Some(bytes)
+}
+
+/// The colon form (uppercase) of a fingerprint's bytes, or `None` unless there are exactly 32.
+pub fn from_bytes(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != BYTES {
+        return None;
+    }
+    let mut text = String::with_capacity(HEX_DIGITS + 31);
+    for (i, byte) in bytes.iter().enumerate() {
+        if i > 0 {
+            text.push(':');
+        }
+        text.push_str(&format!("{byte:02X}"));
+    }
+    Some(text)
 }
 
 /// The fingerprint in colon form, uppercase, or `None` unless the text is exactly 64 hex digits,
@@ -74,6 +109,25 @@ mod tests {
         base64::engine::general_purpose::STANDARD
             .decode(CERTIFICATE)
             .unwrap()
+    }
+
+    #[test]
+    fn bytes_and_text_forms_convert_both_ways() {
+        let text = of_der(b"a certificate");
+        let bytes = bytes_of_der(b"a certificate");
+        assert_eq!(to_bytes(&text), Some(bytes));
+        assert_eq!(from_bytes(&bytes).as_deref(), Some(text.as_str()));
+        assert_eq!(to_bytes(&text.replace(':', "").to_lowercase()), Some(bytes));
+    }
+
+    #[test]
+    fn bytes_of_the_wrong_length_or_text_that_is_not_a_fingerprint_convert_to_nothing() {
+        assert_eq!(from_bytes(&[]), None);
+        assert_eq!(from_bytes(&[1; 31]), None);
+        assert_eq!(from_bytes(&[1; 33]), None);
+        assert_eq!(to_bytes(""), None);
+        assert_eq!(to_bytes("zz"), None);
+        assert_eq!(to_bytes(&"AB".repeat(31)), None);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use axum::extract::ConnectInfo;
 use common::greeter::{self, GreetRequest};
 use common::*;
 use serde_json::{Value, json};
-use skakel_proto::v2::{HelloRequest, connect_response, open_response};
+use skakel_proto::v3::{HelloRequest, connect_response, open_response};
 use skakel_server::{Approval, OptionProblem, ServerError, SkakelServerBuilder};
 use skakel_wire::fingerprints;
 use skakel_wire::pairing::{commit, compute, new_nonce};
@@ -21,7 +21,7 @@ use tower_service::Service;
 
 /// Opens a pairing request from the local address `from`.
 async fn open_pairing_from(server: &skakel_server::SkakelServer, from: &str) -> Reply {
-    Request::new("POST", "/skakel/v2/pair")
+    Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": "lab pc", "commitment": commit(&new_nonce().unwrap()) }))
         .send_from(server, from)
         .await
@@ -42,13 +42,13 @@ async fn an_apps_own_server_serves_its_page_and_skakels_pairing_tokens_control_a
 
     // Pairing, through the app's port.
     let nonce = new_nonce().unwrap();
-    let opened = Request::new("POST", "/skakel/v2/pair")
+    let opened = Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": "lab pc", "commitment": commit(&nonce) }))
         .send(&server)
         .await
         .json();
     let id = opened["requestId"].as_str().unwrap();
-    let revealed = Request::new("POST", &format!("/skakel/v2/pair/{id}/reveal"))
+    let revealed = Request::new("POST", &format!("/skakel/v3/pair/{id}/reveal"))
         .json(&json!({ "clientNonce": nonce }))
         .send(&server)
         .await;
@@ -66,7 +66,7 @@ async fn an_apps_own_server_serves_its_page_and_skakels_pairing_tokens_control_a
         server.pairing().approve(id, &code).await.unwrap(),
         Approval::Approved
     );
-    let done: Value = Request::get(&format!("/skakel/v2/pair/{id}"))
+    let done: Value = Request::get(&format!("/skakel/v3/pair/{id}"))
         .header("X-Pair-Token", opened["pollToken"].as_str().unwrap())
         .send(&server)
         .await
@@ -127,7 +127,7 @@ async fn pairing_limits_count_each_callers_address_apart() {
 async fn a_pairing_request_shows_the_address_it_came_from() {
     let server = start_mounted().await;
     let nonce = new_nonce().unwrap();
-    let opened = Request::new("POST", "/skakel/v2/pair")
+    let opened = Request::new("POST", "/skakel/v3/pair")
         .json(&json!({ "clientName": "lab pc", "commitment": commit(&nonce) }))
         .send_from(&server, "127.0.0.2")
         .await
@@ -136,7 +136,7 @@ async fn a_pairing_request_shows_the_address_it_came_from() {
     let revealed = Request::new(
         "POST",
         &format!(
-            "/skakel/v2/pair/{}/reveal",
+            "/skakel/v3/pair/{}/reveal",
             opened["requestId"].as_str().unwrap()
         ),
     )
@@ -155,16 +155,16 @@ async fn a_pairing_request_shows_the_address_it_came_from() {
 async fn pairing_calls_a_minute_are_counted_per_callers_address() {
     let server = start_mounted_with(bench_builder().pair_requests_per_minute(2)).await;
     for _ in 0..2 {
-        let reply = Request::get("/skakel/v2/pair/nobody")
+        let reply = Request::get("/skakel/v3/pair/nobody")
             .send_from(&server, "127.0.0.1")
             .await;
         assert_eq!(reply.status, 404);
     }
 
-    let over = Request::get("/skakel/v2/pair/nobody")
+    let over = Request::get("/skakel/v3/pair/nobody")
         .send_from(&server, "127.0.0.1")
         .await;
-    let other = Request::get("/skakel/v2/pair/nobody")
+    let other = Request::get("/skakel/v3/pair/nobody")
         .send_from(&server, "127.0.0.2")
         .await;
 
@@ -177,7 +177,7 @@ async fn token_requests_a_minute_are_counted_per_callers_address() {
     let server = start_mounted_with(bench_builder().token_requests_per_minute(2)).await;
     let client = server.clients().register("bench-1").await.unwrap();
     let request = || {
-        Request::new("POST", "/skakel/v2/token").form(&format!(
+        Request::new("POST", "/skakel/v3/token").form(&format!(
             "grant_type=client_credentials&client_id={}&client_secret={}",
             client.client_id, client.client_secret
         ))
@@ -204,7 +204,7 @@ async fn a_request_without_the_callers_address_is_refused_rather_than_counted_wi
     let https = axum::http::Request::get("/skakel/info")
         .body(axum::body::Body::empty())
         .unwrap();
-    let grpc = axum::http::Request::post("/skakel.v2.ControlService/Hello")
+    let grpc = axum::http::Request::post("/skakel.v3.ControlService/Hello")
         .header("content-type", "application/grpc")
         .body(axum::body::Body::empty())
         .unwrap();
