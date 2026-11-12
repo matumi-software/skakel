@@ -29,8 +29,7 @@ The workflow in `.github/workflows/ci.yml` runs the same four commands with `--l
 Windows for every pull request and every push to `main`, and `cargo deny check` against
 `src/deny.toml`. All of it must pass before a pull request merges, and the pull request ruleset
 requires it. The test `skakel-protocol/tests/parts.rs` fails when a crate depends on a Skakel crate
-that `docs/parts.md` does not allow. Dependabot proposes Cargo and GitHub Actions updates weekly, in
-one pull request each.
+that `docs/parts.md` does not allow. Dependencies are updated by hand: no bot proposes updates.
 
 ## Rules
 
