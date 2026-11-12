@@ -1,7 +1,7 @@
-//! The gRPC status code a call ended with, as the type `skakel-protocol` defines, so tonic's does
+//! The gRPC status code a call ended with, as the type `skakel-wire` defines, so tonic's does
 //! not appear in what an app matches on. Only the conversions with tonic's `Code` are here.
 
-use skakel_protocol::GrpcCode;
+use skakel_wire::GrpcCode;
 use tonic::Code;
 
 /// The code of tonic's `Code`.

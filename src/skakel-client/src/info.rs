@@ -1,7 +1,7 @@
 //! Reading a server's `GET /skakel/info`, and picking the protocol version to speak with it.
 
-use skakel_discovery::{MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, clean};
-use skakel_protocol::{INFO_PATH, SkakelApp, SkakelInfo, VERSIONS, is_app_id};
+use skakel_wire::discovery::{MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, clean};
+use skakel_wire::{INFO_PATH, SkakelApp, SkakelInfo, VERSIONS, is_app_id};
 use url::Url;
 
 use crate::failure::{Error, Failure, Result, bad_answer};

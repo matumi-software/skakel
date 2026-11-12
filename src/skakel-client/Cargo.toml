@@ -17,9 +17,7 @@ test-util = []
 workspace = true
 
 [dependencies]
-skakel-protocol.workspace = true
-skakel-discovery.workspace = true
-skakel-pairing.workspace = true
+skakel-wire.workspace = true
 skakel-serial.workspace = true
 skakel-proto = { workspace = true, features = ["client"] }
 serde.workspace = true

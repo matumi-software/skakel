@@ -1,7 +1,7 @@
 //! Properties of fingerprints: how two texts compare, and what a client pins.
 
 use proptest::prelude::*;
-use skakel_protocol::fingerprints::{self, HEX_DIGITS};
+use skakel_wire::fingerprints::{self, HEX_DIGITS};
 
 proptest! {
     /// Normalising twice is normalising once, and what it gives is 32 colon-separated pairs.

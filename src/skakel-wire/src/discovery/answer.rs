@@ -3,13 +3,13 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use skakel_protocol::{SkakelApp, fingerprints, is_app_id};
 
-use crate::clean::{clean, utf16_len};
-use crate::{
+use super::clean::{clean, utf16_len};
+use super::{
     ANSWER_LINE, MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, PROBE_LINE, PROBE_SIZE,
     escape,
 };
+use crate::{SkakelApp, fingerprints, is_app_id};
 
 /// What a server tells clients that look for it. On the wire these are the fields of the JSON
 /// after the answer line.

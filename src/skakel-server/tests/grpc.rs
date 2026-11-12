@@ -21,7 +21,7 @@ use skakel_proto::v2::{
     SerialClientMessage, SerialServerMessage, connect_request, connect_response, open_request,
     open_response, serial_client_message, serial_server_message,
 };
-use skakel_protocol::fingerprints;
+use skakel_wire::fingerprints;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Code;

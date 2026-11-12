@@ -14,10 +14,10 @@ use hyper_util::rt::TokioIo;
 use rustls::ServerConfig;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use skakel_discovery::MAX_APP_VERSION_LENGTH;
 use skakel_proto::v2::control_service_server::ControlServiceServer;
 use skakel_proto::v2::stream_service_server::StreamServiceServer;
-use skakel_protocol::{
+use skakel_wire::discovery::MAX_APP_VERSION_LENGTH;
+use skakel_wire::{
     CONTROL_MESSAGE_LIMIT, Reason, STREAM_MESSAGE_LIMIT, SkakelApp, is_app_id, is_app_service_name,
     is_stream_type,
 };
@@ -121,7 +121,7 @@ impl SkakelServerBuilder {
             pair_requests_per_minute: 120,
             keep_client_secrets: false,
             certificate_host_name: machine,
-            token_lifetime: skakel_protocol::ACCESS_TOKEN_LIFETIME,
+            token_lifetime: skakel_wire::ACCESS_TOKEN_LIFETIME,
             services: vec![],
             streams: HashMap::new(),
             routes: None,

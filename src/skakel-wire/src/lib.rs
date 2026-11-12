@@ -2,8 +2,9 @@
 //! JSON contracts, certificate fingerprints, and the reasons a gRPC call is refused or ended. See
 //! `docs/protocol.md` at the repository root.
 //!
-//! Discovery, the pairing code and the serial messages are their own crates, and the code generated
-//! from the `.proto` files is `skakel-proto`; see `docs/parts.md`.
+//! The discovery packet is [`discovery`] and the pairing code and bodies are [`pairing`]. The serial
+//! messages are `skakel-serial`, and the code generated from the `.proto` files is `skakel-proto`;
+//! see `docs/parts.md`.
 //!
 //! # JSON
 //!
@@ -13,8 +14,10 @@
 #![forbid(unsafe_code)]
 
 mod contracts;
+pub mod discovery;
 pub mod fingerprints;
 mod grpc_code;
+pub mod pairing;
 mod reasons;
 
 pub use contracts::{SkakelApp, SkakelHello, SkakelInfo};

@@ -11,10 +11,10 @@ use axum::extract::ConnectInfo;
 use common::greeter::{self, GreetRequest};
 use common::*;
 use serde_json::{Value, json};
-use skakel_pairing::{commit, compute, new_nonce};
 use skakel_proto::v2::{HelloRequest, connect_response, open_response};
-use skakel_protocol::fingerprints;
 use skakel_server::{Approval, OptionProblem, ServerError, SkakelServerBuilder};
+use skakel_wire::fingerprints;
+use skakel_wire::pairing::{commit, compute, new_nonce};
 use tokio::net::UdpSocket;
 use tonic::Code;
 use tower_service::Service;
@@ -365,7 +365,7 @@ async fn discovery_announces_the_apps_port() {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
 
     socket
-        .send_to(&skakel_discovery::create_probe(), address)
+        .send_to(&skakel_wire::discovery::create_probe(), address)
         .await
         .unwrap();
     let mut buffer = [0u8; 2048];
@@ -373,7 +373,8 @@ async fn discovery_announces_the_apps_port() {
         .await
         .expect("an answer")
         .unwrap();
-    let answer = skakel_discovery::try_parse_answer(&buffer[..length]).expect("a valid answer");
+    let answer =
+        skakel_wire::discovery::try_parse_answer(&buffer[..length]).expect("a valid answer");
 
     assert_eq!(answer.port, server.local_addr().port());
     assert!(fingerprints::are_equal(

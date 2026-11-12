@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use skakel_protocol::fingerprints;
+use skakel_wire::fingerprints;
 use zeroize::Zeroize;
 
 /// The certificates a client trusts for one server: the pinned one and, while the server hands over

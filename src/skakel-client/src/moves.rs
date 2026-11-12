@@ -196,7 +196,7 @@ async fn addresses_of(saved: &Url) -> Vec<IpAddr> {
 mod tests {
     use super::*;
     use crate::clock::SystemClock;
-    use skakel_protocol::SkakelApp;
+    use skakel_wire::SkakelApp;
     use std::net::Ipv4Addr;
 
     fn fingerprint(pair: &str) -> String {

@@ -3,7 +3,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-use crate::is_probe;
+use super::is_probe;
 
 /// Whether a probe can be answered at all: it came from a port, and from one host. Port 0 and the
 /// unspecified, broadcast and multicast addresses are not places an answer can go; on some systems
@@ -36,8 +36,8 @@ pub fn should_answer(datagram: &[u8], from: SocketAddr, answer: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DiscoveryAnswer, create_answer, create_probe};
-    use skakel_protocol::SkakelApp;
+    use crate::SkakelApp;
+    use crate::discovery::{DiscoveryAnswer, create_answer, create_probe};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn answer_bytes() -> Vec<u8> {

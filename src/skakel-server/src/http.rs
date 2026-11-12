@@ -25,8 +25,8 @@ use http_body_util::Limited;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use skakel_pairing::{PairOpenRequest, PairRevealRequest, clean_client_name};
-use skakel_protocol::{
+use skakel_wire::pairing::{PairOpenRequest, PairRevealRequest, clean_client_name};
+use skakel_wire::{
     ACCESS_TOKEN_LIFETIME, INFO_PATH, PAIR_PATH, PAIR_TOKEN_HEADER, PROBLEM_CONTENT_TYPE,
     SkakelInfo, TOKEN_PATH, VERSIONS,
 };

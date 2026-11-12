@@ -13,7 +13,7 @@ use std::task::{Context, Poll, ready};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, HeaderValue, Request, Response};
 use http_body::{Body as HttpBody, Frame, SizeHint};
-use skakel_protocol::{ERROR_DOMAIN, Reason, is_grpc_content_type};
+use skakel_wire::{ERROR_DOMAIN, Reason, is_grpc_content_type};
 use tokio::sync::oneshot;
 use tonic::body::Body;
 use tonic::server::NamedService;

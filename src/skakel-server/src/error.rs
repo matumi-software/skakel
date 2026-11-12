@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 
-use skakel_discovery::MAX_APP_VERSION_LENGTH;
+use skakel_wire::discovery::MAX_APP_VERSION_LENGTH;
 
 use crate::crypto::CryptoError;
 

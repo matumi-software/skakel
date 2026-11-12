@@ -9,7 +9,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use skakel_pairing::{
+use skakel_wire::pairing::{
     PAIR_APPROVED, PAIR_DENIED, PAIR_EXPIRED, PAIR_WAITING, PairOpened, PairPoll, PairState,
     compute, is_code, matches, new_nonce,
 };
@@ -632,7 +632,7 @@ impl Pairing {
 /// The nonce the client commits to, for tests of the whole exchange.
 #[cfg(test)]
 pub(crate) fn commitment_of(nonce: &str) -> String {
-    skakel_pairing::commit(nonce)
+    skakel_wire::pairing::commit(nonce)
 }
 
 #[cfg(test)]

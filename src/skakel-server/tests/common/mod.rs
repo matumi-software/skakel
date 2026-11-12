@@ -405,7 +405,7 @@ pub async fn tls(address: SocketAddr, http1_only: bool) -> (Tls, Vec<u8>) {
 /// The fingerprint of the certificate the server presents now.
 pub async fn presented_fingerprint(address: SocketAddr) -> String {
     let (_, der) = tls(address, true).await;
-    skakel_protocol::fingerprints::of_der(&der)
+    skakel_wire::fingerprints::of_der(&der)
 }
 
 // ---- HTTPS over HTTP/1.1 ----

@@ -9,7 +9,7 @@ use skakel_proto::v2::{
     Certificates, Closing, ClosingReason, ConnectRequest, ConnectResponse, HelloRequest,
     HelloResponse, connect_request, connect_response,
 };
-use skakel_protocol::Reason;
+use skakel_wire::Reason;
 use time::OffsetDateTime;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;

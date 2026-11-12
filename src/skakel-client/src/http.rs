@@ -14,7 +14,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::{WebPkiSupportedAlgorithms, ring};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
-use skakel_protocol::fingerprints;
+use skakel_wire::fingerprints;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use url::{Host, Url};

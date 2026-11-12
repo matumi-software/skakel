@@ -1,7 +1,7 @@
 //! Properties of the pairing code and the names a client gives.
 
 use proptest::prelude::*;
-use skakel_pairing::{DIGITS, clean_client_name, commit, compute, is_code, matches};
+use skakel_wire::pairing::{DIGITS, clean_client_name, commit, compute, is_code, matches};
 
 proptest! {
     /// A commitment matches its own nonce in any letter case and no other nonce.

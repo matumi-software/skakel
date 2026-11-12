@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use skakel_protocol::{ACCESS_TOKEN_LIFETIME, TOKEN_PATH};
+use skakel_wire::{ACCESS_TOKEN_LIFETIME, TOKEN_PATH};
 use tokio::sync::Mutex;
 use url::Url;
 

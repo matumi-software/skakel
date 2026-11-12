@@ -16,7 +16,7 @@ use std::time::Duration;
 use http_body_util::BodyExt;
 use hyper::client::conn::http2::{Builder, SendRequest};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use skakel_protocol::{KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, Reason};
+use skakel_wire::{KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, Reason};
 use tokio::sync::watch;
 use tonic::body::Body;
 use tonic::codegen::http;
@@ -185,7 +185,7 @@ impl tower_service::Service<http::Request<Body>> for ConnectionService {
 /// The Skakel reason in a status's `ErrorInfo`, when it has one in the domain `skakel`.
 pub(crate) fn reason_of(status: &Status) -> Option<Reason> {
     let info = status.get_details_error_info()?;
-    (info.domain == skakel_protocol::ERROR_DOMAIN)
+    (info.domain == skakel_wire::ERROR_DOMAIN)
         .then(|| Reason::parse(&info.reason))
         .flatten()
 }

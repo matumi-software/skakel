@@ -46,11 +46,11 @@ use skakel_proto::v2::{
     Certificates, ClosingReason, ConnectRequest, ConnectResponse, HelloRequest,
     NextCertificateReceived, connect_request, connect_response,
 };
-use skakel_protocol::{
+use skakel_serial::STREAM_TYPE;
+use skakel_wire::{
     ACCESS_TOKEN_LIFETIME, CONTROL_MESSAGE_LIMIT, INFO_PATH, Reason, SkakelHello, fingerprints,
     is_stream_type,
 };
-use skakel_serial::STREAM_TYPE;
 use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;

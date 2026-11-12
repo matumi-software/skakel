@@ -16,7 +16,7 @@ the Cargo workspace.
 | Folder | What |
 |---|---|
 | `docs/` | The protocol (`protocol.md`), the parts and what each depends on (`parts.md`), the virtual camera's contract (`virtual-camera.md`) and decisions |
-| `src/` | The Cargo workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-protocol`, `skakel-proto` (the code generated from `src/proto`), `skakel-discovery`, `skakel-pairing`, `skakel-serial`, `skakel-client`, `skakel-server`, `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
+| `src/` | The Cargo workspace, one crate per part (`skakel-<part>`), tests beside the code: `skakel-wire` (the protocol constants and contracts, the discovery packet and the pairing code), `skakel-proto` (the code generated from `src/proto`), `skakel-serial`, `skakel-client`, `skakel-server`, `skakel-vcam` (the camera's producer, ring and installer) and `skakel-vcam-source` (the camera's media source DLL) |
 | `src/proto/` | The `.proto` files of protocol version 2, the wire format of the control channel, the streams and the serial stream type. `skakel-proto` generates the Rust code from them at build time |
 
 Build and test from `src/`:
@@ -28,7 +28,7 @@ cd src && cargo build && cargo test && cargo clippy --all-targets -- -D warnings
 The workflow in `.github/workflows/ci.yml` runs the same four commands with `--locked` on Linux and
 Windows for every pull request and every push to `main`, and `cargo doc --no-deps --locked` with
 rustdoc warnings denied, and `cargo deny check` against `src/deny.toml`. All of it must pass before a pull request merges, and the pull request ruleset
-requires it. The test `skakel-protocol/tests/parts.rs` fails when a crate depends on a Skakel crate
+requires it. The test `skakel-wire/tests/parts.rs` fails when a crate depends on a Skakel crate
 that `docs/parts.md` does not allow. Dependencies are updated by hand: no bot proposes updates.
 
 ## Rules

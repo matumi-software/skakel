@@ -21,7 +21,7 @@ use axum::extract::ConnectInfo;
 use prost::bytes::Bytes;
 use skakel_proto::v2::stream_service_server::StreamService;
 use skakel_proto::v2::{OpenRequest, OpenResponse, StreamOpened, open_request, open_response};
-use skakel_protocol::{
+use skakel_wire::{
     OPEN_TIMEOUT, Reason, STREAM_MESSAGE_LIMIT, is_reason, is_stream_type, stream_type_domain,
 };
 use tokio::sync::{mpsc, oneshot, watch};
