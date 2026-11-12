@@ -13,7 +13,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::io;
 
-use skakel_protocol::{Reason, VERSIONS};
+use skakel_wire::{Reason, VERSIONS};
 use tonic::{Code, Status};
 
 /// What went wrong. An app shows [`Failure::message`] and acts on the kind.

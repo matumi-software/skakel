@@ -435,7 +435,7 @@ impl OtherVersion {
             .self_signed(&signing)
             .unwrap();
         let der = certificate.der().clone();
-        let fingerprint = skakel_protocol::fingerprints::of_der(&der);
+        let fingerprint = skakel_wire::fingerprints::of_der(&der);
         let key = rustls::pki_types::PrivateKeyDer::Pkcs8(signing.serialize_der().into());
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
@@ -478,7 +478,7 @@ impl OtherVersion {
                     }
                     let head = String::from_utf8_lossy(&head);
                     let path = head.split(' ').nth(1).unwrap_or("");
-                    let (status, body) = if path == skakel_protocol::INFO_PATH {
+                    let (status, body) = if path == skakel_wire::INFO_PATH {
                         ("200 OK", info.as_str())
                     } else {
                         counted.fetch_add(1, Ordering::SeqCst);

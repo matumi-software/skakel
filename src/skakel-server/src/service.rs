@@ -16,7 +16,7 @@ use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use hyper_util::server::conn::auto;
-use skakel_protocol::{KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, Reason};
+use skakel_wire::{KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT, Reason};
 use tokio::sync::watch;
 use tower_service::Service;
 

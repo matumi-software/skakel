@@ -1328,12 +1328,10 @@ dependencies = [
  "serde",
  "serde_json",
  "skakel-client",
- "skakel-discovery",
- "skakel-pairing",
  "skakel-proto",
- "skakel-protocol",
  "skakel-serial",
  "skakel-server",
+ "skakel-wire",
  "time",
  "tokio",
  "tokio-rustls",
@@ -1348,32 +1346,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "skakel-discovery"
-version = "0.2.1"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
- "skakel-protocol",
- "unicode-general-category",
-]
-
-[[package]]
-name = "skakel-pairing"
-version = "0.2.1"
-dependencies = [
- "base64 0.23.1",
- "getrandom 0.4.3",
- "proptest",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "time",
- "unicode-general-category",
-]
-
-[[package]]
 name = "skakel-proto"
 version = "0.2.1"
 dependencies = [
@@ -1383,17 +1355,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
-]
-
-[[package]]
-name = "skakel-protocol"
-version = "0.2.1"
-dependencies = [
- "base64 0.23.1",
- "proptest",
- "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -1425,11 +1386,9 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sha2",
- "skakel-discovery",
- "skakel-pairing",
  "skakel-proto",
- "skakel-protocol",
  "skakel-server",
+ "skakel-wire",
  "subtle",
  "time",
  "tokio",
@@ -1455,6 +1414,21 @@ dependencies = [
  "skakel-vcam",
  "windows",
  "windows-core",
+]
+
+[[package]]
+name = "skakel-wire"
+version = "0.2.1"
+dependencies = [
+ "base64 0.23.1",
+ "getrandom 0.4.3",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "time",
+ "unicode-general-category",
 ]
 
 [[package]]

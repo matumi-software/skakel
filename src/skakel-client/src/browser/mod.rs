@@ -27,11 +27,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use skakel_discovery::{
+use skakel_wire::SkakelApp;
+use skakel_wire::discovery::{
     ANSWER_WINDOW, MAX_ENTRIES, MAX_ENTRIES_PER_ADDRESS, PROBE_INTERVAL, create_probe,
     try_parse_answer,
 };
-use skakel_protocol::SkakelApp;
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -509,7 +509,7 @@ async fn listen(inner: Weak<Inner>, socket: Arc<UdpSocket>, stop: CancellationTo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skakel_discovery::ENTRY_LIFETIME;
+    use skakel_wire::discovery::ENTRY_LIFETIME;
 
     fn fingerprint(pair: &str) -> String {
         vec![pair; 32].join(":")

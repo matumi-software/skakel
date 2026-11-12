@@ -5,9 +5,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use skakel_discovery::net::should_answer;
-use skakel_discovery::{DiscoveryAnswer, create_answer};
-use skakel_protocol::{SkakelApp, VERSIONS};
+use skakel_wire::discovery::net::should_answer;
+use skakel_wire::discovery::{DiscoveryAnswer, create_answer};
+use skakel_wire::{SkakelApp, VERSIONS};
 use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;

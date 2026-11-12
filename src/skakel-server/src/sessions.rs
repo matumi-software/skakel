@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use skakel_proto::v2::Certificates;
-use skakel_protocol::Reason;
+use skakel_wire::Reason;
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::state::ServerState;

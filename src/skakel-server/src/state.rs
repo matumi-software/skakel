@@ -8,7 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::sign::CertifiedKey;
-use skakel_protocol::{ACCESS_TOKEN_LIFETIME, fingerprints};
+use skakel_wire::{ACCESS_TOKEN_LIFETIME, fingerprints};
 use time::OffsetDateTime;
 use tokio::sync::watch;
 
@@ -317,7 +317,7 @@ impl ServerState {
     }
 
     pub(crate) async fn register_client(&self, name: &str) -> Result<NewClient, ServerError> {
-        let clean = skakel_pairing::clean_client_name(name);
+        let clean = skakel_wire::pairing::clean_client_name(name);
         if clean.is_empty() {
             return Err(ServerError::InvalidName);
         }

@@ -18,8 +18,8 @@ use skakel_client::{
     Browser, BrowserOptions, ClientOptions, Credentials, FailureKind, Link, LinkState, Pins, Url,
     read_info,
 };
-use skakel_discovery::{DiscoveryAnswer, MAX_ENTRIES, MAX_ENTRIES_PER_ADDRESS};
-use skakel_protocol::SkakelApp;
+use skakel_wire::SkakelApp;
+use skakel_wire::discovery::{DiscoveryAnswer, MAX_ENTRIES, MAX_ENTRIES_PER_ADDRESS};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio_rustls::server::TlsStream;
@@ -43,7 +43,7 @@ impl Hostile {
             .self_signed(&signing)
             .unwrap();
         let der = certificate.der().clone();
-        let fingerprint = skakel_protocol::fingerprints::of_der(&der);
+        let fingerprint = skakel_wire::fingerprints::of_der(&der);
         let key = rustls::pki_types::PrivateKeyDer::Pkcs8(signing.serialize_der().into());
         let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
@@ -283,7 +283,7 @@ fn flood(udp: u16, addresses: u8, per_address: u32) -> tokio::task::JoinHandle<(
                     .unwrap();
                 for _ in 0..per_address {
                     n += 1;
-                    let answer = skakel_discovery::create_answer(&DiscoveryAnswer {
+                    let answer = skakel_wire::discovery::create_answer(&DiscoveryAnswer {
                         name: format!("server {n}"),
                         port: 5240,
                         fingerprint: format!("{n:064X}"),

@@ -9,9 +9,9 @@ use std::time::Duration;
 use base64::Engine;
 use common::*;
 use serde_json::{Value, json};
-use skakel_pairing::{commit, compute, new_nonce};
-use skakel_protocol::fingerprints;
 use skakel_server::{Approval, ClientPrincipal, InMemoryStore, ServerEvent, SkakelServerBuilder};
+use skakel_wire::fingerprints;
+use skakel_wire::pairing::{commit, compute, new_nonce};
 use tokio::net::UdpSocket;
 
 // ---- info and discovery ----
@@ -72,7 +72,7 @@ async fn discovery_answers_a_probe_with_the_servers_fingerprint_and_port_and_not
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
 
     socket
-        .send_to(&skakel_discovery::create_probe(), address)
+        .send_to(&skakel_wire::discovery::create_probe(), address)
         .await
         .unwrap();
     let mut buffer = [0u8; 2048];
@@ -80,7 +80,8 @@ async fn discovery_answers_a_probe_with_the_servers_fingerprint_and_port_and_not
         .await
         .expect("an answer")
         .unwrap();
-    let answer = skakel_discovery::try_parse_answer(&buffer[..length]).expect("a valid answer");
+    let answer =
+        skakel_wire::discovery::try_parse_answer(&buffer[..length]).expect("a valid answer");
 
     assert_eq!(answer.name, "rust-bench");
     assert_eq!(answer.port, server.local_addr().port());
@@ -110,7 +111,7 @@ async fn discovery_off_binds_nothing() {
 async fn probe_is_answered(address: std::net::SocketAddr) -> bool {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     socket
-        .send_to(&skakel_discovery::create_probe(), address)
+        .send_to(&skakel_wire::discovery::create_probe(), address)
         .await
         .unwrap();
     let mut buffer = [0u8; 2048];
@@ -193,7 +194,7 @@ async fn discovery_announces_the_new_fingerprint_after_a_certificate_switch() {
     server.certificates().switch_certificate().await.unwrap();
 
     socket
-        .send_to(&skakel_discovery::create_probe(), address)
+        .send_to(&skakel_wire::discovery::create_probe(), address)
         .await
         .unwrap();
     let mut buffer = [0u8; 2048];
@@ -202,7 +203,7 @@ async fn discovery_announces_the_new_fingerprint_after_a_certificate_switch() {
         .unwrap()
         .unwrap();
 
-    let answer = skakel_discovery::try_parse_answer(&buffer[..length]).unwrap();
+    let answer = skakel_wire::discovery::try_parse_answer(&buffer[..length]).unwrap();
     assert!(fingerprints::are_equal(&answer.fingerprint, &next));
 }
 

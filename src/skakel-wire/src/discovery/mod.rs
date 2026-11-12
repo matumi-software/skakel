@@ -9,8 +9,6 @@
 //! network interfaces to broadcast on, the list of servers found and the limits on it belong to
 //! the server and the client.
 
-#![forbid(unsafe_code)]
-
 mod answer;
 mod clean;
 mod escape;
@@ -31,7 +29,7 @@ pub const PROBE_SIZE: usize = 512;
 pub const MAX_NAME_LENGTH: usize = 63;
 
 /// The most characters an app id has.
-pub const MAX_APP_ID_LENGTH: usize = skakel_protocol::MAX_APP_ID_LENGTH;
+pub const MAX_APP_ID_LENGTH: usize = crate::MAX_APP_ID_LENGTH;
 
 /// The most characters of an app version a client keeps (UTF-16 code units).
 pub const MAX_APP_VERSION_LENGTH: usize = 32;

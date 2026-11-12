@@ -11,11 +11,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use ::http::StatusCode;
-use skakel_pairing::{
+use skakel_wire::pairing::{
     PairOpenRequest, PairOpened, PairPoll, PairRevealRequest, PairState, RandomError, commit,
     compute, new_nonce,
 };
-use skakel_protocol::{PAIR_PATH, PAIR_TOKEN_HEADER};
+use skakel_wire::{PAIR_PATH, PAIR_TOKEN_HEADER};
 use url::Url;
 use zeroize::Zeroize;
 

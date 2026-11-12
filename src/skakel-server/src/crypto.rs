@@ -68,7 +68,7 @@ pub(crate) fn create_certificate(
 
 #[cfg(test)]
 mod tests {
-    use skakel_protocol::fingerprints;
+    use skakel_wire::fingerprints;
 
     use super::*;
 

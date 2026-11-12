@@ -16,9 +16,7 @@ test-util = []
 workspace = true
 
 [dependencies]
-skakel-protocol.workspace = true
-skakel-discovery.workspace = true
-skakel-pairing = { path = "../skakel-pairing", version = "0.2.1" }
+skakel-wire.workspace = true
 skakel-proto = { workspace = true, features = ["server"] }
 prost.workspace = true
 tonic = { workspace = true, features = ["codegen", "router"] }

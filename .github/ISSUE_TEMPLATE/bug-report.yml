@@ -22,7 +22,7 @@ body:
     attributes:
       label: Crate
       description: The crate it involves, if you know.
-      placeholder: skakel-client, skakel-server, skakel-discovery, skakel-vcam...
+      placeholder: skakel-client, skakel-server, skakel-wire, skakel-vcam...
   - type: input
     id: version
     attributes:

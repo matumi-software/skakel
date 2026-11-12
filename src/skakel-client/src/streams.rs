@@ -9,7 +9,7 @@ use std::time::Duration;
 use prost::bytes::Bytes;
 use skakel_proto::v2::stream_service_client::StreamServiceClient;
 use skakel_proto::v2::{OpenRequest, OpenResponse, StreamOpen, open_request, open_response};
-use skakel_protocol::{Reason, STREAM_MESSAGE_LIMIT, STREAM_TYPE_DOMAIN_PREFIX};
+use skakel_wire::{Reason, STREAM_MESSAGE_LIMIT, STREAM_TYPE_DOMAIN_PREFIX};
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Code, Status, Streaming};
@@ -17,7 +17,7 @@ use tonic::{Code, Status, Streaming};
 use crate::failure::{Error, Failure, FailureKind, bad_answer};
 use crate::grpc::{Connection, call_failed, error_info_of, reason_of};
 use crate::status::grpc_code;
-use skakel_protocol::GrpcCode;
+use skakel_wire::GrpcCode;
 
 /// How long a close waits for the server to end the call.
 const CLOSE_TIMEOUT: Duration = Duration::from_millis(2500);

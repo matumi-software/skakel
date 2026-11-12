@@ -4,11 +4,11 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use proptest::prelude::*;
-use skakel_discovery::{
+use skakel_wire::SkakelApp;
+use skakel_wire::discovery::{
     DiscoveryAnswer, MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, PROBE_SIZE, clean,
     create_answer, create_probe, net::should_answer, try_parse_answer,
 };
-use skakel_protocol::SkakelApp;
 
 /// Text of any characters, control and format ones included, long enough to need cutting.
 fn texts() -> impl Strategy<Value = String> {

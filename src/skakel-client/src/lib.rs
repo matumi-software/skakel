@@ -123,7 +123,7 @@ pub use pins::{Credentials, InvalidFingerprint, Pins};
 pub use request::{RequestBuilder, Response};
 pub use serial::{SerialChange, SerialConnection, SerialEvent};
 pub use serial_io::SerialIo;
-pub use skakel_protocol::GrpcCode;
+pub use skakel_wire::GrpcCode;
 pub use stream_io::StreamIo;
 pub use streams::{
     Frame, OpenResult, StreamClose, StreamCloseReason, StreamConnection, StreamRefusal,
@@ -133,7 +133,7 @@ pub use url::Url;
 
 /// Skakel's own types the client's API is made of, so an app needs only this crate.
 pub use prost::bytes::Bytes;
-pub use skakel_protocol::{SkakelApp, SkakelHello, SkakelInfo};
 pub use skakel_serial::{
     DataBits, ErrorCode, FlowControl, LineSettings, ModemStatus, Parity, StopBits,
 };
+pub use skakel_wire::{SkakelApp, SkakelHello, SkakelInfo};

@@ -2,7 +2,18 @@
 
 ## Unreleased
 
-Nothing yet. `main` is at the v0.2.1 tag.
+- `skakel-protocol`, `skakel-discovery` and `skakel-pairing` are now one crate, `skakel-wire`. They
+  released in lockstep and were each a few hundred lines of plain data, so an app took two or three
+  crates for one idea. An app changes its Cargo dependency and its `use` paths (the code is moved,
+  not changed; history follows the files). `skakel-proto` may now depend on `skakel-wire`
+  (`docs/parts.md`). Still no prost or tonic in `skakel-wire`.
+
+  | Before | After |
+  |---|---|
+  | `skakel_protocol::X` | `skakel_wire::X` |
+  | `skakel_protocol::fingerprints` | `skakel_wire::fingerprints` |
+  | `skakel_discovery::X` | `skakel_wire::discovery::X` |
+  | `skakel_pairing::X` | `skakel_wire::pairing::X` |
 
 ## 0.2.1 (2026-11-12)
 

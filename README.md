@@ -27,10 +27,8 @@ One crate per part, in the Cargo workspace in `src/`:
 
 | Crate | What |
 |---|---|
-| `skakel-protocol` | Wire constants and paths, the JSON contracts, certificate fingerprints, and the reasons a gRPC call is refused or ended |
+| `skakel-wire` | What is on the wire apart from the generated messages: constants and paths, the JSON contracts, certificate fingerprints, the reasons a gRPC call is refused or ended, the discovery packet (`discovery`) and the pairing code and bodies (`pairing`) |
 | `skakel-proto` | The Rust code generated from the `.proto` files of protocol version 2: the messages, and with the `client` and `server` features the tonic clients and servers |
-| `skakel-discovery` | The discovery packet (probe, answer, cleaning, limits) and a small `std` UDP helper for answering and probing |
-| `skakel-pairing` | The pairing code, nonces and commitments, and the JSON bodies of the pairing calls |
 | `skakel-serial` | The serial stream's target, line settings, modem lines and control messages, encoded as `serial.proto` says |
 | `skakel-server` | Serve clients, protocol version 2: discovery answers, pairing approval, OAuth tokens, revoking clients, the control and stream services over gRPC, the app's own gRPC services behind Skakel's token check, the per-address limits and the self-signed certificate with its handover, all on one TLS port. tokio, hyper, axum, tonic and rustls; the app supplies a store, its gRPC services, stream types and the pairing screen |
 | `skakel-client` | Find servers, pair, get tokens, pin the server's certificate, keep the control channel up (renewing it before its token runs out, following a certificate handover and a server that moved), call the app's own gRPC services over it, and open data streams, each on a connection of its own; on tokio, with tonic's generated clients over pinned HTTP/2 connections |
