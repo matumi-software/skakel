@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-Nothing yet. `main` is at the v0.2.1 tag.
+- `skakel-server`: every per-address limit counts an IPv6 address by its `/64`, so one host cannot
+  spend a limit by rotating addresses. Pairing takes at most 64 requests that have not revealed for
+  the whole server, and refuses a revealed nonce shorter than 43 characters with 404, as for any
+  nonce that does not match. The address the app sees on a request is still the whole address.
+- `skakel-server`: approving a pairing request no longer holds the pairing lock while the store
+  saves the client, so a slow store does not stall other pairing calls, and a failed save leaves the
+  request waiting for another try.
 
 ## 0.2.1 (2026-11-12)
 

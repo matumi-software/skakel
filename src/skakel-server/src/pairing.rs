@@ -42,6 +42,10 @@ pub(crate) const MAX_OPEN: usize = 10;
 pub(crate) const MAX_OPEN_PER_ADDRESS: usize = 3;
 /// Wrong codes that refuse a request.
 pub(crate) const MAX_WRONG_CODES: u32 = 3;
+/// Requests that have opened and not yet revealed, for the whole server.
+pub(crate) const MAX_UNREVEALED: usize = 64;
+/// The fewest characters a revealed nonce may have: a client's own is 32 bytes as base64url, 43.
+pub(crate) const MIN_NONCE_LENGTH: usize = 43;
 
 /// A request waiting for a person, or lately refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,18 +114,17 @@ enum Stage {
     Approved,
     Denied,
     Expired,
-    /// Handed over or withdrawn; nothing more to say about it.
-    Gone,
+    /// The right code was typed and the client is being saved; to everyone else still waiting.
+    Registering,
 }
 
 impl Stage {
     fn text(self) -> &'static str {
         match self {
-            Self::Waiting => PAIR_WAITING,
+            Self::Waiting | Self::Registering => PAIR_WAITING,
             Self::Approved => PAIR_APPROVED,
             Self::Denied => PAIR_DENIED,
             Self::Expired => PAIR_EXPIRED,
-            Self::Gone => "gone",
         }
     }
 }
@@ -217,6 +220,13 @@ impl Data {
             .count()
     }
 
+    fn unrevealed(&self, now: Instant) -> usize {
+        self.requests
+            .values()
+            .filter(|r| r.stage == Stage::Waiting && r.code.is_none() && r.is_live(now))
+            .count()
+    }
+
     fn overview(&mut self, now: Instant) -> PairingOverview {
         self.forget_old_opens(now);
         let mut requests: Vec<&Request> = self
@@ -304,6 +314,7 @@ impl Pairing {
         let mut decision = None;
         let result;
         let changed;
+        let mut register_for = None;
         {
             let mut data = self.inner.data.lock().await;
             let now = Instant::now();
@@ -314,23 +325,11 @@ impl Pairing {
             match request.code.clone() {
                 Some(code) if request.stage == Stage::Waiting => {
                     if is_code(&code, typed_code) {
-                        let client = self
-                            .inner
-                            .state
-                            .register_client(&request.client_name)
-                            .await?;
-                        request.client_id = Some(client.client_id.clone());
-                        request.client_secret = Some(client.client_secret);
-                        request.stage = Stage::Approved;
-                        touched = true;
+                        // Saving the client waits on the store, so the lock is let go first. The
+                        // request is marked so a second right code cannot register it again.
+                        request.stage = Stage::Registering;
+                        register_for = Some(request.client_name.clone());
                         result = Approval::Approved;
-                        decision = Some(PairingDecision {
-                            request_id: request.id.clone(),
-                            client_name: request.client_name.clone(),
-                            from: request.from.clone(),
-                            client_id: Some(client.client_id),
-                            refusal: None,
-                        });
                     } else {
                         result = Approval::WrongCode;
                         request.wrong_codes += 1;
@@ -354,7 +353,34 @@ impl Pairing {
             }
             changed = touched;
         }
-        if changed {
+        if let Some(name) = register_for {
+            let registered = self.inner.state.register_client(&name).await;
+            let mut data = self.inner.data.lock().await;
+            let Some(request) = data.requests.get_mut(request_id) else {
+                // Swept while it was being saved; the client stays registered, as it was typed.
+                return registered.map(|_| result);
+            };
+            match registered {
+                Ok(client) => {
+                    request.client_id = Some(client.client_id.clone());
+                    request.client_secret = Some(client.client_secret);
+                    request.stage = Stage::Approved;
+                    decision = Some(PairingDecision {
+                        request_id: request.id.clone(),
+                        client_name: request.client_name.clone(),
+                        from: request.from.clone(),
+                        client_id: Some(client.client_id),
+                        refusal: None,
+                    });
+                }
+                Err(error) => {
+                    request.stage = Stage::Waiting;
+                    return Err(error);
+                }
+            }
+            drop(data);
+            self.raise().await;
+        } else if changed {
             self.raise().await;
         }
         if let Some(decision) = decision {
@@ -406,6 +432,7 @@ impl Pairing {
         if data.reveals.len() >= REVEALS_PER_WINDOW
             || data.opens_by_address.get(&key).copied().unwrap_or(0) >= OPENS_PER_ADDRESS_PER_WINDOW
             || data.revealed_and_waiting(now) >= MAX_OPEN
+            || data.unrevealed(now) >= MAX_UNREVEALED
             || data
                 .requests
                 .values()
@@ -422,7 +449,7 @@ impl Pairing {
         let request = Request {
             id: util::hex_upper(&util::random::<16>()),
             client_name: client_name.to_owned(),
-            from: key.clone(),
+            from: util::address_text(from),
             address_key: key,
             commitment: commitment.to_owned(),
             server_nonce: new_nonce(),
@@ -462,6 +489,7 @@ impl Pairing {
                 || request.code.is_some()
                 || request.is_stale(now)
                 || request.expires <= now
+                || client_nonce.len() < MIN_NONCE_LENGTH
                 || !matches(&request.commitment, client_nonce)
             {
                 return Reveal::NotFound;
@@ -516,8 +544,6 @@ impl Pairing {
                 };
                 data.requests.remove(request_id);
                 poll = Some(credentials);
-            } else if request.stage == Stage::Gone {
-                poll = None;
             } else {
                 poll = Some(PairPoll::state(request.stage.text()));
             }
@@ -896,6 +922,177 @@ mod tests {
 
         assert!(
             matches!(listener.try_recv(), Ok(ServerEvent::Pairing(o)) if o.requests.is_empty())
+        );
+    }
+
+    /// A store whose saves can be held up or made to fail.
+    struct TestStore {
+        inner: InMemoryStore,
+        hold: std::sync::atomic::AtomicBool,
+        fail: std::sync::atomic::AtomicBool,
+        entered: tokio::sync::Notify,
+        gate: tokio::sync::Notify,
+    }
+
+    impl TestStore {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                inner: InMemoryStore::new(),
+                hold: false.into(),
+                fail: false.into(),
+                entered: tokio::sync::Notify::new(),
+                gate: tokio::sync::Notify::new(),
+            })
+        }
+    }
+
+    impl crate::store::SkakelStore for TestStore {
+        fn load(&self) -> crate::store::StoreFuture<'_, Option<crate::store::SkakelState>> {
+            self.inner.load()
+        }
+
+        fn save<'a>(
+            &'a self,
+            state: &'a crate::store::SkakelState,
+        ) -> crate::store::StoreFuture<'a, ()> {
+            use std::sync::atomic::Ordering::SeqCst;
+            Box::pin(async move {
+                if self.fail.load(SeqCst) {
+                    return Err(std::io::Error::other("the disk is gone"));
+                }
+                if self.hold.load(SeqCst) {
+                    self.entered.notify_one();
+                    self.gate.notified().await;
+                }
+                self.inner.save(state).await
+            })
+        }
+    }
+
+    async fn pairing_on(store: Arc<TestStore>) -> (Pairing, Arc<ServerState>) {
+        let state = ServerState::start(
+            store,
+            false,
+            "pi-lab".into(),
+            "test-app".into(),
+            Events::new(vec![]),
+        )
+        .await
+        .unwrap();
+        (Pairing::new(state.clone()), state)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn addresses_in_one_ipv6_64_share_the_per_address_open_budget() {
+        let (pairing, _) = pairing().await;
+        let commitment = commitment_of(&new_nonce());
+
+        for last in 1..=OPENS_PER_ADDRESS_PER_WINDOW {
+            // Open requests per address are capped at three, so let each lapse unrevealed.
+            let from: IpAddr = format!("2001:db8:1:2::{last}").parse().unwrap();
+            assert!(pairing.open("lab pc", &commitment, from).await.is_some());
+            tokio::time::advance(UNREVEALED_LIFETIME).await;
+        }
+
+        let sixth: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+        assert!(pairing.open("lab pc", &commitment, sixth).await.is_none());
+        let other_64: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert!(
+            pairing
+                .open("lab pc", &commitment, other_64)
+                .await
+                .is_some()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_app_sees_the_whole_address_a_request_came_from() {
+        let (pairing, state) = pairing().await;
+        let from: IpAddr = "2001:db8:1:2::7".parse().unwrap();
+
+        revealed(&pairing, &state, from).await;
+
+        assert_eq!(pairing.overview().await.requests[0].from, "2001:db8:1:2::7");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn opens_that_never_reveal_are_capped_for_the_whole_server() {
+        let (pairing, _) = pairing().await;
+        let commitment = commitment_of(&new_nonce());
+
+        for n in 0..MAX_UNREVEALED {
+            let from = IpAddr::V4(Ipv4Addr::new(10, 1, (n / 200) as u8, (n % 200) as u8 + 1));
+            assert!(pairing.open("lab pc", &commitment, from).await.is_some());
+        }
+
+        let next = IpAddr::V4(Ipv4Addr::new(10, 2, 0, 1));
+        assert!(pairing.open("lab pc", &commitment, next).await.is_none());
+        tokio::time::advance(UNREVEALED_LIFETIME).await;
+        assert!(pairing.open("lab pc", &commitment, next).await.is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_nonce_shorter_than_a_clients_is_not_taken() {
+        let (pairing, _) = pairing().await;
+        let short = "abc123";
+        let opened = pairing
+            .open("lab pc", &commitment_of(short), addr(1))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            pairing.reveal(&opened.request_id, short).await,
+            Reveal::NotFound
+        );
+        assert!(pairing.overview().await.requests.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_store_does_not_stall_the_other_calls_while_a_code_is_approved() {
+        let store = TestStore::new();
+        let (pairing, state) = pairing_on(store.clone()).await;
+        let (opened, code) = revealed(&pairing, &state, addr(1)).await;
+        store.hold.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let approving = {
+            let pairing = pairing.clone();
+            let id = opened.request_id.clone();
+            tokio::spawn(async move { pairing.approve(&id, &code).await })
+        };
+        store.entered.notified().await;
+
+        let overview = tokio::time::timeout(Duration::from_secs(1), pairing.overview()).await;
+        let other = tokio::time::timeout(
+            Duration::from_secs(1),
+            pairing.open("lab pc", &commitment_of(&new_nonce()), addr(2)),
+        )
+        .await;
+        assert!(overview.is_ok(), "overview waited for the store");
+        assert!(other.is_ok(), "open waited for the store");
+
+        store.gate.notify_one();
+        assert_eq!(approving.await.unwrap().unwrap(), Approval::Approved);
+        let poll = pairing
+            .poll(&opened.request_id, Some(opened.poll_token.as_str()))
+            .await
+            .unwrap();
+        assert_eq!(poll.state, "approved");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_save_leaves_the_request_waiting_for_another_try() {
+        let store = TestStore::new();
+        let (pairing, state) = pairing_on(store.clone()).await;
+        let (opened, code) = revealed(&pairing, &state, addr(1)).await;
+        store.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(pairing.approve(&opened.request_id, &code).await.is_err());
+        assert_eq!(pairing.overview().await.requests[0].state, "waiting");
+
+        store.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            pairing.approve(&opened.request_id, &code).await.unwrap(),
+            Approval::Approved
         );
     }
 }

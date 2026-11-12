@@ -126,14 +126,15 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_mapped_address_counts_as_its_ipv4_address_and_ipv6_counts_whole() {
+    async fn a_mapped_address_counts_as_its_ipv4_address_and_ipv6_counts_by_its_64() {
         let limits = Limits::new(1, 120);
 
         assert!(limits.try_token(ip("10.0.0.1")));
         assert!(!limits.try_token(ip("::ffff:10.0.0.1")));
         assert!(limits.try_token(ip("2001:db8::1")));
-        assert!(limits.try_token(ip("2001:db8::2")));
-        assert!(!limits.try_token(ip("2001:db8::1")));
+        assert!(!limits.try_token(ip("2001:db8::2")));
+        assert!(!limits.try_token(ip("2001:db8:0:0:ffff::1")));
+        assert!(limits.try_token(ip("2001:db8:0:1::1")));
     }
 
     #[tokio::test(start_paused = true)]
