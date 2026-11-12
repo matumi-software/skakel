@@ -50,6 +50,14 @@
 - `skakel-vcam-source`: a panic inside the media source is logged and becomes `E_FAIL`, where it
   aborted the Frame Server process. A buffer that reports a negative or too short row pitch is
   refused instead of read out of range.
+- `skakel-vcam`: the media source reads the DACL of a section that exists and uses it only when it
+  is the one it would have made for that camera's producer, so a camera made with another user's id
+  cannot show that user's frames. Local Service gets read and write on the section, not full access.
+  A producer SID that names a group (Everyone, `BUILTIN\Users`, Interactive) counts as no SID.
+  `docs/virtual-camera.md` has the rule, what it does not stop, and the hand tests.
+- `skakel-vcam`: `install` loads and installs one copy of the DLL, made inside the install folder;
+  `uninstall` leaves a registration that points elsewhere alone and reports it; `Installed` has a new
+  field `left_behind`, and one old file that cannot be removed no longer stops the install.
 - Virtual camera layout contract: a producer that attaches after one died mid-write of the idle frame
   starts the idle version from the time, so readers no longer skip its first idle frame
   (`docs/virtual-camera.md`). Layout version 1 is unchanged.

@@ -32,6 +32,12 @@ fn main() -> std::process::ExitCode {
                     path.display()
                 );
             }
+            for path in done.left_behind {
+                println!(
+                    "Older version left in place, delete it by hand: {}",
+                    path.display()
+                );
+            }
         }),
         ["uninstall"] => install::uninstall().map(|pending| {
             println!("Uninstalled.");

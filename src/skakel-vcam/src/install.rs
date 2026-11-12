@@ -124,41 +124,122 @@ pub struct Installed {
     pub version: String,
     /// Older versions still loaded, deleted at the next restart.
     pub pending_delete: Vec<PathBuf>,
+    /// Older versions that could neither be deleted nor scheduled for deletion. They do no harm;
+    /// delete them by hand.
+    pub left_behind: Vec<PathBuf>,
+}
+
+/// What `remove_versions_except` did with the files it found.
+struct Removal {
+    /// Still loaded: deleted at the next restart.
+    pending: Vec<PathBuf>,
+    /// Neither deleted nor scheduled.
+    failed: Vec<(PathBuf, String)>,
 }
 
 /// Installs `dll` (a build of `skakel-vcam-source`) for every user: copies it into the install folder
 /// under its versioned name, registers it, and removes older versions. An upgrade works while a camera
 /// made from the old version is in use; that camera picks up the new version the next time it starts.
+///
+/// The DLL is copied into the install folder first, which only administrators can write, and the
+/// copy is what is loaded to read its version and what is installed. Loading the file where the
+/// caller left it, and copying it afterwards, would install bytes other than the ones that were
+/// checked if someone else could write there in between.
 pub fn install(dll: &Path) -> Result<Installed> {
     require_elevation()?;
-    let version = dll_version(dll)?;
     let folder = install_folder()?;
     std::fs::create_dir_all(&folder)?;
-    let target = folder.join(versioned_file_name(&version));
-    copy_unless_same(dll, &target)?;
+    let incoming = folder.join(format!("incoming-{}.tmp", std::process::id()));
+    std::fs::copy(dll, &incoming).map_err(|e| {
+        Error::InvalidArgument(format!(
+            "could not copy {} into {}: {e}",
+            dll.display(),
+            folder.display()
+        ))
+    })?;
+    let placed = place(&incoming, &folder);
+    // A temporary that was not moved is not wanted, whatever went wrong.
+    let _ = std::fs::remove_file(&incoming);
+    let (version, target) = placed?;
     register(&target)?;
-    let pending_delete = remove_versions_except(&folder, Some(&target))?;
+    let removal = remove_versions_except(&folder, Some(&target))?;
     Ok(Installed {
         path: target,
         version,
-        pending_delete,
+        pending_delete: removal.pending,
+        left_behind: removal.failed.into_iter().map(|(path, _)| path).collect(),
     })
+}
+
+/// Reads the version of the DLL at `incoming` and gives it its versioned name in `folder`, unless a
+/// file of that name holds the same bytes already (it may, while it is loaded).
+fn place(incoming: &Path, folder: &Path) -> Result<(String, PathBuf)> {
+    let version = dll_version(incoming)?;
+    let target = folder.join(versioned_file_name(&version));
+    if target.exists() && std::fs::read(incoming)? == std::fs::read(&target)? {
+        return Ok((version, target));
+    }
+    std::fs::copy(incoming, &target).map_err(|e| {
+        Error::InvalidArgument(format!(
+            "could not write {}: {e}. If this version is loaded with other contents, build it with a new version number",
+            target.display()
+        ))
+    })?;
+    Ok((version, target))
 }
 
 /// Unregisters the media source and deletes its files. Returns the files still loaded, which go at
 /// the next restart. Cameras users created stay listed until each user removes theirs.
+///
+/// Only a registration that points into the install folder is removed. The CLSID is machine-wide
+/// and shared with whatever else registered it (`regsvr32` on a build of the DLL, an installer of
+/// an app's own), so one that points elsewhere is left alone and reported: remove it with
+/// `regsvr32 /u` on that file.
 pub fn uninstall() -> Result<Vec<PathBuf>> {
     require_elevation()?;
-    unregister()?;
     let folder = install_folder()?;
+    if let Some(registered) = registered_path()?
+        && !is_inside(&registered, &folder)
+    {
+        return Err(Error::InvalidArgument(format!(
+            "the media source is registered from {}, not from {}, so it was not installed by this tool and is left registered. Run regsvr32 /u on that file to remove it",
+            registered.display(),
+            folder.display()
+        )));
+    }
+    unregister()?;
     if !folder.exists() {
         return Ok(Vec::new());
     }
-    let pending = remove_versions_except(&folder, None)?;
-    if pending.is_empty() {
+    let removal = remove_versions_except(&folder, None)?;
+    if !removal.failed.is_empty() {
+        let files: Vec<String> = removal
+            .failed
+            .iter()
+            .map(|(path, why)| format!("{} ({why})", path.display()))
+            .collect();
+        return Err(Error::InvalidArgument(format!(
+            "unregistered, but could not remove: {}",
+            files.join(", ")
+        )));
+    }
+    if removal.pending.is_empty() {
         let _ = std::fs::remove_dir(&folder);
     }
-    Ok(pending)
+    Ok(removal.pending)
+}
+
+/// True when `file` is directly inside `folder`, by Windows' rules for paths: case does not matter,
+/// and `/` and `\` are the same.
+fn is_inside(file: &Path, folder: &Path) -> bool {
+    let normal = |p: &Path| {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    file.parent()
+        .is_some_and(|parent| normal(parent) == normal(folder))
 }
 
 fn require_elevation() -> Result<()> {
@@ -170,23 +251,13 @@ fn require_elevation() -> Result<()> {
     }
 }
 
-/// Copies unless the target holds the same bytes already, which it may while it is loaded.
-fn copy_unless_same(source: &Path, target: &Path) -> Result<()> {
-    if target.exists() && std::fs::read(source)? == std::fs::read(target)? {
-        return Ok(());
-    }
-    std::fs::copy(source, target).map_err(|e| {
-        Error::InvalidArgument(format!(
-            "could not write {}: {e}. If this version is loaded with other contents, build it with a new version number",
-            target.display()
-        ))
-    })?;
-    Ok(())
-}
-
 /// Deletes every versioned DLL in `folder` but `keep`; schedules the ones in use for the next restart.
-fn remove_versions_except(folder: &Path, keep: Option<&Path>) -> Result<Vec<PathBuf>> {
-    let mut pending = Vec::new();
+/// One file that cannot be dealt with does not stop the others: it is reported in `failed`.
+fn remove_versions_except(folder: &Path, keep: Option<&Path>) -> Result<Removal> {
+    let mut removal = Removal {
+        pending: Vec::new(),
+        failed: Vec::new(),
+    };
     for entry in std::fs::read_dir(folder)? {
         let path = entry?.path();
         let name = path
@@ -197,17 +268,20 @@ fn remove_versions_except(folder: &Path, keep: Option<&Path>) -> Result<Vec<Path
             continue;
         }
         if std::fs::remove_file(&path).is_err() {
-            unsafe {
+            let scheduled = unsafe {
                 MoveFileExW(
                     &HSTRING::from(path.as_os_str()),
                     PCWSTR::null(),
                     MOVEFILE_DELAY_UNTIL_REBOOT,
-                )?
+                )
             };
-            pending.push(path);
+            match scheduled {
+                Ok(()) => removal.pending.push(path),
+                Err(e) => removal.failed.push((path, e.to_string())),
+            }
         }
     }
-    Ok(pending)
+    Ok(removal)
 }
 
 /// True for a name `versioned_file_name` makes.
@@ -265,6 +339,36 @@ mod tests {
         assert!(!is_versioned_file_name("skakel_vcam_source.dll"));
         assert!(!is_versioned_file_name("skakel_vcam_source-.dll"));
         assert!(!is_versioned_file_name("other.dll"));
+    }
+
+    #[test]
+    fn knows_a_file_in_the_install_folder_by_windows_rules() {
+        let folder = Path::new(r"C:\Program Files\Skakel\VirtualCamera");
+        assert!(is_inside(
+            Path::new(r"C:\Program Files\Skakel\VirtualCamera\skakel_vcam_source-0.2.1.dll"),
+            folder
+        ));
+        assert!(is_inside(
+            Path::new(r"c:/program files/skakel/virtualcamera/a.dll"),
+            folder
+        ));
+        assert!(is_inside(
+            Path::new(r"C:\Program Files\Skakel\VirtualCamera\a.dll"),
+            Path::new(r"C:\Program Files\Skakel\VirtualCamera\")
+        ));
+        // Elsewhere, below it, or beside it with a longer name.
+        assert!(!is_inside(
+            Path::new(r"D:\build\skakel_vcam_source.dll"),
+            folder
+        ));
+        assert!(!is_inside(
+            Path::new(r"C:\Program Files\Skakel\VirtualCamera\old\a.dll"),
+            folder
+        ));
+        assert!(!is_inside(
+            Path::new(r"C:\Program Files\Skakel\VirtualCamera2\a.dll"),
+            folder
+        ));
     }
 
     #[test]
