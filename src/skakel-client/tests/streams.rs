@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 use common::within;
 use skakel_client::tonic::Code;
 use skakel_client::{
-    Bytes, ClientOptions, Credentials, ErrorCode, FailureKind, FlowControl, Frame, LineSettings,
-    Link, OpenResult, Parity, Pins, SerialEvent, StopBits, StreamCloseReason, StreamRefusal,
-    StreamRefusalReason,
+    Bytes, ClientOptions, Credentials, DataBits, ErrorCode, FailureKind, FlowControl, Frame,
+    LineSettings, Link, OpenResult, Parity, Pins, SerialEvent, StopBits, StreamCloseReason,
+    StreamRefusal, StreamRefusalReason,
 };
 
 fn data(bytes: &'static [u8]) -> Option<Frame> {
@@ -41,7 +41,7 @@ async fn linked_with(
 fn settings(baud: u32) -> LineSettings {
     LineSettings {
         baud,
-        data_bits: 8,
+        data_bits: DataBits::Eight,
         parity: Parity::None,
         stop_bits: StopBits::One,
         flow_control: FlowControl::None,
@@ -390,7 +390,7 @@ async fn set_line_settings_waits_for_the_server_to_echo_them() {
     let serial = open_serial(&link, "COM1").await;
     let wanted = LineSettings {
         baud: 115_200,
-        data_bits: 7,
+        data_bits: DataBits::Seven,
         parity: Parity::Even,
         stop_bits: StopBits::Two,
         flow_control: FlowControl::RtsCts,

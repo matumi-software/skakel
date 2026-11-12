@@ -527,6 +527,9 @@ bytes.
   few characters, which a round trip over the network cannot. With RTS/CTS the server drives RTS
   itself, and `modem_lines` changes to `rts` are ignored. With XON/XOFF the port's driver handles
   XON and XOFF and they do not appear in the data.
+- **Values a reader does not know.** An enum value outside the lists above, or 0, in a message is
+  not a reason to drop the message: a reader keeps the number, and a server answers a change that
+  carries one with `unsupported`. A newer end may add values.
 - A port the server cannot set a value on (a baud rate it does not support, one and a half stop
   bits with 8 data bits) gets an `error` with `unsupported`.
 - The server answers each `line_settings` change once, with `line_settings` or an `unsupported`

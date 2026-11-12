@@ -7,16 +7,18 @@
 //!
 //! Data frames carry the port's bytes; control frames carry one control message each.
 //! [`ClientMessage`] goes from the client to the server and [`ServerMessage`] the other way. Both
-//! are strict about what they read: a value outside the lists below, or a kind this end does not
-//! know, is not a message it uses.
+//! keep what they cannot interpret: a value this end does not know (a new parity, a new error code)
+//! is read as `Unknown(value)` and not dropped, so a newer peer's messages still arrive. A change
+//! that [`LineSettings::is_valid`] refuses is one a server answers with `unsupported`. A message of
+//! a kind this end does not know is an error the reader ignores.
 
 mod messages;
 mod settings;
 
 use prost::Message;
 
-pub use messages::{ClientMessage, ClientMessageError, ServerMessage};
-pub use settings::{ErrorCode, FlowControl, LineSettings, ModemStatus, Parity, StopBits};
+pub use messages::{ClientMessage, ClientMessageError, ServerMessage, ServerMessageError};
+pub use settings::{DataBits, ErrorCode, FlowControl, LineSettings, ModemStatus, Parity, StopBits};
 
 /// The `serial` stream type: one serial port on the server, used by one client at a time.
 pub const STREAM_TYPE: &str = "serial";

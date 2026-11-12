@@ -48,7 +48,7 @@ fn serial() -> StreamHandler {
             StreamOpen::accept(|mut session: StreamSession| async move {
                 let mut settings = LineSettings {
                     baud: 9600,
-                    data_bits: 8,
+                    data_bits: skakel_client::DataBits::Eight,
                     parity: skakel_client::Parity::None,
                     stop_bits: skakel_client::StopBits::One,
                     flow_control: skakel_client::FlowControl::None,

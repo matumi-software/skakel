@@ -9,6 +9,7 @@ use crate::settings::{ErrorCode, LineSettings, ModemStatus};
 
 /// A control message from the client to the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ClientMessage {
     /// `line_settings`: change the port's settings. Every field is required.
     LineSettings(LineSettings),
@@ -36,6 +37,7 @@ pub enum ClientMessage {
 
 /// A control message from the server to the client.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ServerMessage {
     /// `opened`: the first control message after `opened`, with the port as it is now.
     Opened {
@@ -61,13 +63,15 @@ pub enum ServerMessage {
 
 /// Why a control message from the client could not be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ClientMessageError {
     /// Not a `SerialClientMessage`.
     Malformed,
     /// A message of a kind this end does not know, which it ignores.
     UnknownKind,
-    /// A `line_settings` change with a field that is zero, unspecified, a value this end does not
-    /// know or out of range. The server answers it with an `unsupported` error.
+    /// A `line_settings` change that [`LineSettings::is_valid`] refuses: a baud rate of 0, or a
+    /// field that is unspecified, a value this end does not know or out of range. The server
+    /// answers it with an `unsupported` error.
     UnsupportedSettings,
 }
 
@@ -82,6 +86,30 @@ impl std::fmt::Display for ClientMessageError {
 }
 
 impl std::error::Error for ClientMessageError {}
+
+/// Why a control message from the server could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ServerMessageError {
+    /// Not a `SerialServerMessage`.
+    Malformed,
+    /// A message of a kind this end does not know, which it ignores.
+    UnknownKind,
+    /// A message that lacks a part it needs: an `opened` without its line settings.
+    Incomplete,
+}
+
+impl std::fmt::Display for ServerMessageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Malformed => "not a serial control message",
+            Self::UnknownKind => "a serial control message of a kind this end does not know",
+            Self::Incomplete => "a serial control message without a part it needs",
+        })
+    }
+}
+
+impl std::error::Error for ServerMessageError {}
 
 impl ClientMessage {
     /// The message, encoded, for a control frame.
@@ -113,10 +141,13 @@ impl ClientMessage {
             .message
             .ok_or(ClientMessageError::UnknownKind)?;
         Ok(match message {
-            serial_client_message::Message::LineSettings(settings) => Self::LineSettings(
-                LineSettings::from_wire(&settings)
-                    .ok_or(ClientMessageError::UnsupportedSettings)?,
-            ),
+            serial_client_message::Message::LineSettings(settings) => {
+                let settings = LineSettings::from_wire(&settings);
+                if !settings.is_valid() {
+                    return Err(ClientMessageError::UnsupportedSettings);
+                }
+                Self::LineSettings(settings)
+            }
             serial_client_message::Message::ModemLines(lines) => Self::ModemLines {
                 dtr: lines.dtr,
                 rts: lines.rts,
@@ -149,7 +180,7 @@ impl ServerMessage {
             }
             Self::Error { code, detail } => {
                 serial_server_message::Message::Error(wire::SerialError {
-                    code: code.to_wire() as i32,
+                    code: code.to_wire(),
                     detail: detail.clone().unwrap_or_default(),
                 })
             }
@@ -160,14 +191,22 @@ impl ServerMessage {
         .encode_to_vec()
     }
 
-    /// Reads a message from the server. `None` for anything that is not one this end can use:
-    /// bytes that do not decode, a kind it does not know, settings or an error code outside the
-    /// lists, or an `opened` without its settings.
-    pub fn decode(bytes: &[u8]) -> Option<Self> {
-        let message = wire::SerialServerMessage::decode(bytes).ok()?.message?;
-        Some(match message {
+    /// Reads a message from the server. A value this end does not know (a new error code, a new
+    /// parity) is kept as `Unknown`, so a newer server's message is still read; only bytes that do
+    /// not decode, a kind it does not know, or an `opened` without its settings are refused.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ServerMessageError> {
+        let message = wire::SerialServerMessage::decode(bytes)
+            .map_err(|_| ServerMessageError::Malformed)?
+            .message
+            .ok_or(ServerMessageError::UnknownKind)?;
+        Ok(match message {
             serial_server_message::Message::Opened(opened) => Self::Opened {
-                line_settings: LineSettings::from_wire(opened.line_settings.as_ref()?)?,
+                line_settings: LineSettings::from_wire(
+                    opened
+                        .line_settings
+                        .as_ref()
+                        .ok_or(ServerMessageError::Incomplete)?,
+                ),
                 modem_status: opened
                     .modem_status
                     .as_ref()
@@ -175,13 +214,13 @@ impl ServerMessage {
                     .unwrap_or_default(),
             },
             serial_server_message::Message::LineSettings(settings) => {
-                Self::LineSettings(LineSettings::from_wire(&settings)?)
+                Self::LineSettings(LineSettings::from_wire(&settings))
             }
             serial_server_message::Message::ModemStatus(status) => {
                 Self::ModemStatus(ModemStatus::from_wire(&status))
             }
             serial_server_message::Message::Error(error) => Self::Error {
-                code: ErrorCode::from_wire(error.code)?,
+                code: ErrorCode::from_wire(error.code),
                 detail: Some(error.detail).filter(|d| !d.is_empty()),
             },
         })
@@ -191,7 +230,7 @@ impl ServerMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{FlowControl, Parity, StopBits};
+    use crate::settings::{DataBits, FlowControl, Parity, StopBits};
 
     fn settings(
         baud: u32,
@@ -202,7 +241,7 @@ mod tests {
     ) -> LineSettings {
         LineSettings {
             baud,
-            data_bits,
+            data_bits: DataBits::from_wire(data_bits),
             parity,
             stop_bits,
             flow_control,
@@ -351,7 +390,7 @@ mod tests {
         let bytes = opened.encode();
 
         assert_eq!(&bytes[..2], [0x0A, 0x13]);
-        assert_eq!(ServerMessage::decode(&bytes), Some(opened));
+        assert_eq!(ServerMessage::decode(&bytes), Ok(opened));
     }
 
     #[test]
@@ -383,20 +422,13 @@ mod tests {
         for message in cases {
             assert_eq!(
                 ServerMessage::decode(&message.encode()),
-                Some(message.clone())
+                Ok(message.clone())
             );
         }
     }
 
     #[test]
-    fn decode_refuses_what_a_server_would_not_send() {
-        let unknown_code = wire::SerialServerMessage {
-            message: Some(serial_server_message::Message::Error(wire::SerialError {
-                code: 9,
-                detail: String::new(),
-            })),
-        }
-        .encode_to_vec();
+    fn decode_refuses_only_what_is_not_a_message_or_lacks_its_settings() {
         let opened_without_settings = wire::SerialServerMessage {
             message: Some(serial_server_message::Message::Opened(
                 wire::SerialOpened::default(),
@@ -404,9 +436,82 @@ mod tests {
         }
         .encode_to_vec();
 
-        assert_eq!(ServerMessage::decode(&unknown_code), None);
-        assert_eq!(ServerMessage::decode(&opened_without_settings), None);
-        assert_eq!(ServerMessage::decode(&[0x2A, 0x00]), None);
-        assert_eq!(ServerMessage::decode(&[0xFF]), None);
+        assert_eq!(
+            ServerMessage::decode(&opened_without_settings),
+            Err(ServerMessageError::Incomplete)
+        );
+        assert_eq!(
+            ServerMessage::decode(&[0x2A, 0x00]),
+            Err(ServerMessageError::UnknownKind)
+        );
+        assert_eq!(
+            ServerMessage::decode(&[0xFF]),
+            Err(ServerMessageError::Malformed)
+        );
+    }
+
+    #[test]
+    fn an_error_code_this_end_does_not_know_is_kept() {
+        let bytes = wire::SerialServerMessage {
+            message: Some(serial_server_message::Message::Error(wire::SerialError {
+                code: 9,
+                detail: "a code from a newer server".into(),
+            })),
+        }
+        .encode_to_vec();
+
+        let message = ServerMessage::decode(&bytes).unwrap();
+
+        assert_eq!(
+            message,
+            ServerMessage::Error {
+                code: ErrorCode::Unknown(9),
+                detail: Some("a code from a newer server".into()),
+            }
+        );
+        // And it goes back out as it came in.
+        assert_eq!(message.encode(), bytes);
+    }
+
+    #[test]
+    fn settings_with_values_this_end_does_not_know_are_kept_and_say_they_are_not_valid() {
+        let wire_settings = wire::LineSettings {
+            baud: 9600,
+            data_bits: 9,
+            parity: 6,
+            stop_bits: 0,
+            flow_control: 4,
+        };
+        let bytes = wire::SerialServerMessage {
+            message: Some(serial_server_message::Message::Opened(wire::SerialOpened {
+                line_settings: Some(wire_settings),
+                modem_status: None,
+            })),
+        }
+        .encode_to_vec();
+
+        let Ok(ServerMessage::Opened { line_settings, .. }) = ServerMessage::decode(&bytes) else {
+            panic!("an opened with unknown values is still read");
+        };
+
+        assert_eq!(line_settings.data_bits, DataBits::Unknown(9));
+        assert_eq!(line_settings.parity, Parity::Unknown(6));
+        assert_eq!(line_settings.stop_bits, StopBits::Unknown(0));
+        assert_eq!(line_settings.flow_control, FlowControl::Unknown(4));
+        assert!(!line_settings.is_valid());
+        assert_eq!(line_settings.to_wire(), wire_settings);
+    }
+
+    #[test]
+    fn data_bits_are_five_to_eight_and_nothing_else_is_valid() {
+        for bits in 5..=8 {
+            assert_eq!(DataBits::from_wire(bits).to_wire(), bits);
+            assert!(!matches!(DataBits::from_wire(bits), DataBits::Unknown(_)));
+        }
+        for bits in [0, 4, 9, u32::MAX] {
+            assert_eq!(DataBits::from_wire(bits), DataBits::Unknown(bits));
+        }
+        assert!(settings(1, 8, Parity::None, StopBits::One, FlowControl::None).is_valid());
+        assert!(!settings(0, 8, Parity::None, StopBits::One, FlowControl::None).is_valid());
     }
 }

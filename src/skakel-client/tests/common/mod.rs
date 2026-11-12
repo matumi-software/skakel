@@ -352,7 +352,7 @@ fn pretend_serial() -> StreamHandler {
 async fn run_serial(mut session: StreamSession, fault: bool) {
     let mut settings = LineSettings {
         baud: 9600,
-        data_bits: 8,
+        data_bits: skakel_serial::DataBits::Eight,
         parity: skakel_serial::Parity::None,
         stop_bits: skakel_serial::StopBits::One,
         flow_control: skakel_serial::FlowControl::None,
