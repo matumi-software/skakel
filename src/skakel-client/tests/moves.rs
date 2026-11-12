@@ -32,22 +32,21 @@ fn record_moves(link: &Link) -> Recorder<Url> {
 }
 
 fn answer(port: u16, fingerprint: &str) -> DiscoveredServer {
-    DiscoveredServer {
-        name: "bench".into(),
-        address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+    DiscoveredServer::for_test(
+        "bench",
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
         port,
-        fingerprint: fingerprint.to_owned(),
-        app: SkakelApp {
+        fingerprint,
+        SkakelApp {
             id: "test-app".into(),
             version: "1.2.3".into(),
         },
-        versions: vec![2],
-        other_endpoints: Vec::new(),
-    }
+        vec![2],
+    )
 }
 
 fn browser_for(targets: &[u16]) -> Browser {
-    Browser::with_options(
+    Browser::new(
         BrowserOptions::new(5240)
             .app_ids(vec!["test-app".into()])
             .probe_targets(
@@ -189,7 +188,7 @@ async fn a_link_that_is_refused_by_the_server_does_not_go_looking_for_another() 
     let link = Link::new(
         &server.address(),
         server.pins(),
-        skakel_client::Credentials::new(credentials.client_id, "wrong"),
+        skakel_client::Credentials::new(credentials.client_id.clone(), "wrong"),
         ClientOptions::default().browser(browser.clone()),
     )
     .unwrap();

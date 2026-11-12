@@ -43,6 +43,7 @@ use crate::info::pick_version;
 
 /// A server that answered a discovery probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DiscoveredServer {
     /// The name people know it by; its address when it gave none.
     pub name: String,
@@ -65,6 +66,28 @@ pub struct DiscoveredServer {
 }
 
 impl DiscoveredServer {
+    /// A server as a discovery answer would describe it, for a test that stands in for the network
+    /// (see [`Browser::add_for_test`]); behind the `test-util` feature. `other_endpoints` is empty.
+    #[cfg(feature = "test-util")]
+    pub fn for_test(
+        name: impl Into<String>,
+        address: IpAddr,
+        port: u16,
+        fingerprint: impl Into<String>,
+        app: SkakelApp,
+        versions: Vec<i32>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            address,
+            port,
+            fingerprint: fingerprint.into(),
+            app,
+            versions,
+            other_endpoints: Vec::new(),
+        }
+    }
+
     /// Its HTTPS address, such as `https://192.168.1.20:5240/`.
     pub fn url(&self) -> Url {
         let host = match self.address {
@@ -194,17 +217,9 @@ impl Drop for Protection {
 }
 
 impl Browser {
-    /// A browser for the servers of the given apps, on the app's port. Call
-    /// [`start`](Self::start) to begin.
-    pub fn new(port: u16, app_ids: Option<Vec<String>>) -> Self {
-        Self::with_options(BrowserOptions {
-            app_ids,
-            ..BrowserOptions::new(port)
-        })
-    }
-
-    /// A browser with its own probe targets and interval.
-    pub fn with_options(options: BrowserOptions) -> Self {
+    /// A browser for the servers on the app's port, probing as the options say (see
+    /// [`BrowserOptions`]). Call [`start`](Self::start) to begin.
+    pub fn new(options: BrowserOptions) -> Self {
         let (changes, _) = watch::channel(Vec::new());
         Self {
             inner: Arc::new(Inner {

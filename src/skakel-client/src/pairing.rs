@@ -16,6 +16,7 @@ use skakel_pairing::{
 };
 use skakel_protocol::{PAIR_PATH, PAIR_TOKEN_HEADER};
 use url::Url;
+use zeroize::Zeroize;
 
 use crate::clock::{Clock, since, wall_since};
 use crate::failure::{Error, FailureKind, Result, bad_answer};
@@ -370,21 +371,26 @@ impl PairingClient {
 
 impl Drop for PairingClient {
     fn drop(&mut self) {
-        if self.state.load(Ordering::SeqCst) != WAITING {
-            return;
+        // The poll token is the proof of who may withdraw: it is wiped on every way out, and the copy
+        // a withdrawing task holds when that is done.
+        if self.state.load(Ordering::SeqCst) == WAITING
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let (http, address, id, token, state, name) = (
+                self.http.clone(),
+                self.address.clone(),
+                self.request_id.clone(),
+                self.poll_token.clone(),
+                self.state.clone(),
+                self.server_name.clone(),
+            );
+            runtime.spawn(async move {
+                let mut token = token;
+                withdraw(&http, &address, &id, &token, &state, &name).await;
+                token.zeroize();
+            });
         }
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let (http, address, id, token, state, name) = (
-            self.http.clone(),
-            self.address.clone(),
-            self.request_id.clone(),
-            self.poll_token.clone(),
-            self.state.clone(),
-            self.server_name.clone(),
-        );
-        runtime.spawn(async move { withdraw(&http, &address, &id, &token, &state, &name).await });
+        self.poll_token.zeroize();
     }
 }
 
