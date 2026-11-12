@@ -1,5 +1,6 @@
 //! The server: its builder, its listener and what the app holds on to.
 
+use crate::events::Callback;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -63,8 +64,6 @@ pub(crate) struct Shared {
     pub streams: HashMap<String, StreamHandler>,
     pub token_lifetime: Duration,
 }
-
-type Callback = Box<dyn Fn(&ServerEvent) + Send + Sync>;
 
 /// Adds an app's service to the routes, behind the token check, once the server's state exists.
 type AddService = Box<dyn FnOnce(&mut RoutesBuilder, Arc<Shared>) + Send>;
@@ -573,8 +572,9 @@ impl SkakelServer {
     /// `STOPPING`, the listener closes, and connections have a few seconds to finish.
     pub async fn shutdown(mut self) {
         self.shared.sessions.end_all(Reason::Stopping);
-        // Time for the closing messages to leave before connections are asked to wind down.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Every call hands its closing message and status on before it is gone, so connections are
+        // asked to wind down only after that, and not after a guess at how long it takes.
+        self.shared.sessions.wait_until_empty(STOP_GRACE).await;
         self.stop.send_replace(true);
         self.discovery.stop().await;
         for task in self.tasks.drain(..) {

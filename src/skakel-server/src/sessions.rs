@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use skakel_proto::v2::Certificates;
 use skakel_protocol::Reason;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::state::ServerState;
 
@@ -42,6 +42,7 @@ pub(crate) struct Sessions {
     sessions: Mutex<HashMap<u64, Session>>,
     next: AtomicU64,
     stopping: AtomicBool,
+    emptied: Notify,
 }
 
 /// Lets go of a session when dropped.
@@ -57,6 +58,7 @@ impl Drop for SessionGuard {
             .lock()
             .expect("sessions lock")
             .remove(&self.id);
+        self.sessions.emptied.notify_waiters();
     }
 }
 
@@ -67,6 +69,7 @@ impl Sessions {
             sessions: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
+            emptied: Notify::new(),
         })
     }
 
@@ -145,6 +148,25 @@ impl Sessions {
         for session in sessions.values_mut() {
             end(session, reason);
         }
+    }
+
+    /// Waits until no call is running, or `bound` has passed. True when none is. A call is gone
+    /// when its task has handed its closing message and status on, so after this the connections
+    /// can be asked to wind down without losing them.
+    pub(crate) async fn wait_until_empty(&self, bound: std::time::Duration) -> bool {
+        tokio::time::timeout(bound, async {
+            loop {
+                let notified = self.emptied.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.sessions.lock().expect("sessions lock").is_empty() {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .is_ok()
     }
 
     /// How many calls of this client are running.
@@ -350,5 +372,40 @@ mod tests {
         drop(call);
 
         assert_eq!(sessions.count_for(&client.client_id), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn waiting_for_the_calls_to_end_returns_as_the_last_one_goes() {
+        let (sessions, state) = sessions().await;
+        let client = state.register_client("lab pc").await.unwrap();
+        let (guard, ended_rx) = sessions.add_call(&client.client_id, 1);
+        sessions.end_all(Reason::Stopping);
+        assert_eq!(ended(ended_rx).await, Reason::Stopping);
+
+        let waiting = {
+            let sessions = sessions.clone();
+            tokio::spawn(async move { sessions.wait_until_empty(Duration::from_secs(5)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!waiting.is_finished());
+        drop(guard);
+
+        assert!(waiting.await.unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn waiting_for_the_calls_to_end_gives_up_at_its_bound() {
+        let (sessions, state) = sessions().await;
+        let client = state.register_client("lab pc").await.unwrap();
+        let (_guard, _ended) = sessions.add_call(&client.client_id, 1);
+
+        assert!(!sessions.wait_until_empty(Duration::from_secs(2)).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn waiting_with_no_calls_returns_at_once() {
+        let (sessions, _) = sessions().await;
+
+        assert!(sessions.wait_until_empty(Duration::from_secs(2)).await);
     }
 }
