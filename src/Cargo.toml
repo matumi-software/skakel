@@ -6,7 +6,7 @@ members = ["skakel-client", "skakel-proto", "skakel-serial", "skakel-server", "s
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.99"
-authors = ["Matumi Software"]
+authors = ["Matumi (Pty) Ltd"]
 license = "MIT"
 repository = "https://github.com/matumi-software/skakel"
 
