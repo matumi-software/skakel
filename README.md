@@ -81,7 +81,7 @@ has how it works, the shared memory contract, installing and upgrading, and sign
 
 ## License
 
-MIT, see [LICENSE](https://github.com/matumi-software/skakel/blob/main/LICENSE). Copyright (c) 2026 Matumi Software.
+MIT, see [LICENSE](https://github.com/matumi-software/skakel/blob/main/LICENSE). Copyright (c) 2026 Matumi (Pty) Ltd.
 
 Contributions are accepted under the same licence. Skakel takes no GPL code, so apps of any licence
 can use it.
