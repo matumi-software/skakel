@@ -356,6 +356,34 @@ async fn a_server_that_ends_every_connection_is_connected_to_again() {
 }
 
 #[tokio::test]
+async fn a_retry_interval_sets_how_long_a_failed_link_waits() {
+    let mut bench = common::Bench::new();
+    let server = bench.server().await;
+    let credentials = bench.register(&server).await;
+    let link = Link::new(
+        &server.address(),
+        server.pins(),
+        credentials,
+        ClientOptions::default().retry_interval(Duration::from_secs(4)),
+    )
+    .unwrap();
+    let statuses = record_status(&link);
+    link.start();
+    statuses.wait(|s| s.state == LinkState::Connected).await;
+
+    bench.end_all(&server).await;
+    statuses.wait(|s| s.state == LinkState::Failed).await;
+
+    // The default wait is at most a second. This one is at least half of four.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(link.status().state, LinkState::Failed);
+    statuses
+        .wait_count(2, |s| s.state == LinkState::Connected)
+        .await;
+    link.stop().await;
+}
+
+#[tokio::test]
 async fn stop_closes_the_control_channel_and_says_so() {
     let mut bench = common::Bench::new();
     let server = bench.server().await;
