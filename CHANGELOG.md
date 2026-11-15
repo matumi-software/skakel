@@ -2,7 +2,16 @@
 
 ## Unreleased
 
-Nothing yet. `main` is at the v0.3.1 tag.
+Nothing yet. `main` is at the v0.3.2 tag.
+
+## 0.3.2 (2026-11-15)
+
+No change to the wire.
+
+- `skakel-client`: `ClientOptions::retry_interval` sets a fixed wait between a link's tries after a
+  failure, in place of the wait that doubles from a second to a minute. The wait is a random time from
+  half of the interval to all of it, and a link never starts two connections less than a second apart,
+  so an interval under a second acts as a second.
 
 ## 0.3.1 (2026-11-15)
 
@@ -20,10 +29,6 @@ a `SkakelInfo` itself: it gained a field, `enroll`.
   `SkakelInfo::enroll`, and `skakel_client::{enroll_with_code, enroll_with_key}`. A new dependency,
   `spake2` 0.5.0-pre.0 (MIT or Apache-2.0, a pre-release, not audited), is pinned exactly.
   `docs/enrollment.md` is the specification.
-- `skakel-client`: `ClientOptions::retry_interval` sets a fixed wait between a link's tries after a
-  failure, in place of the wait that doubles from a second to a minute. The wait is a random time from
-  half of the interval to all of it, and a link never starts two connections less than a second apart,
-  so an interval under a second acts as a second. No change to the wire.
 
 ## 0.3.0 (2026-11-12)
 

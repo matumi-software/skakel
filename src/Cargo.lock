@@ -1395,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-client"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-proto"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proptest",
  "prost",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-serial"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proptest",
  "prost",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-server"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -1490,14 +1490,14 @@ dependencies = [
 
 [[package]]
 name = "skakel-vcam"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "skakel-vcam-source"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "skakel-vcam",
  "windows",
@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "skakel-wire"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
