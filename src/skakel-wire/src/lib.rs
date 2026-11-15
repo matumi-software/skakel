@@ -15,6 +15,7 @@
 
 mod contracts;
 pub mod discovery;
+pub mod enrollment;
 pub mod fingerprints;
 mod grpc_code;
 pub mod pairing;
