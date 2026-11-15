@@ -25,7 +25,7 @@ async fn info_is_served_without_a_token_in_the_shape_the_protocol_shows() {
     assert_eq!(reply.status, 200);
     assert_eq!(
         reply.text(),
-        r#"{"name":"rust-bench","app":{"id":"test-app","version":"1.2.3"},"versions":[3]}"#
+        r#"{"name":"rust-bench","app":{"id":"test-app","version":"1.2.3"},"versions":[3],"enroll":["code"]}"#
     );
 }
 

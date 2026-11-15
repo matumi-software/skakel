@@ -493,7 +493,7 @@ impl Pairing {
             changed = touched;
         }
         if let Some(name) = register_for {
-            let registered = self.inner.state.register_client(&name).await;
+            let registered = self.inner.state.register_client_with(&name, Some("pairing")).await;
             let mut data = self.inner.data.lock().await;
             let Some(request) = data.requests.get_mut(request_id) else {
                 // Swept while it was being saved; the client stays registered, as it was typed.

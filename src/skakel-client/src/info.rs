@@ -1,6 +1,7 @@
 //! Reading a server's `GET /skakel/info`, and picking the protocol version to speak with it.
 
 use skakel_wire::discovery::{MAX_APP_VERSION_LENGTH, MAX_NAME_LENGTH, MAX_VERSIONS, clean};
+use skakel_wire::enrollment::{METHOD_CODE, METHOD_KEY};
 use skakel_wire::{INFO_PATH, SkakelApp, SkakelInfo, VERSIONS, is_app_id};
 use url::Url;
 
@@ -68,6 +69,7 @@ fn check(info: SkakelInfo, server: &Url) -> Result<SkakelInfo> {
         name,
         app,
         versions,
+        enroll,
     } = info;
     if app.version.chars().count() > MAX_APP_VERSION_LENGTH
         || !is_app_id(&app.id)
@@ -91,6 +93,11 @@ fn check(info: SkakelInfo, server: &Url) -> Result<SkakelInfo> {
             version: clean(&app.version, MAX_APP_VERSION_LENGTH),
         },
         versions,
+        // Only the methods this client knows; a longer or odder list is not worth keeping.
+        enroll: enroll
+            .into_iter()
+            .filter(|method| matches!(method.as_str(), METHOD_CODE | METHOD_KEY))
+            .collect(),
     })
 }
 
@@ -107,6 +114,7 @@ mod tests {
                 version: version.into(),
             },
             versions,
+            enroll: vec![],
         }
     }
 

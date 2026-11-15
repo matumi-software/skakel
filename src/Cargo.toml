@@ -34,6 +34,9 @@ sha2 = "0.11.1"
 subtle = "2.6.1"
 getrandom = "0.4.3"
 # The enrolment MACs and key expansion (RustCrypto, MIT or Apache-2.0, on the same digest 0.11 as sha2).
+# The password exchange for a pairing code (RustCrypto PAKEs, MIT or Apache-2.0; its dependencies
+# are RustCrypto, curve25519-dalek 5 and digest 0.11). A pre-release, and not audited: pinned exactly.
+spake2 = { version = "=0.5.0-pre.0", features = ["getrandom", "std"] }
 hmac = "0.13.0"
 hkdf = "0.13.0"
 base64 = "0.23.1"

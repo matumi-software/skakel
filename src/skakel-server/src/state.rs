@@ -38,6 +38,8 @@ pub struct ClientView {
     pub has_next_certificate: bool,
     /// Whether the server kept its secret (see [`crate::SkakelServerBuilder::keep_client_secrets`]).
     pub has_secret: bool,
+    /// How it was linked: `pairing`, `code` or `key`, or `None` for one made before that was kept.
+    pub linked_with: Option<String>,
 }
 
 /// A client that was just registered. The secret is shown here and nowhere again, unless the
@@ -191,6 +193,7 @@ impl ServerState {
                     next_certificate: None,
                     legacy_signing_key: None,
                     legacy_retired_signing_keys: None,
+                    enrollment_secret: None,
                 };
                 store.save(&state).await.map_err(ServerError::Store)?;
                 state
@@ -225,6 +228,44 @@ impl ServerState {
 
     pub(crate) fn fingerprint(&self) -> String {
         self.loaded().fingerprint.clone()
+    }
+
+    /// The fingerprint of the certificate in use, as its 32 bytes.
+    pub(crate) fn fingerprint_bytes(&self) -> [u8; fingerprints::BYTES] {
+        fingerprints::to_bytes(&self.fingerprint()).expect("the server's own fingerprint is well formed")
+    }
+
+    /// The server key as it is now: made from the stored secret and the certificate in use, or
+    /// `None` while the app has never asked for one.
+    pub(crate) fn enrollment_key(&self) -> Option<skakel_wire::enrollment::ServerKey> {
+        let loaded = self.loaded();
+        let secret = STANDARD.decode(loaded.state.enrollment_secret.as_ref()?).ok()?;
+        let secret: [u8; 32] = secret.try_into().ok()?;
+        Some(skakel_wire::enrollment::ServerKey::from_secret(secret, &self.fingerprint_bytes()))
+    }
+
+    /// Makes the server key if there is none, or a new one when `rotate`, and gives it.
+    pub(crate) async fn make_enrollment_key(
+        &self,
+        rotate: bool,
+    ) -> Result<skakel_wire::enrollment::ServerKey, ServerError> {
+        if !rotate && let Some(key) = self.enrollment_key() {
+            return Ok(key);
+        }
+        let fresh = skakel_wire::enrollment::ServerKey::generate(&self.fingerprint_bytes())?;
+        let secret = STANDARD.encode(fresh.secret_bytes());
+        self.update(|state| {
+            // A key made meanwhile stands, unless this is a rotation.
+            if !rotate && state.enrollment_secret.is_some() {
+                return None;
+            }
+            Some(SkakelState {
+                enrollment_secret: Some(secret),
+                ..state.clone()
+            })
+        })
+        .await?;
+        Ok(self.enrollment_key().expect("the secret was just stored"))
     }
 
     pub(crate) fn clients(&self) -> Vec<ClientView> {
@@ -337,6 +378,15 @@ impl ServerState {
     }
 
     pub(crate) async fn register_client(&self, name: &str) -> Result<NewClient, ServerError> {
+        self.register_client_with(name, None).await
+    }
+
+    /// Registers a client and records how it was linked.
+    pub(crate) async fn register_client_with(
+        &self,
+        name: &str,
+        linked_with: Option<&str>,
+    ) -> Result<NewClient, ServerError> {
         let clean = skakel_wire::pairing::clean_client_name(name);
         if clean.is_empty() {
             return Err(ServerError::InvalidName);
@@ -363,6 +413,7 @@ impl ServerState {
                 created_at: OffsetDateTime::now_utc(),
                 generation: 1,
                 secret: kept,
+                linked_with: linked_with.map(str::to_owned),
             });
             registered = Some(id);
             Some(next)
@@ -542,6 +593,7 @@ fn clients_of(loaded: &Loaded, seen: &HashMap<String, OffsetDateTime>) -> Vec<Cl
                 .as_ref()
                 .is_some_and(|n| n.received_by.contains(&c.id)),
             has_secret: c.secret.is_some(),
+            linked_with: c.linked_with.clone(),
         })
         .collect()
 }

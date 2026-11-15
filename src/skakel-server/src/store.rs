@@ -61,6 +61,10 @@ pub struct SkakelState {
     /// The signing keys an earlier build had retired, read and dropped like `signing_key`.
     #[serde(default, skip_serializing, rename = "retiredSigningKeys")]
     pub(crate) legacy_retired_signing_keys: Option<serde::de::IgnoredAny>,
+    /// The secret half of the server key, as base64, once the app has asked for a key. The text of
+    /// the key is made from it and the certificate in use, so a certificate switch changes the text.
+    #[serde(default)]
+    pub enrollment_secret: Option<String>,
 }
 
 impl SkakelState {
@@ -96,6 +100,10 @@ pub struct ClientRecord {
     /// The secret itself, kept only when the server was told to (an app that shows it again).
     #[serde(default)]
     pub secret: Option<String>,
+    /// How the client was linked: `pairing`, `code` or `key`. Empty for a client made before this
+    /// was recorded.
+    #[serde(default)]
+    pub linked_with: Option<String>,
 }
 
 /// A certificate and its private key. `Debug` leaves out the private key.
@@ -263,6 +271,7 @@ mod tests {
                 created_at: now,
                 generation: 2,
                 secret: None,
+                linked_with: None,
             }],
             certificate: CertificateRecord {
                 certificate: "AA==".into(),
@@ -271,6 +280,7 @@ mod tests {
             next_certificate: None,
             legacy_signing_key: None,
             legacy_retired_signing_keys: None,
+            enrollment_secret: None,
         }
     }
 

@@ -25,6 +25,7 @@ use http_body_util::Limited;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
+use skakel_wire::enrollment::{CodeConfirm, CodeStart, ENROLL_CODE_PATH, ENROLL_KEY_PATH, KeyEnroll, REASON_CLOSED};
 use skakel_wire::pairing::{PairOpenRequest, PairRevealRequest, clean_client_name};
 use skakel_wire::{
     ACCESS_TOKEN_LIFETIME, INFO_PATH, PAIR_PATH, PAIR_TOKEN_HEADER, PROBLEM_CONTENT_TYPE,
@@ -32,6 +33,7 @@ use skakel_wire::{
 };
 use time::OffsetDateTime;
 
+use crate::enrollment::Refusal;
 use crate::pairing::Reveal;
 use crate::server::Shared;
 use crate::tokens::Principal;
@@ -39,6 +41,9 @@ use crate::util::{MAX_CLIENT_NAME_LENGTH, bearer_token};
 
 /// The largest body the token and pairing paths read.
 pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024;
+
+/// What every enrolment path starts with: the gate limits them like the pairing paths.
+const ENROLL_BASE: &str = "/skakel/v3/enroll";
 
 /// The `reason` of the problem answer to a pairing request outside the pairing window.
 pub(crate) const PAIRING_CLOSED: &str = "pairing-closed";
@@ -166,6 +171,9 @@ pub(crate) fn router(shared: Arc<Shared>) -> Router {
             &format!("{PAIR_PATH}/{{id}}"),
             get(pair_poll).delete(pair_withdraw),
         )
+        .route(ENROLL_CODE_PATH, post(enroll_code_start))
+        .route(&format!("{ENROLL_CODE_PATH}/{{id}}/confirm"), post(enroll_code_confirm))
+        .route(ENROLL_KEY_PATH, post(enroll_key))
         .route(TOKEN_PATH, post(token))
         .with_state(shared)
 }
@@ -189,7 +197,7 @@ async fn gate(
         path == base.to_ascii_lowercase()
             || path.starts_with(&format!("{}/", base.to_ascii_lowercase()))
     };
-    let (is_token, is_pair) = (on(TOKEN_PATH), on(PAIR_PATH));
+    let (is_token, is_pair) = (on(TOKEN_PATH), on(PAIR_PATH) || on(ENROLL_BASE));
     if !is_token && !is_pair {
         return next.run(request).await;
     }
@@ -277,6 +285,7 @@ async fn info(State(shared): State<Arc<Shared>>) -> Json<SkakelInfo> {
         name: shared.name.clone(),
         app: shared.app.clone(),
         versions: VERSIONS.to_vec(),
+        enroll: shared.enrollment.methods(),
     })
 }
 
@@ -358,6 +367,114 @@ async fn pair_open(
             StatusCode::TOO_MANY_REQUESTS,
             "This server is taking no more pairing requests from here for now. Try again in a few minutes.",
         ),
+    }
+}
+
+/// What an enrolment refusal looks like to the client.
+fn enrolment_refusal(refusal: Refusal) -> Response {
+    match refusal {
+        Refusal::Closed => problem_with(
+            StatusCode::FORBIDDEN,
+            "This server is not taking this kind of enrolment now. Show a pairing code on the server, or ask for its server key, and try again.",
+            Some(REASON_CLOSED),
+        ),
+        Refusal::Busy => problem(
+            StatusCode::TOO_MANY_REQUESTS,
+            "This server has as many enrolments under way as it takes. Try again in a minute.",
+        ),
+        Refusal::Invalid(detail) => problem(StatusCode::BAD_REQUEST, detail),
+        Refusal::NotFound => problem(
+            StatusCode::NOT_FOUND,
+            "There is no such enrolment, or the code or key was wrong, or it came too late.",
+        ),
+        Refusal::Failed => problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The server could not enrol the client. Try again.",
+        ),
+    }
+}
+
+/// A name the way pairing keeps it: the client's own text must clean to 1 to the longest number
+/// of characters.
+fn enrolment_name_ok(sent: &str) -> bool {
+    let name = clean_client_name(sent);
+    !name.is_empty() && name.chars().count() <= MAX_CLIENT_NAME_LENGTH
+}
+
+async fn enroll_code_start(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    // With no code open nothing is read, as with the pairing window.
+    if shared.enrollment.code().is_none() {
+        return enrolment_refusal(Refusal::Closed);
+    }
+    let Some(request) = read_json::<CodeStart>(&headers, body).await else {
+        return problem(StatusCode::BAD_REQUEST, "Send the client's name and pake message as JSON.");
+    };
+    if !enrolment_name_ok(&request.client_name) {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            &format!("Give the client a name of 1 to {MAX_CLIENT_NAME_LENGTH} characters."),
+        );
+    }
+    match shared.enrollment.start(&request.client_name, &request.pake) {
+        Ok(started) => Json(started).into_response(),
+        Err(refusal) => enrolment_refusal(refusal),
+    }
+}
+
+async fn enroll_code_confirm(
+    State(shared): State<Arc<Shared>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let Some(request) = read_json::<CodeConfirm>(&headers, body).await else {
+        return problem(StatusCode::BAD_REQUEST, "Send the confirmation mac as JSON.");
+    };
+    match shared.enrollment.confirm(&id, &request.mac).await {
+        Ok(enrolled) => Json(enrolled).into_response(),
+        Err(refusal) => enrolment_refusal(refusal),
+    }
+}
+
+async fn enroll_key(
+    State(shared): State<Arc<Shared>>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    // Wrong proofs from one address are counted, and past ten in a minute that address is turned
+    // away, the right proof included, as wrong secrets are at the token endpoint.
+    if shared.limits.too_many_failures("enroll-key", remote.ip()) {
+        return problem(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many wrong keys from this address. Wait a minute and try again.",
+        );
+    }
+    let Some(request) = read_json::<KeyEnroll>(&headers, body).await else {
+        return problem(StatusCode::BAD_REQUEST, "Send the client's name, nonce and mac as JSON.");
+    };
+    if !enrolment_name_ok(&request.client_name) {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            &format!("Give the client a name of 1 to {MAX_CLIENT_NAME_LENGTH} characters."),
+        );
+    }
+    match shared
+        .enrollment
+        .enrol_with_key(&request.client_name, &request.nonce, &request.mac)
+        .await
+    {
+        Ok(enrolled) => Json(enrolled).into_response(),
+        Err(refusal) => {
+            if refusal == Refusal::NotFound {
+                shared.limits.count_failure("enroll-key", remote.ip());
+            }
+            enrolment_refusal(refusal)
+        }
     }
 }
 

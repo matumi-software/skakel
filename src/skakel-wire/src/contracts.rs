@@ -21,6 +21,10 @@ pub struct SkakelInfo {
     pub app: SkakelApp,
     /// The protocol versions the server speaks.
     pub versions: Vec<u32>,
+    /// How a client can be enrolled here without pairing: `code`, `key`, or both. Left out of the
+    /// answer when the server does neither, and read as empty when it is missing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enroll: Vec<String>,
 }
 
 /// What `ControlService.Hello` answers to a token that works: who the server is and whom the token
@@ -66,6 +70,7 @@ mod tests {
                 version: "0.1.1".into(),
             },
             versions: vec![1],
+            enroll: vec![],
         };
 
         assert_eq!(
