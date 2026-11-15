@@ -25,6 +25,11 @@ pub struct ClientOptions {
     /// For a link: the browser it listens to, so it can follow its server to another address on the
     /// local network when the saved one stops answering. Without one, a link stays where it is.
     pub browser: Option<Browser>,
+    /// For a link: wait this long between tries after a failure (the wait is a random time from half of
+    /// this to all of it, so links do not all return at once, and never under a second). Without it
+    /// the wait starts at a second and doubles up to a minute, and starts over once a link has
+    /// stayed up for half a minute.
+    pub retry_interval: Option<Duration>,
 }
 
 impl ClientOptions {
@@ -42,6 +47,13 @@ impl ClientOptions {
         self
     }
 
+    /// For a link: a fixed wait between tries after a failure, instead of the doubling one.
+    #[must_use]
+    pub fn retry_interval(mut self, interval: Duration) -> Self {
+        self.retry_interval = Some(interval);
+        self
+    }
+
     /// For a link: the browser to listen to, so it can follow its server to another address.
     #[must_use]
     pub fn browser(mut self, browser: Browser) -> Self {
@@ -56,6 +68,7 @@ impl Default for ClientOptions {
             clock: Arc::new(SystemClock),
             request_timeout: Duration::from_secs(30),
             browser: None,
+            retry_interval: None,
         }
     }
 }
@@ -65,6 +78,7 @@ impl std::fmt::Debug for ClientOptions {
         f.debug_struct("ClientOptions")
             .field("request_timeout", &self.request_timeout)
             .field("browser", &self.browser.is_some())
+            .field("retry_interval", &self.retry_interval)
             .finish_non_exhaustive()
     }
 }

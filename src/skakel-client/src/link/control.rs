@@ -81,7 +81,8 @@ pub(super) async fn run_loop(inner: Arc<Inner>, stop: CancellationToken) {
             }
         }
 
-        pause(&inner, jittered(backoff), &stop).await;
+        let wait = inner.options.retry_interval.unwrap_or(backoff);
+        pause(&inner, jittered(wait), &stop).await;
         if stop.is_cancelled() {
             return;
         }
