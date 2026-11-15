@@ -36,6 +36,12 @@ and is used under its MIT one; checked with `cargo metadata`). It serves in one 
 
 The wire is the same either way.
 
+Enrolling with a code or a key (see [enrollment.md](enrollment.md)) adds three RustCrypto crates, all
+MIT or Apache-2.0: `hmac` and `hkdf` in `skakel-wire` (the confirmation MACs and their keys), and
+`spake2` in `skakel-server` and `skakel-client` (the password exchange for the code). `spake2` is
+0.5.0-pre.0, a pre-release that is not audited, so it is pinned exactly in the workspace and updated
+by hand; its own tree is `curve25519-dalek` 5 and `digest` 0.11, which `sha2` already uses.
+
 The client takes tokio and rustls (with ring), hyper's HTTP/1.1 client over tokio-rustls for pinned
 HTTPS (one connection per request, no pool, no redirect, no proxy), tonic's generated clients over
 hyper's HTTP/2 client and tokio-rustls for pinned gRPC connections it opens itself, one TCP

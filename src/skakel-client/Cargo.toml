@@ -29,6 +29,8 @@ zeroize.workspace = true
 rustls.workspace = true
 prost.workspace = true
 getrandom.workspace = true
+spake2.workspace = true
+base64.workspace = true
 tonic = { workspace = true, features = ["codegen"] }
 tonic-types.workspace = true
 # gRPC connections of the client's own, one TCP connection each, pinned: tonic's generated clients

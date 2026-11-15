@@ -35,6 +35,12 @@ pub const REASON_CLOSED: &str = "enrolment-closed";
 /// How many wrong confirmations spend a pairing code.
 pub const WRONG_CONFIRMATIONS: u32 = 3;
 
+/// The identity the client gives the password exchange.
+pub const CLIENT_IDENTITY: &[u8] = b"skakel-client";
+
+/// The identity the server gives the password exchange.
+pub const SERVER_IDENTITY: &[u8] = b"skakel-server";
+
 /// The bytes of a confirmation MAC.
 pub const MAC_BYTES: usize = 32;
 
@@ -103,7 +109,11 @@ pub fn code_transcript(
 }
 
 /// The transcript for a key enrolment, `nonce` being what the client sent.
-pub fn key_transcript(fingerprint: &[u8; FINGERPRINT_BYTES], client_name: &str, nonce: &str) -> Vec<u8> {
+pub fn key_transcript(
+    fingerprint: &[u8; FINGERPRINT_BYTES],
+    client_name: &str,
+    nonce: &str,
+) -> Vec<u8> {
     let mut out = Vec::new();
     lp(&mut out, KEY_TAG.as_bytes());
     lp(&mut out, fingerprint);

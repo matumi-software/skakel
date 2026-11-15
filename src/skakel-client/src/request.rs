@@ -17,7 +17,9 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::failure::{Error, FailureKind, StatusError, bad_answer};
-use crate::http::{MAX_RESPONSE_BYTES, PinsFn, Presented, connect_tls, tls_config};
+use crate::http::{
+    MAX_RESPONSE_BYTES, PinsFn, Presented, connect_tls, tls_config, tls_config_probing,
+};
 use crate::pins::Pins;
 
 /// How long a request may take unless the caller says otherwise.
@@ -52,6 +54,17 @@ impl HttpClient {
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
         // A resumed session shows no certificate and skips the check of the pins, which a link
         // that dropped a pin must not allow.
+        config.resumption = rustls::client::Resumption::disabled();
+        Self {
+            config: Arc::new(config),
+        }
+    }
+
+    /// A client for the one `info` call of an enrolment: it trusts no certificate and records the
+    /// fingerprint of the one it is shown.
+    pub(crate) fn probing(presented: Presented) -> Self {
+        let mut config = tls_config_probing(presented);
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
         config.resumption = rustls::client::Resumption::disabled();
         Self {
             config: Arc::new(config),

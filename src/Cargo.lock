@@ -1398,6 +1398,7 @@ name = "skakel-client"
 version = "0.3.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "getrandom 0.4.3",
  "http",
  "http-body-util",
@@ -1416,6 +1417,7 @@ dependencies = [
  "skakel-server",
  "skakel-wire",
  "socket2",
+ "spake2",
  "time",
  "tokio",
  "tokio-rustls",

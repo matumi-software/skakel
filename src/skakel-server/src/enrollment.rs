@@ -11,7 +11,8 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use skakel_wire::enrollment::{
-    CodeStarted, ConfirmKeys, End, Enrolled, WRONG_CONFIRMATIONS, code_transcript, new_code,
+    CLIENT_IDENTITY, CodeStarted, ConfirmKeys, End, Enrolled, SERVER_IDENTITY, WRONG_CONFIRMATIONS,
+    code_transcript, new_code,
 };
 use skakel_wire::pairing::clean_client_name;
 use spake2::{Ed25519Group, Identity, Password, Spake2};
@@ -39,11 +40,6 @@ const MAX_SESSIONS: usize = 16;
 
 /// The most bytes of a password-exchange message a server reads. SPAKE2's own is 33.
 const MAX_PAKE_BYTES: usize = 64;
-
-/// The two identities the password exchange is told about, so a transcript from another protocol
-/// cannot be replayed into this one.
-const CLIENT_IDENTITY: &[u8] = b"skakel-client";
-const SERVER_IDENTITY: &[u8] = b"skakel-server";
 
 /// A pairing code the server is showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,8 +169,13 @@ impl Enrollment {
     }
 
     /// Starts an exchange: the client's name and message in, the server's message out.
-    pub(crate) fn start(&self, client_name: &str, client_pake: &str) -> Result<CodeStarted, Refusal> {
-        let client_message = decode(client_pake).ok_or(Refusal::Invalid("The pake message is not base64url."))?;
+    pub(crate) fn start(
+        &self,
+        client_name: &str,
+        client_pake: &str,
+    ) -> Result<CodeStarted, Refusal> {
+        let client_message =
+            decode(client_pake).ok_or(Refusal::Invalid("The pake message is not base64url."))?;
         let mut inner = self.inner.lock().expect("enrolment lock");
         inner.sweep(Instant::now());
         let Some(open) = inner.code.as_ref() else {
@@ -212,7 +213,9 @@ impl Enrollment {
             enroll_id: id,
             pake: URL_SAFE_NO_PAD.encode(server_message),
             expires_at: OffsetDateTime::now_utc()
-                .saturating_add(time::Duration::try_from(SESSION_TTL).unwrap_or(time::Duration::ZERO))
+                .saturating_add(
+                    time::Duration::try_from(SESSION_TTL).unwrap_or(time::Duration::ZERO),
+                )
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap_or_default(),
         })
@@ -229,7 +232,10 @@ impl Enrollment {
             let Some(open) = inner.code.as_mut() else {
                 return Err(Refusal::NotFound);
             };
-            if !exchange.keys.verify(End::Client, &exchange.transcript, &mac) {
+            if !exchange
+                .keys
+                .verify(End::Client, &exchange.transcript, &mac)
+            {
                 open.wrong += 1;
                 if open.wrong >= WRONG_CONFIRMATIONS {
                     inner.code = None;
@@ -240,7 +246,10 @@ impl Enrollment {
             // Spent before the client is registered, so a second confirmation cannot also get in.
             inner.code = None;
             inner.exchanges.clear();
-            (exchange.name, exchange.keys.mac(End::Server, &exchange.transcript))
+            (
+                exchange.name,
+                exchange.keys.mac(End::Server, &exchange.transcript),
+            )
         };
         let registered = self
             .state
@@ -256,12 +265,21 @@ impl Enrollment {
 
     /// Enrols with the server key: the client's name, nonce and proof in, the server's proof and the
     /// credentials out. A wrong proof is [`Refusal::NotFound`], whatever was wrong with it.
-    pub(crate) async fn enrol_with_key(&self, client_name: &str, nonce: &str, mac: &str) -> Result<Enrolled, Refusal> {
+    pub(crate) async fn enrol_with_key(
+        &self,
+        client_name: &str,
+        nonce: &str,
+        mac: &str,
+    ) -> Result<Enrolled, Refusal> {
         let Some(key) = self.state.enrollment_key() else {
             return Err(Refusal::Closed);
         };
         // The nonce is 32 bytes as base64url, 43 characters; a longer one is more than needed.
-        if !(43..=128).contains(&nonce.len()) || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        if !(43..=128).contains(&nonce.len())
+            || !nonce
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
             return Err(Refusal::Invalid("The nonce is not 32 bytes as base64url."));
         }
         let proof = decode(mac).ok_or(Refusal::Invalid("The mac is not base64url."))?;
@@ -287,5 +305,8 @@ fn decode(text: &str) -> Option<Vec<u8>> {
     if text.len() > MAX_PAKE_BYTES * 2 {
         return None;
     }
-    URL_SAFE_NO_PAD.decode(text).ok().filter(|bytes| bytes.len() <= MAX_PAKE_BYTES)
+    URL_SAFE_NO_PAD
+        .decode(text)
+        .ok()
+        .filter(|bytes| bytes.len() <= MAX_PAKE_BYTES)
 }

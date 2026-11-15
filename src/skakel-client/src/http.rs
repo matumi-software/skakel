@@ -47,7 +47,8 @@ pub(crate) fn last_presented(presented: &Presented) -> Option<String> {
 /// by and whoever signed it. The handshake's signature is still checked against the certificate's
 /// key, so only the holder of the pinned certificate's key passes.
 struct PinnedVerifier {
-    pins: PinsFn,
+    /// `None` for the one handshake of an enrolment, which only reads the fingerprint it is shown.
+    pins: Option<PinsFn>,
     presented: Option<Presented>,
     algorithms: WebPkiSupportedAlgorithms,
 }
@@ -67,7 +68,9 @@ impl ServerCertVerifier for PinnedVerifier {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        if !(self.pins)().trusts_certificate(end_entity.as_ref()) {
+        if let Some(pins) = &self.pins
+            && !pins().trusts_certificate(end_entity.as_ref())
+        {
             return Err(rustls::Error::InvalidCertificate(
                 CertificateError::ApplicationVerificationFailure,
             ));
@@ -107,8 +110,26 @@ impl ServerCertVerifier for PinnedVerifier {
 pub(crate) fn tls_config(pins: PinsFn, presented: Option<Presented>) -> rustls::ClientConfig {
     let provider = Arc::new(ring::default_provider());
     let verifier = PinnedVerifier {
-        pins,
+        pins: Some(pins),
         presented,
+        algorithms: provider.signature_verification_algorithms,
+    };
+    rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("the ring provider speaks TLS 1.3")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth()
+}
+
+/// A TLS configuration for the one handshake of an enrolment: it accepts the certificate it is
+/// shown and records its fingerprint in `presented`, and sends nothing a person would keep secret.
+/// It is never used for anything else, and the exchange that follows is pinned to what it saw.
+pub(crate) fn tls_config_probing(presented: Presented) -> rustls::ClientConfig {
+    let provider = Arc::new(ring::default_provider());
+    let verifier = PinnedVerifier {
+        pins: None,
+        presented: Some(presented),
         algorithms: provider.signature_verification_algorithms,
     };
     rustls::ClientConfig::builder_with_provider(provider)
