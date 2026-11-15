@@ -33,6 +33,9 @@ sha2 = "0.11.1"
 # Constant-time comparison for secrets and fingerprints.
 subtle = "2.6.1"
 getrandom = "0.4.3"
+# The enrolment MACs and key expansion (RustCrypto, MIT or Apache-2.0, on the same digest 0.11 as sha2).
+hmac = "0.13.0"
+hkdf = "0.13.0"
 base64 = "0.23.1"
 # `expiresAt` in the pairing answer is an RFC 3339 timestamp.
 time = { version = "0.3.55", features = ["serde-well-known", "parsing", "formatting"] }
