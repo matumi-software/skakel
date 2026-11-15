@@ -52,6 +52,19 @@ impl ServerKey {
         Ok(Self { secret, tag })
     }
 
+    /// The key made from a stored secret and the certificate in use.
+    pub fn from_secret(secret: [u8; 32], fingerprint: &[u8; FINGERPRINT_BYTES]) -> Self {
+        let mut tag = [0u8; TAG_BYTES];
+        tag.copy_from_slice(&fingerprint[..TAG_BYTES]);
+        Self { secret, tag }
+    }
+
+    /// The secret half, for a server that keeps it between runs. The text of the key is made again
+    /// from it and the certificate in use with [`from_secret`](Self::from_secret).
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.secret
+    }
+
     /// The key as text: `kp1_` and 77 base32 characters.
     pub fn encode(&self) -> String {
         let mut bytes = [0u8; SECRET_BYTES + TAG_BYTES];

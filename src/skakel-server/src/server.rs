@@ -38,6 +38,7 @@ use crate::events::{Events, ServerEvents};
 use crate::grpc::Guarded;
 use crate::http::{self, looks_like_tls, plain_http_answer};
 use crate::limits::Limits;
+use crate::enrollment::Enrollment;
 use crate::pairing::{Pairing, PairingWindow};
 use crate::service::{Routers, SkakelService, connection_builder};
 use crate::sessions::Sessions;
@@ -56,6 +57,7 @@ pub(crate) struct Shared {
     pub state: Arc<ServerState>,
     pub limits: Limits,
     pub pairing: Pairing,
+    pub enrollment: Enrollment,
     pub sessions: Arc<Sessions>,
     pub streams: HashMap<String, Handler>,
     pub token_lifetime: Duration,
@@ -356,6 +358,7 @@ impl SkakelServerBuilder {
                 self.pair_requests_per_minute,
             ),
             pairing: pairing.clone(),
+            enrollment: Enrollment::new(state.clone()),
             sessions: sessions.clone(),
             streams: self.streams,
             token_lifetime: self.token_lifetime,
@@ -517,6 +520,12 @@ impl SkakelServer {
         Certificates {
             state: self.shared.state.clone(),
         }
+    }
+
+    /// Enrolling a client with a pairing code or a server key, which needs no approval on the
+    /// server. See [`Enrollment`].
+    pub fn enrollment(&self) -> Enrollment {
+        self.shared.enrollment.clone()
     }
 
     /// The pairing requests.

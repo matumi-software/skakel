@@ -118,6 +118,7 @@
 mod control;
 mod crypto;
 mod discovery;
+mod enrollment;
 mod error;
 mod events;
 mod grpc;
@@ -134,6 +135,7 @@ mod tokens;
 mod util;
 
 pub use crypto::CryptoError;
+pub use enrollment::{DEFAULT_TTL as DEFAULT_ENROLLMENT_CODE_TTL, Enrollment, OpenedCode};
 pub use error::{OptionProblem, ServerError, StateError};
 pub use events::{ServerEvent, ServerEvents};
 pub use http::ClientPrincipal;
