@@ -232,16 +232,22 @@ impl ServerState {
 
     /// The fingerprint of the certificate in use, as its 32 bytes.
     pub(crate) fn fingerprint_bytes(&self) -> [u8; fingerprints::BYTES] {
-        fingerprints::to_bytes(&self.fingerprint()).expect("the server's own fingerprint is well formed")
+        fingerprints::to_bytes(&self.fingerprint())
+            .expect("the server's own fingerprint is well formed")
     }
 
     /// The server key as it is now: made from the stored secret and the certificate in use, or
     /// `None` while the app has never asked for one.
     pub(crate) fn enrollment_key(&self) -> Option<skakel_wire::enrollment::ServerKey> {
         let loaded = self.loaded();
-        let secret = STANDARD.decode(loaded.state.enrollment_secret.as_ref()?).ok()?;
+        let secret = STANDARD
+            .decode(loaded.state.enrollment_secret.as_ref()?)
+            .ok()?;
         let secret: [u8; 32] = secret.try_into().ok()?;
-        Some(skakel_wire::enrollment::ServerKey::from_secret(secret, &self.fingerprint_bytes()))
+        Some(skakel_wire::enrollment::ServerKey::from_secret(
+            secret,
+            &self.fingerprint_bytes(),
+        ))
     }
 
     /// Makes the server key if there is none, or a new one when `rotate`, and gives it.

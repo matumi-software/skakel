@@ -29,7 +29,9 @@ impl std::fmt::Display for KeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             KeyError::Prefix => "That is not a server key: it should start with kp1_.",
-            KeyError::Malformed => "That server key is not written right. Copy it again from the server.",
+            KeyError::Malformed => {
+                "That server key is not written right. Copy it again from the server."
+            }
         })
     }
 }
@@ -139,8 +141,18 @@ impl ServerKey {
 
     /// The MAC `end` sends for this client name and nonce, with `fingerprint` the certificate that
     /// end saw (a server puts in its own).
-    pub fn mac(&self, end: End, fingerprint: &[u8; FINGERPRINT_BYTES], client_name: &str, nonce: &str) -> [u8; MAC_BYTES] {
-        mac(&self.secret, end, &key_transcript(fingerprint, client_name, nonce))
+    pub fn mac(
+        &self,
+        end: End,
+        fingerprint: &[u8; FINGERPRINT_BYTES],
+        client_name: &str,
+        nonce: &str,
+    ) -> [u8; MAC_BYTES] {
+        mac(
+            &self.secret,
+            end,
+            &key_transcript(fingerprint, client_name, nonce),
+        )
     }
 
     /// True when `received` is the MAC `end` would send, compared in constant time.
@@ -152,7 +164,12 @@ impl ServerKey {
         nonce: &str,
         received: &[u8],
     ) -> bool {
-        verify(&self.secret, end, &key_transcript(fingerprint, client_name, nonce), received)
+        verify(
+            &self.secret,
+            end,
+            &key_transcript(fingerprint, client_name, nonce),
+            received,
+        )
     }
 
     /// True when both keys hold the same secret, compared in constant time.

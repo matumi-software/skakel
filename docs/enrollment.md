@@ -1,7 +1,7 @@
-# Enrolling a client: a code or a key (proposal)
+# Enrolling a client: a code or a key
 
-Status: a proposal for Skakel protocol 3 as an addition, not yet in `protocol.md`. When it is
-accepted, its text moves into "Pairing" there and this file goes. Koppel's redesign asks for it.
+Status: an addition to Skakel protocol 3, summarised in "Enrolling with a code or a key" in
+`protocol.md`. This file is the specification: the messages, the transcripts and the limits.
 
 ## What a person sees
 

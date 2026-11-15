@@ -25,7 +25,9 @@ use http_body_util::Limited;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use skakel_wire::enrollment::{CodeConfirm, CodeStart, ENROLL_CODE_PATH, ENROLL_KEY_PATH, KeyEnroll, REASON_CLOSED};
+use skakel_wire::enrollment::{
+    CodeConfirm, CodeStart, ENROLL_CODE_PATH, ENROLL_KEY_PATH, KeyEnroll, REASON_CLOSED,
+};
 use skakel_wire::pairing::{PairOpenRequest, PairRevealRequest, clean_client_name};
 use skakel_wire::{
     ACCESS_TOKEN_LIFETIME, INFO_PATH, PAIR_PATH, PAIR_TOKEN_HEADER, PROBLEM_CONTENT_TYPE,
@@ -172,7 +174,10 @@ pub(crate) fn router(shared: Arc<Shared>) -> Router {
             get(pair_poll).delete(pair_withdraw),
         )
         .route(ENROLL_CODE_PATH, post(enroll_code_start))
-        .route(&format!("{ENROLL_CODE_PATH}/{{id}}/confirm"), post(enroll_code_confirm))
+        .route(
+            &format!("{ENROLL_CODE_PATH}/{{id}}/confirm"),
+            post(enroll_code_confirm),
+        )
         .route(ENROLL_KEY_PATH, post(enroll_key))
         .route(TOKEN_PATH, post(token))
         .with_state(shared)
@@ -411,7 +416,10 @@ async fn enroll_code_start(
         return enrolment_refusal(Refusal::Closed);
     }
     let Some(request) = read_json::<CodeStart>(&headers, body).await else {
-        return problem(StatusCode::BAD_REQUEST, "Send the client's name and pake message as JSON.");
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "Send the client's name and pake message as JSON.",
+        );
     };
     if !enrolment_name_ok(&request.client_name) {
         return problem(
@@ -432,7 +440,10 @@ async fn enroll_code_confirm(
     body: Body,
 ) -> Response {
     let Some(request) = read_json::<CodeConfirm>(&headers, body).await else {
-        return problem(StatusCode::BAD_REQUEST, "Send the confirmation mac as JSON.");
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "Send the confirmation mac as JSON.",
+        );
     };
     match shared.enrollment.confirm(&id, &request.mac).await {
         Ok(enrolled) => Json(enrolled).into_response(),
@@ -455,7 +466,10 @@ async fn enroll_key(
         );
     }
     let Some(request) = read_json::<KeyEnroll>(&headers, body).await else {
-        return problem(StatusCode::BAD_REQUEST, "Send the client's name, nonce and mac as JSON.");
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "Send the client's name, nonce and mac as JSON.",
+        );
     };
     if !enrolment_name_ok(&request.client_name) {
         return problem(

@@ -2,7 +2,17 @@
 
 ## Unreleased
 
-Nothing yet. `main` is at the v0.3.0 tag.
+- `skakel-wire`, `skakel-server` and `skakel-client`: enrolling a client with a **pairing code** the
+  server shows, or a **server key** copied from it, with nothing to approve on the server. An addition
+  inside protocol 3 (new paths under `/skakel/v3/enroll` and an `enroll` list in `info`); today's
+  pairing is unchanged. The code goes through SPAKE2, so a short code cannot be found from a
+  recorded exchange, and the client's confirmation covers the certificate it saw, so a stranger in
+  the middle gets nothing. New: `skakel_wire::enrollment`, `SkakelServer::enrollment()`
+  (`open_code`, `close_code`, `key`, `rotate_key`), `ClientView::linked_with`,
+  `ClientRecord::linked_with` and `SkakelState::enrollment_secret` (both default to empty when read),
+  `SkakelInfo::enroll`, and `skakel_client::{enroll_with_code, enroll_with_key}`. A new dependency,
+  `spake2` 0.5.0-pre.0 (MIT or Apache-2.0, a pre-release, not audited), is pinned exactly.
+  `docs/enrollment.md` is the specification.
 
 ## 0.3.0 (2026-11-12)
 

@@ -33,12 +33,12 @@ use tower_service::Service;
 
 use crate::control::Control;
 use crate::discovery::{Announcement, Discovery};
+use crate::enrollment::Enrollment;
 use crate::error::{OptionProblem, ServerError};
 use crate::events::{Events, ServerEvents};
 use crate::grpc::Guarded;
 use crate::http::{self, looks_like_tls, plain_http_answer};
 use crate::limits::Limits;
-use crate::enrollment::Enrollment;
 use crate::pairing::{Pairing, PairingWindow};
 use crate::service::{Routers, SkakelService, connection_builder};
 use crate::sessions::Sessions;

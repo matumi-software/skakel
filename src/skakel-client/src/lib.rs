@@ -90,6 +90,7 @@
 
 mod browser;
 mod clock;
+mod enrollment;
 mod events;
 mod failure;
 mod grpc;
@@ -111,6 +112,7 @@ mod tokens;
 pub use ::http::{Method, StatusCode};
 pub use browser::{Browser, BrowserOptions, DiscoveredServer};
 pub use clock::{Clock, Sleep, SystemClock};
+pub use enrollment::{EnrollError, Enrollment, enroll_with_code, enroll_with_key};
 pub use events::{Events, EventsError, StateWatch};
 pub use failure::{Error, Failure, FailureKind, Result};
 pub use info::{pick_version, read_info, require_version};

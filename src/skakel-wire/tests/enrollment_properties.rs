@@ -2,7 +2,8 @@
 
 use proptest::prelude::*;
 use skakel_wire::enrollment::{
-    ConfirmKeys, End, KEY_PREFIX, KeyError, ServerKey, code_transcript, key_transcript, new_code, normalise_code,
+    ConfirmKeys, End, KEY_PREFIX, KeyError, ServerKey, code_transcript, key_transcript, new_code,
+    normalise_code,
 };
 
 fn fingerprint() -> impl Strategy<Value = [u8; 32]> {
@@ -110,11 +111,23 @@ fn a_new_code_is_eight_digits() {
 fn a_bad_key_says_why() {
     assert_eq!(ServerKey::parse("hello").unwrap_err(), KeyError::Prefix);
     assert_eq!(ServerKey::parse("kp1_").unwrap_err(), KeyError::Malformed);
-    assert_eq!(ServerKey::parse(&format!("{KEY_PREFIX}{}", "0".repeat(76))).unwrap_err(), KeyError::Malformed);
-    assert_eq!(ServerKey::parse(&format!("{KEY_PREFIX}{}", "0".repeat(78))).unwrap_err(), KeyError::Malformed);
+    assert_eq!(
+        ServerKey::parse(&format!("{KEY_PREFIX}{}", "0".repeat(76))).unwrap_err(),
+        KeyError::Malformed
+    );
+    assert_eq!(
+        ServerKey::parse(&format!("{KEY_PREFIX}{}", "0".repeat(78))).unwrap_err(),
+        KeyError::Malformed
+    );
     // 77 characters carry 385 bits, so the last one has a spare bit that must be zero.
-    assert_eq!(ServerKey::parse(&format!("{KEY_PREFIX}{}1", "0".repeat(76))).unwrap_err(), KeyError::Malformed);
-    assert_eq!(ServerKey::parse(&format!("{KEY_PREFIX}{}U", "0".repeat(76))).unwrap_err(), KeyError::Malformed);
+    assert_eq!(
+        ServerKey::parse(&format!("{KEY_PREFIX}{}1", "0".repeat(76))).unwrap_err(),
+        KeyError::Malformed
+    );
+    assert_eq!(
+        ServerKey::parse(&format!("{KEY_PREFIX}{}U", "0".repeat(76))).unwrap_err(),
+        KeyError::Malformed
+    );
 }
 
 /// The key format and the transcript are pinned: a change here is a protocol change.

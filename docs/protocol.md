@@ -241,6 +241,27 @@ server: the client says so in words a person can act on and starts no request.
 
 A client paired with several servers holds one client ID and secret for each.
 
+## Enrolling with a code or a key
+
+A client can also get its credentials without a person approving anything on the server: by a
+**pairing code** the server shows, or a **server key** copied from it. These are paths of their own
+(`POST /skakel/v3/enroll/code`, `POST /skakel/v3/enroll/code/{enrollId}/confirm` and
+`POST /skakel/v3/enroll/key`), added inside version 3: an end that does not know them is not affected,
+and pairing above is unchanged. A server lists what it takes in `info` as `enroll`, `["code"]`,
+`["key"]` or both, and leaves the field out when it takes neither. The messages, the transcripts and
+the limits are in [enrollment.md](enrollment.md). In short:
+
+- The client reads the fingerprint of the certificate it is shown, trusts nothing yet, and pins that
+  fingerprint for every call after.
+- With a **code** (eight digits, one use, 60 seconds by default) both ends run SPAKE2 on it and the
+  client confirms with a MAC over a transcript that includes the fingerprint it saw. The server
+  checks that against its own certificate and answers with its own MAC, which the client checks
+  before it keeps anything. Three wrong confirmations spend the code.
+- With a **key** (`kp1_` and 77 characters: a 256-bit secret and the first 16 bytes of the
+  certificate's fingerprint) the client checks the certificate is the one the key was made for and
+  proves it holds the key with a MAC over the same kind of transcript. The key never travels.
+- Both end as pairing does: a client ID and secret. The server records how each client was linked.
+
 ## Tokens
 
 - OAuth 2.0 client credentials at `POST /skakel/v3/token`, HTTPS only, as a form
