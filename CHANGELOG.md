@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Nothing yet. `main` is at the v0.3.1 tag.
+
+## 0.3.1 (2026-11-15)
+
+An addition to protocol 3, so a 0.3.0 end and a 0.3.1 end still talk. One note for an app that builds
+a `SkakelInfo` itself: it gained a field, `enroll`.
+
 - `skakel-wire`, `skakel-server` and `skakel-client`: enrolling a client with a **pairing code** the
   server shows, or a **server key** copied from it, with nothing to approve on the server. An addition
   inside protocol 3 (new paths under `/skakel/v3/enroll` and an `enroll` list in `info`); today's
