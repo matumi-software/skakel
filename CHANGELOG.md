@@ -4,11 +4,15 @@
 
 Nothing yet. `main` is at the v0.3.0 tag.
 
-## 0.3.0 (2026-11-12, released again 2026-11-16)
+## 0.3.0 (2026-11-16)
 
-The `v0.3.0` tag was moved on 2026-11-16 to take in what the withdrawn 0.3.1 and 0.3.2 had added, so there is
-one 0.3 release. Anyone who built against the earlier `v0.3.0`, `v0.3.1` or `v0.3.2` takes this one. What was
-added since the first 0.3.0, none of it changing the wire inside protocol 3 beyond the new paths below:
+Protocol version 3. It does not talk to version 2 (Skakel 0.2.0 and 0.2.1): update both ends of a
+link together; each tells a person so through the version check. The changes below are the wire
+(`docs/protocol.md`, "Changes from version 2"), a new crate layout and breaking changes to the
+public API of every crate, so an app moves once, here. Several of them come from an architecture
+and code review of 0.2.1; 0.2.1 itself stays as released.
+
+Summary for an app:
 
 - `skakel-wire`, `skakel-server` and `skakel-client`: enrolling a client with a **pairing code** the
   server shows, or a **server key** copied from it, with nothing to approve on the server. An addition
@@ -23,24 +27,12 @@ added since the first 0.3.0, none of it changing the wire inside protocol 3 beyo
   0.5.0-pre.0 (MIT or Apache-2.0, a pre-release, not audited), is pinned exactly. `docs/enrollment.md` is
   the specification.
 - **The crates are release assets.** Each GitHub release carries every crate as a `.crate` file with a
-  `SHA256SUMS`, made by `cargo package --workspace`. To make that possible the `.proto` files moved from
-  `src/proto` into `src/skakel-proto/proto`, so `skakel-proto`'s package holds what it builds from; the
-  files and the generated code are the same (the descriptor golden is unchanged).
+  `SHA256SUMS`, made by `cargo package --workspace`. The `.proto` files are in `src/skakel-proto/proto`,
+  inside `skakel-proto`, so its package holds what it builds from.
 - `skakel-client`: `ClientOptions::retry_interval` sets a fixed wait between a link's tries after a
   failure, in place of the wait that doubles from a second to a minute. The wait is a random time from
   half of the interval to all of it, and a link never starts two connections less than a second apart,
   so an interval under a second acts as a second.
-
-The first 0.3.0, as released on 2026-11-12:
-
-Protocol version 3. It does not talk to version 2 (Skakel 0.2.0 and 0.2.1): update both ends of a
-link together; each tells a person so through the version check. The changes below are the wire
-(`docs/protocol.md`, "Changes from version 2"), a new crate layout and breaking changes to the
-public API of every crate, so an app moves once, here. Several of them come from an architecture
-and code review of 0.2.1; 0.2.1 itself stays as released.
-
-Summary for an app:
-
 - **Crates.** `skakel-protocol`, `skakel-discovery` and `skakel-pairing` are one crate,
   `skakel-wire` (the mapping is below). `skakel-proto`, `skakel-serial`, `skakel-client`,
   `skakel-server`, `skakel-vcam` and `skakel-vcam-source` keep their names.
