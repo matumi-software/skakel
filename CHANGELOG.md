@@ -2,21 +2,13 @@
 
 ## Unreleased
 
-Nothing yet. `main` is at the v0.3.2 tag.
+Nothing yet. `main` is at the v0.3.0 tag.
 
-## 0.3.2 (2026-11-15)
+## 0.3.0 (2026-11-12, released again 2026-11-16)
 
-No change to the wire.
-
-- `skakel-client`: `ClientOptions::retry_interval` sets a fixed wait between a link's tries after a
-  failure, in place of the wait that doubles from a second to a minute. The wait is a random time from
-  half of the interval to all of it, and a link never starts two connections less than a second apart,
-  so an interval under a second acts as a second.
-
-## 0.3.1 (2026-11-15)
-
-An addition to protocol 3, so a 0.3.0 end and a 0.3.1 end still talk. One note for an app that builds
-a `SkakelInfo` itself: it gained a field, `enroll`.
+The `v0.3.0` tag was moved on 2026-11-16 to take in what the withdrawn 0.3.1 and 0.3.2 had added, so there is
+one 0.3 release. Anyone who built against the earlier `v0.3.0`, `v0.3.1` or `v0.3.2` takes this one. What was
+added since the first 0.3.0, none of it changing the wire inside protocol 3 beyond the new paths below:
 
 - `skakel-wire`, `skakel-server` and `skakel-client`: enrolling a client with a **pairing code** the
   server shows, or a **server key** copied from it, with nothing to approve on the server. An addition
@@ -25,12 +17,17 @@ a `SkakelInfo` itself: it gained a field, `enroll`.
   recorded exchange, and the client's confirmation covers the certificate it saw, so a stranger in
   the middle gets nothing. New: `skakel_wire::enrollment`, `SkakelServer::enrollment()`
   (`open_code`, `close_code`, `key`, `rotate_key`), `ClientView::linked_with`,
-  `ClientRecord::linked_with` and `SkakelState::enrollment_secret` (both default to empty when read),
-  `SkakelInfo::enroll`, and `skakel_client::{enroll_with_code, enroll_with_key}`. A new dependency,
-  `spake2` 0.5.0-pre.0 (MIT or Apache-2.0, a pre-release, not audited), is pinned exactly.
-  `docs/enrollment.md` is the specification.
+  `ClientRecord::linked_with` and `SkakelState::enrollment_secret` (both default to empty when read and are
+  left out of the saved state when empty), `SkakelInfo::enroll` (an app that builds a `SkakelInfo` itself
+  must set it), and `skakel_client::{enroll_with_code, enroll_with_key}`. A new dependency, `spake2`
+  0.5.0-pre.0 (MIT or Apache-2.0, a pre-release, not audited), is pinned exactly. `docs/enrollment.md` is
+  the specification.
+- `skakel-client`: `ClientOptions::retry_interval` sets a fixed wait between a link's tries after a
+  failure, in place of the wait that doubles from a second to a minute. The wait is a random time from
+  half of the interval to all of it, and a link never starts two connections less than a second apart,
+  so an interval under a second acts as a second.
 
-## 0.3.0 (2026-11-12)
+The first 0.3.0, as released on 2026-11-12:
 
 Protocol version 3. It does not talk to version 2 (Skakel 0.2.0 and 0.2.1): update both ends of a
 link together; each tells a person so through the version check. The changes below are the wire

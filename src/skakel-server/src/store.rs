@@ -63,7 +63,7 @@ pub struct SkakelState {
     pub(crate) legacy_retired_signing_keys: Option<serde::de::IgnoredAny>,
     /// The secret half of the server key, as base64, once the app has asked for a key. The text of
     /// the key is made from it and the certificate in use, so a certificate switch changes the text.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrollment_secret: Option<String>,
 }
 
@@ -101,8 +101,8 @@ pub struct ClientRecord {
     #[serde(default)]
     pub secret: Option<String>,
     /// How the client was linked: `pairing`, `code` or `key`. Empty for a client made before this
-    /// was recorded.
-    #[serde(default)]
+    /// was recorded. Left out of the file when empty, like the other optional parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_with: Option<String>,
 }
 
@@ -282,6 +282,30 @@ mod tests {
             legacy_retired_signing_keys: None,
             enrollment_secret: None,
         }
+    }
+
+    #[test]
+    fn what_enrolment_added_is_left_out_of_the_file_when_empty() {
+        // An app that keeps this file clean (Koppel checks its secrets.json for nulls) must not find a null
+        // for an upgrade that never had these parts.
+        let text = serde_json::to_string(&state()).unwrap();
+        assert!(
+            !text.contains("linkedWith") && !text.contains("enrollmentSecret"),
+            "{text}"
+        );
+        let mut linked = SkakelState {
+            enrollment_secret: Some("c2VjcmV0".into()),
+            ..state()
+        };
+        linked.clients[0].linked_with = Some("code".into());
+        let text = serde_json::to_string(&linked).unwrap();
+        assert!(
+            text.contains("\"linkedWith\":\"code\"")
+                && text.contains("\"enrollmentSecret\":\"c2VjcmV0\""),
+            "{text}"
+        );
+        // And what was written reads back as it was.
+        assert_eq!(serde_json::from_str::<SkakelState>(&text).unwrap(), linked);
     }
 
     #[tokio::test]
