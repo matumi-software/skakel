@@ -22,6 +22,10 @@ added since the first 0.3.0, none of it changing the wire inside protocol 3 beyo
   must set it), and `skakel_client::{enroll_with_code, enroll_with_key}`. A new dependency, `spake2`
   0.5.0-pre.0 (MIT or Apache-2.0, a pre-release, not audited), is pinned exactly. `docs/enrollment.md` is
   the specification.
+- **The crates are release assets.** Each GitHub release carries every crate as a `.crate` file with a
+  `SHA256SUMS`, made by `cargo package --workspace`. To make that possible the `.proto` files moved from
+  `src/proto` into `src/skakel-proto/proto`, so `skakel-proto`'s package holds what it builds from; the
+  files and the generated code are the same (the descriptor golden is unchanged).
 - `skakel-client`: `ClientOptions::retry_interval` sets a fixed wait between a link's tries after a
   failure, in place of the wait that doubles from a second to a minute. The wait is a random time from
   half of the interval to all of it, and a link never starts two connections less than a second apart,
