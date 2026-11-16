@@ -63,6 +63,12 @@ Work from an issue, in a worktree `<repo>/<type>/RVR/<name>` branched from `orig
 pull request into `main` that says `Closes #N` and rebase-merge it. Releases are annotated `v*`
 tags on `main`.
 
+A release also carries the crates as assets: from the tagged commit, `cargo package --workspace --locked`
+(from `src/`) writes `src/target/package/*.crate`; add `sha256sum *.crate > SHA256SUMS` in that folder and
+upload both with `gh release upload v<version> ... --clobber`. A crate must build from its own package,
+so nothing it needs may sit outside its folder (the `.proto` files are in `skakel-proto/proto` for that
+reason).
+
 A pull request fills in `.github/pull_request_template.md`. `.github/CODEOWNERS` names the maintainers,
 who review every change. Issues come from the forms in `.github/ISSUE_TEMPLATE/`, which set the
 `type: ...` and `state: needs-triage` labels; add a `scope: ...` label when triaging.

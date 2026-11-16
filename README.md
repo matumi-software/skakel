@@ -38,7 +38,13 @@ One crate per part, in the Cargo workspace in `src/`:
 [docs/parts.md](https://github.com/matumi-software/skakel/blob/main/docs/parts.md) says what each
 part holds and which one an app takes.
 
-The crates are not on crates.io. An app takes them from this repository, pinned to a commit:
+The crates are not on crates.io. Each release on GitHub carries them as `.crate` files, one per crate,
+with a `SHA256SUMS` file, built by `cargo package --workspace`. An app downloads the release
+(`gh release download v0.3.0 -R matumi-software/skakel`), checks `sha256sum -c SHA256SUMS`, and keeps the
+crates it uses in its own repository: unpacked, and named in its `[patch.crates-io]` by path, since Cargo
+cannot take a `.crate` file as it is. The files are the same as Heartwood's `.crate` release assets.
+
+An app that would rather follow the repository takes a crate from a commit:
 
 ```toml
 skakel-client = { git = "https://github.com/matumi-software/skakel", rev = "<commit>" }
