@@ -1,4 +1,4 @@
-//! The .proto files of protocol version 3 in `src/proto` compile, and the services, calls and
+//! The .proto files of protocol version 3 in `skakel-proto/proto` compile, and the services, calls and
 //! field numbers are the ones `docs/protocol.md` gives. Field numbers are the wire format, so a
 //! change to one here is a protocol change.
 
@@ -8,7 +8,7 @@ use protox::Compiler;
 use protox::prost_reflect::{DescriptorPool, Kind};
 
 fn proto_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../proto")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("proto")
 }
 
 include!("../proto_files.rs");

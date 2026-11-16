@@ -1,4 +1,4 @@
-//! Generates the Rust code for the .proto files in `src/proto`, in Rust, with protox, so building
+//! Generates the Rust code for the .proto files in `proto/` of this crate, in Rust, with protox, so building
 //! Skakel needs no `protoc`. The messages are always generated; the tonic clients and servers are
 //! generated too, and compiled only with the `client` and `server` features.
 
@@ -7,9 +7,8 @@ use std::path::{Path, PathBuf};
 include!("proto_files.rs");
 
 fn main() {
-    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo"))
-        .join("..")
-        .join("proto");
+    // Inside the crate, so the package a release publishes carries the files it builds from.
+    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo")).join("proto");
     println!("cargo:rerun-if-changed={}", root.display());
 
     let mut files = Vec::new();

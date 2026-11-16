@@ -13,7 +13,7 @@ the network, is the first app built on it.
 
 Version 0.3.0, Rust only. Protocol version 3 is specified in
 [docs/protocol.md](https://github.com/matumi-software/skakel/blob/main/docs/protocol.md), with its
-wire format in `.proto` files under `src/proto/skakel/` (`v3` for the control and stream services, `streams/serial/v1` for the serial stream type). The server and the client speak it:
+wire format in `.proto` files under `src/skakel-proto/proto/skakel/` (`v3` for the control and stream services, `streams/serial/v1` for the serial stream type). The server and the client speak it:
 gRPC for the control channel, the app's own calls and the data streams, beside HTTPS for info,
 pairing and tokens, all on one TLS port pinned to the server's certificate. They are tested against
 each other. Version 1 (a SignalR hub and WebSocket streams) is at the tag `v0.1.0`.

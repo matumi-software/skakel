@@ -29,7 +29,7 @@ fn kind_name(kind: &Kind) -> String {
 }
 
 fn describe() -> String {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../proto");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("proto");
     let mut files = Vec::new();
     proto_files(&root, &root, &mut files);
     files.sort();
