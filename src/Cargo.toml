@@ -60,7 +60,7 @@ socket2 = "0.6.5"
 log = "0.4"
 url = "2.5.8"
 
-# Protocol version 3's gRPC code, generated from the .proto files in `proto/` by skakel-proto's
+# Protocol version 3's gRPC code, generated from the .proto files in `skakel-proto/proto/` by skakel-proto's
 # build script. prost (Apache-2.0) writes and reads the messages, tonic (MIT) the services, and
 # protox (MIT OR Apache-2.0) compiles the .proto files in Rust, so no protoc is needed. Everything
 # they pull in is MIT, Apache-2.0, Unlicense or Unicode-3.0, checked with `cargo metadata`, except

@@ -4,7 +4,7 @@ Version 3. This is the contract between Skakel clients and servers, and between 
 A change to what goes over the wire changes this file in the same pull request.
 
 The control channel and the data streams are gRPC, and their wire format is the `.proto` files in
-[`src/proto/skakel/v3/`](../src/proto/skakel/v3/), from which a client or server in any language can
+[`src/skakel-proto/proto/skakel/v3/`](../src/skakel-proto/proto/skakel/v3/), from which a client or server in any language can
 be generated. This file says what the messages mean and how the two ends behave.
 
 Version 3 is Skakel 0.3.0, which also adds enrolling with a code or a key inside the same version (`docs/enrollment.md`). Version 2 (Skakel 0.2.0 and 0.2.1) moved the hub and the streams of
@@ -655,7 +655,7 @@ round: both ends update together, and each tells a person so through the version
 |---|---|
 | `"versions": [2]` | `"versions": [3]` |
 | `/skakel/v2/pair`, `/skakel/v2/token` | `/skakel/v3/pair`, `/skakel/v3/token` |
-| Package `skakel.v2` for the control and stream services and the serial messages | `skakel.v3` for the control and stream services, `skakel.streams.serial.v1` for the serial messages, in their own file under `src/proto/skakel/streams/serial/v1/` |
+| Package `skakel.v2` for the control and stream services and the serial messages | `skakel.v3` for the control and stream services, `skakel.streams.serial.v1` for the serial messages, in their own file under `src/skakel-proto/proto/skakel/streams/serial/v1/` |
 | `Certificates.fingerprint`, `next_fingerprint` and `NextCertificateReceived.fingerprint` are colon-separated hex strings | The same fields are `bytes`, the 32 bytes of the SHA-256; empty means none. Discovery and info JSON keep the colon form |
 | A serial `line_settings` change is answered by an echo of its settings, matched by what it asked for and by order | The change carries a nonzero `request_id` and the answer (`line_settings` or `error`) carries it back; `error` has a `request_id` too (0 for the port's own errors) |
 | TLS 1.2 and 1.3 | TLS 1.3 only |

@@ -1,7 +1,7 @@
 //! The serial stream's wire format: the stream type, its target, line settings, modem lines, errors
 //! and the control messages in both directions. See `docs/protocol.md` ("The serial stream type") at
 //! the repository root; the messages are `SerialClientMessage` and `SerialServerMessage` in
-//! `src/proto/skakel/streams/serial/v1/serial.proto`.
+//! `src/skakel-proto/proto/skakel/streams/serial/v1/serial.proto`.
 //!
 //! Wire format only. The code that opens a real port stays in the app.
 //!

@@ -1,4 +1,4 @@
-//! The Rust code generated from Skakel's `.proto` files in `src/proto`, the wire format of protocol
+//! The Rust code generated from Skakel's `.proto` files in `proto/`, the wire format of protocol
 //! version 3's control channel and streams, and the serial stream type
 //! (package `skakel.streams.serial.v1`, which versions on its own). `docs/protocol.md` at the
 //! repository root says what the messages mean.
