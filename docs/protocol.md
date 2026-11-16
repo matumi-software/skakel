@@ -7,7 +7,7 @@ The control channel and the data streams are gRPC, and their wire format is the 
 [`src/proto/skakel/v3/`](../src/proto/skakel/v3/), from which a client or server in any language can
 be generated. This file says what the messages mean and how the two ends behave.
 
-Version 3 is Skakel 0.3.0, 0.3.1 and 0.3.2 (0.3.1 adds enrolling with a code or a key). Version 2 (Skakel 0.2.0 and 0.2.1) moved the hub and the streams of
+Version 3 is Skakel 0.3.0, which also adds enrolling with a code or a key inside the same version (`docs/enrollment.md`). Version 2 (Skakel 0.2.0 and 0.2.1) moved the hub and the streams of
 version 1 (Skakel 0.1.0) to gRPC, and version 3 changes the details that were worth changing once
 (see "Changes from version 2"). Each version speaks only itself: a version 3 end does not talk to a
 version 2 or version 1 end, and says so in words (see "Versions"). The server and the client crates
